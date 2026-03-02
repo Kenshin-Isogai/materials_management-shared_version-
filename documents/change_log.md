@@ -8,6 +8,8 @@ Format style: Keep a simple date-based log while repository versioning policy is
 
 ### Changed
 
+- Clarified missing-item registration semantics in docs: the CSV `supplier` column is supplier-alias scope (not manufacturer), and `new_item` rows default manufacturer to `UNKNOWN`.
+- Added missing-item registration support for manufacturer input: `new_item` rows can now specify `manufacturer_name` (or `manufacturer`) in CSV; blank still defaults to `UNKNOWN`.
 - Updated missing-item output behavior for unregistered order batch import.
   - Per-file unresolved rows are no longer left beside quotation CSV files.
   - A single consolidated register CSV is generated per batch run under `quotations/unregistered/missing_item_registers/`.

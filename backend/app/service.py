@@ -531,6 +531,7 @@ def _raise_import_undo_conflict(message: str, *, effect_id: int, row_number: int
 MISSING_ITEMS_FIELDNAMES = [
     "item_number",
     "supplier",
+    "manufacturer_name",
     "resolution_type",
     "category",
     "url",
@@ -2130,6 +2131,7 @@ def _process_order_rows_for_import(
                     "row": idx,
                     "item_number": item_number,
                     "supplier": supplier_name,
+                    "manufacturer_name": "",
                     "resolution_type": "new_item",
                     "category": "",
                     "url": "",
@@ -2926,7 +2928,12 @@ def register_missing_items_from_rows(conn: sqlite3.Connection, rows: list[dict[s
                 details={"supplier": supplier, "item_number": item_number},
             )
 
-        manufacturer_id = _get_or_create_manufacturer(conn, "UNKNOWN")
+        manufacturer_name = str(
+            row.get("manufacturer_name")
+            or row.get("manufacturer")
+            or ""
+        ).strip() or "UNKNOWN"
+        manufacturer_id = _get_or_create_manufacturer(conn, manufacturer_name)
         existing = conn.execute(
             """
             SELECT item_id

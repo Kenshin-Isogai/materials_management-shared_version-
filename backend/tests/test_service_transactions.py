@@ -490,6 +490,68 @@ def test_register_missing_requires_details_for_new_item(conn):
     assert exc_info.value.code == "MISSING_ITEM_UNRESOLVED"
 
 
+
+
+def test_register_missing_new_item_uses_manufacturer_from_csv(conn):
+    result = service.register_missing_items_from_rows(
+        conn,
+        [
+            {
+                "supplier": "SupplierA",
+                "item_number": "MFG-SPEC-001",
+                "manufacturer_name": "MFG-SPEC",
+                "resolution_type": "new_item",
+                "category": "Lens",
+                "url": "",
+                "description": "",
+            }
+        ],
+    )
+
+    assert result["created_items"] == 1
+    row = conn.execute(
+        """
+        SELECT i.item_number, m.name AS manufacturer_name
+        FROM items_master i
+        JOIN manufacturers m ON m.manufacturer_id = i.manufacturer_id
+        WHERE i.item_number = ?
+        """,
+        ("MFG-SPEC-001",),
+    ).fetchone()
+    assert row is not None
+    assert row["manufacturer_name"] == "MFG-SPEC"
+
+
+def test_import_orders_missing_items_csv_includes_manufacturer_column(conn, tmp_path: Path):
+    supplier = service.create_supplier(conn, "SupplierA")
+    rows = [
+        {
+            "item_number": "UNKNOWN-NEW-001",
+            "quantity": "1",
+            "quotation_number": "Q-MISS-001",
+            "issue_date": "2026-03-02",
+            "order_date": "2026-03-02",
+            "expected_arrival": "",
+            "pdf_link": "",
+        }
+    ]
+
+    result = service.import_orders_from_rows(
+        conn,
+        supplier_id=int(supplier["supplier_id"]),
+        rows=rows,
+        source_name="Q-MISS-001.csv",
+        missing_output_dir=tmp_path,
+    )
+
+    assert result["status"] == "missing_items"
+    with Path(result["missing_csv_path"]).open("r", encoding="utf-8", newline="") as fp:
+        reader = csv.DictReader(fp)
+        headers = list(reader.fieldnames or [])
+        row = next(reader)
+    assert "manufacturer_name" in headers
+    assert row["manufacturer_name"] == ""
+
 def test_register_unregistered_missing_items_reads_consolidated_register_folder(conn, tmp_path: Path):
     unregistered_root = tmp_path / "quotations" / "unregistered"
     registered_root = tmp_path / "quotations" / "registered"
