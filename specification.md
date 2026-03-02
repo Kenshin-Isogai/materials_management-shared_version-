@@ -510,6 +510,8 @@ Maps raw category names to canonical category names for soft-merge behavior.
    - Missing-item registration supports mixed batches: alias rows may reference canonical rows created as `new_item` in the same file
 6. If all rows resolve, insert orders into `orders` and keep traceability fields
    (`ordered_item_number`, `ordered_quantity`)
+   - Reject import when the same `(supplier, quotation_number)` already has existing orders
+     to prevent duplicate quotation re-import
 7. Normalize date fields to `YYYY-MM-DD`; reject invalid date strings
 8. For manual CSV import, `pdf_link` must be blank or `quotations/registered/pdf_files/<supplier>/<file>.pdf`
    - Filename-only values are normalized to the selected supplier's registered path

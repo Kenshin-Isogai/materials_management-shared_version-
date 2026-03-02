@@ -13,6 +13,9 @@ Format style: Keep a simple date-based log while repository versioning policy is
   - CSV/PDF moves are now executed as one planned set, with rollback of already moved files if any move fails.
 - Clarified and verified missing-items path behavior for unregistered import:
   - when a file returns `missing_items`, source CSV/PDF files remain under `quotations/unregistered/...`.
+- Fixed duplicate quotation ingestion risk in order imports.
+  - Order import now rejects re-import of the same `(supplier, quotation_number)` when orders already exist for that quotation.
+  - API returns conflict error `DUPLICATE_QUOTATION_IMPORT` with duplicated quotation numbers in details.
 
 ### Tests
 
@@ -20,6 +23,7 @@ Format style: Keep a simple date-based log while repository versioning policy is
 - Added regression coverage for:
   - preserving source CSV/PDF when unregistered import returns `missing_items`
   - rollback safety when a CSV move fails after PDF move started (no leaked PDF relocation)
+  - rejecting duplicate quotation re-import for the same supplier
 
 ## 2026-03-01
 

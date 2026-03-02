@@ -417,6 +417,63 @@ def test_order_import_rejects_unregistered_pdf_link_path(client):
     assert "quotations/registered/pdf_files" in payload["error"]["message"]
 
 
+def test_order_import_rejects_duplicate_quotation_for_same_supplier(client):
+    client.post("/api/manufacturers", json={"name": "API-DUP-QUOTE-MFG"})
+    client.post(
+        "/api/items",
+        json={
+            "item_number": "API-DUP-QUOTE-ITEM",
+            "manufacturer_name": "API-DUP-QUOTE-MFG",
+            "category": "Lens",
+        },
+    )
+
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "item_number",
+            "quantity",
+            "quotation_number",
+            "issue_date",
+            "order_date",
+            "expected_arrival",
+            "pdf_link",
+        ],
+    )
+    writer.writeheader()
+    writer.writerow(
+        {
+            "item_number": "API-DUP-QUOTE-ITEM",
+            "quantity": "1",
+            "quotation_number": "Q-DUP-001",
+            "issue_date": "2026-02-21",
+            "order_date": "2026-02-22",
+            "expected_arrival": "2026-03-01",
+            "pdf_link": "Q-DUP-001.pdf",
+        }
+    )
+
+    first = client.post(
+        "/api/orders/import",
+        files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
+        data={"supplier_name": "SupplierDup"},
+    )
+    assert first.status_code == 200
+    assert first.json()["data"]["status"] == "ok"
+
+    second = client.post(
+        "/api/orders/import",
+        files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
+        data={"supplier_name": "SupplierDup"},
+    )
+    assert second.status_code == 409
+    payload = second.json()
+    assert payload["status"] == "error"
+    assert payload["error"]["code"] == "DUPLICATE_QUOTATION_IMPORT"
+    assert payload["error"]["details"]["quotation_numbers"] == ["Q-DUP-001"]
+
+
 def test_order_import_accepts_slash_date_format(client):
     client.post("/api/manufacturers", json={"name": "API-SLASH-DATE-MFG"})
     client.post(

@@ -2155,6 +2155,36 @@ def import_orders_from_rows(
             "rows": missing,
         }
 
+    quotation_numbers = sorted({str(row["quotation_number"]).strip() for row in resolved if str(row["quotation_number"]).strip()})
+    if quotation_numbers:
+        placeholders = ",".join("?" for _ in quotation_numbers)
+        duplicate_rows = conn.execute(
+            f"""
+            SELECT q.quotation_number
+            FROM quotations q
+            WHERE q.supplier_id = ?
+              AND q.quotation_number IN ({placeholders})
+              AND EXISTS (
+                SELECT 1
+                FROM orders o
+                WHERE o.quotation_id = q.quotation_id
+              )
+            ORDER BY q.quotation_number
+            """,
+            (sid, *quotation_numbers),
+        ).fetchall()
+        if duplicate_rows:
+            duplicated = [str(row["quotation_number"]) for row in duplicate_rows]
+            raise AppError(
+                code="DUPLICATE_QUOTATION_IMPORT",
+                message=(
+                    "Quotation already imported for this supplier: "
+                    f"{', '.join(duplicated)}"
+                ),
+                status_code=409,
+                details={"quotation_numbers": duplicated},
+            )
+
     order_ids: list[int] = []
     for row in resolved:
         quotation_id = _get_or_create_quotation(
