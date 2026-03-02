@@ -81,6 +81,7 @@ uv run main.py reserve --item-id 1 --quantity 2 --purpose "Experiment A"
 - Quotations roots:
   - `quotations/unregistered/csv_files/<supplier>/`
   - `quotations/unregistered/pdf_files/<supplier>/`
+  - `quotations/unregistered/missing_item_registers/` (single consolidated missing-item CSV per batch run)
   - `quotations/registered/csv_files/<supplier>/`
   - `quotations/registered/pdf_files/<supplier>/`
 

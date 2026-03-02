@@ -276,6 +276,21 @@ def test_import_unregistered_orders_missing_items_keeps_source_files(conn, tmp_p
     assert not (registered_root / "csv_files" / "SupplierMissing" / "Q-MISS-001.csv").exists()
     assert not (registered_root / "pdf_files" / "SupplierMissing" / "Q-MISS-001.pdf").exists()
 
+    register_path = result.get("missing_items_register_csv")
+    assert register_path is not None
+    register_file = Path(register_path)
+    assert register_file.exists()
+    assert register_file.parent == (unregistered_root / "missing_item_registers")
+
+    with register_file.open("r", encoding="utf-8", newline="") as fp:
+        reader = csv.DictReader(fp)
+        rows = list(reader)
+
+    assert len(rows) == 1
+    assert rows[0]["source_supplier"] == "SupplierMissing"
+    assert rows[0]["source_csv"].endswith("Q-MISS-001.csv")
+    assert rows[0]["item_number"] == "MISSING-ITEM-001"
+
 
 def test_import_unregistered_orders_rolls_back_pdf_move_on_csv_move_failure(
     conn,
@@ -473,3 +488,186 @@ def test_register_missing_requires_details_for_new_item(conn):
         )
 
     assert exc_info.value.code == "MISSING_ITEM_UNRESOLVED"
+
+
+def test_register_unregistered_missing_items_reads_consolidated_register_folder(conn, tmp_path: Path):
+    unregistered_root = tmp_path / "quotations" / "unregistered"
+    registered_root = tmp_path / "quotations" / "registered"
+    register_dir = unregistered_root / "missing_item_registers"
+    register_dir.mkdir(parents=True, exist_ok=True)
+
+    register_csv = register_dir / "batch_missing_items_registration_20260302_120000.csv"
+    with register_csv.open("w", encoding="utf-8", newline="") as fp:
+        writer = csv.DictWriter(
+            fp,
+            fieldnames=[
+                "source_csv",
+                "source_supplier",
+                "item_number",
+                "supplier",
+                "resolution_type",
+                "category",
+                "url",
+                "description",
+                "canonical_item_number",
+                "units_per_order",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "source_csv": "quotations/unregistered/csv_files/SupplierBatch/QB-001.csv",
+                "source_supplier": "SupplierBatch",
+                "item_number": "BATCH-NEW-001",
+                "supplier": "SupplierBatch",
+                "resolution_type": "new_item",
+                "category": "Lens",
+                "url": "",
+                "description": "",
+                "canonical_item_number": "",
+                "units_per_order": "",
+            }
+        )
+
+    result = service.register_unregistered_missing_items_csvs(
+        conn,
+        unregistered_root=unregistered_root,
+        registered_root=registered_root,
+    )
+    conn.commit()
+
+    assert result["status"] == "ok"
+    assert result["succeeded"] == 1
+    assert not register_csv.exists()
+    moved = registered_root / "csv_files" / "UNKNOWN" / register_csv.name
+    assert moved.exists()
+
+    row = conn.execute(
+        """
+        SELECT i.item_number
+        FROM items_master i
+        JOIN manufacturers m ON m.manufacturer_id = i.manufacturer_id
+        WHERE i.item_number = ? AND m.name = ?
+        """,
+        ("BATCH-NEW-001", "UNKNOWN"),
+    ).fetchone()
+    assert row is not None
+
+
+def test_import_unregistered_orders_missing_items_same_csv_name_different_suppliers_preserves_rows(conn, tmp_path: Path):
+    unregistered_root = tmp_path / "quotations" / "unregistered"
+    registered_root = tmp_path / "quotations" / "registered"
+
+    for supplier in ("SupplierA", "SupplierB"):
+        supplier_csv_dir = unregistered_root / "csv_files" / supplier
+        supplier_csv_dir.mkdir(parents=True, exist_ok=True)
+        csv_path = supplier_csv_dir / "Q-001.csv"
+        with csv_path.open("w", encoding="utf-8", newline="") as fp:
+            writer = csv.DictWriter(
+                fp,
+                fieldnames=[
+                    "item_number",
+                    "quantity",
+                    "quotation_number",
+                    "issue_date",
+                    "order_date",
+                    "expected_arrival",
+                    "pdf_link",
+                ],
+            )
+            writer.writeheader()
+            writer.writerow(
+                {
+                    "item_number": f"MISSING-{supplier}",
+                    "quantity": "1",
+                    "quotation_number": f"Q-{supplier}",
+                    "issue_date": "2026-02-20",
+                    "order_date": "2026-02-21",
+                    "expected_arrival": "2026-02-28",
+                    "pdf_link": "",
+                }
+            )
+
+    captured_paths: list[str] = []
+    original_writer = service._write_batch_missing_items_register
+
+    def _capture_missing_paths(missing_reports, *, output_dir):
+        captured_paths.extend(str(report.get("missing_csv_path", "")) for report in missing_reports)
+        return original_writer(missing_reports, output_dir=output_dir)
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(service, "_write_batch_missing_items_register", _capture_missing_paths)
+    try:
+        result = service.import_unregistered_order_csvs(
+            conn,
+            unregistered_root=unregistered_root,
+            registered_root=registered_root,
+        )
+    finally:
+        monkeypatch.undo()
+
+    assert result["status"] == "ok"
+    assert result["missing_items"] == 2
+    register_path = result.get("missing_items_register_csv")
+    assert register_path is not None
+
+    with Path(register_path).open("r", encoding="utf-8", newline="") as fp:
+        rows = list(csv.DictReader(fp))
+
+    assert len(rows) == 2
+    assert {row["source_supplier"] for row in rows} == {"SupplierA", "SupplierB"}
+    assert any("SupplierA__Q-001_missing_items_registration.csv" in path for path in captured_paths)
+    assert any("SupplierB__Q-001_missing_items_registration.csv" in path for path in captured_paths)
+
+
+def test_import_unregistered_orders_keeps_per_file_missing_csv_when_batch_register_write_fails(
+    conn,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    unregistered_root = tmp_path / "quotations" / "unregistered"
+    registered_root = tmp_path / "quotations" / "registered"
+    supplier_csv_dir = unregistered_root / "csv_files" / "SupplierFail"
+    supplier_csv_dir.mkdir(parents=True, exist_ok=True)
+
+    csv_path = supplier_csv_dir / "Q-FAIL-MISSING.csv"
+    with csv_path.open("w", encoding="utf-8", newline="") as fp:
+        writer = csv.DictWriter(
+            fp,
+            fieldnames=[
+                "item_number",
+                "quantity",
+                "quotation_number",
+                "issue_date",
+                "order_date",
+                "expected_arrival",
+                "pdf_link",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "item_number": "MISSING-FAIL-001",
+                "quantity": "1",
+                "quotation_number": "Q-FAIL-MISSING",
+                "issue_date": "2026-02-20",
+                "order_date": "2026-02-21",
+                "expected_arrival": "2026-02-28",
+                "pdf_link": "",
+            }
+        )
+
+    def _raise_write(*args, **kwargs):
+        raise OSError("simulated batch write failure")
+
+    monkeypatch.setattr(service, "_write_batch_missing_items_register", _raise_write)
+
+    with pytest.raises(OSError, match="simulated batch write failure"):
+        service.import_unregistered_order_csvs(
+            conn,
+            unregistered_root=unregistered_root,
+            registered_root=registered_root,
+        )
+
+    temp_register = unregistered_root / "missing_item_registers" / "SupplierFail__Q-FAIL-MISSING_missing_items_registration.csv"
+    assert temp_register.exists()

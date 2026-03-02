@@ -79,6 +79,8 @@ Last updated: 2026-03-02 (JST)
   - `quotations/registered/csv_files/<supplier>/`
   - `quotations/registered/pdf_files/<supplier>/`
 - Batch import functions normalize legacy/typo paths, move files safely, and emit warnings for unresolved paths.
+- Unregistered batch order import writes missing-item rows into one consolidated register CSV per run under `quotations/unregistered/missing_item_registers/`; source CSV/PDF files remain in place for unresolved quotations.
+- Temporary per-file missing-item CSVs generated during batch consolidation are supplier-prefixed and only removed after consolidated register creation succeeds.
 - Collision-safe file move behavior is implemented (`_1`, `_2`, ... suffixing).
 - Unregistered batch order import accepts non-canonical `pdf_link` path forms (including `quotations/unregistered/...` and typo-normalizable variants) and normalizes/moves links during processing.
 - Per-file unregistered order import now executes CSV/PDF moves atomically with rollback on move failure, preventing partial file relocation.
@@ -86,10 +88,11 @@ Last updated: 2026-03-02 (JST)
 - Fully empty CSV rows are ignored during order import to avoid false validation failures from trailing blank lines.
 - Missing-item registration now rejects unresolved `new_item` rows with all metadata blank, preventing accidental `UNKNOWN` placeholder item creation.
 - Manual and unregistered batch order imports reject duplicate quotation re-import for the same supplier when existing orders already reference that quotation.
+- Missing-item batch registration now reads both `quotations/unregistered/csv_files/**/_missing_items_registration.csv` and consolidated registers under `quotations/unregistered/missing_item_registers/`.
 
 ## 6. Quality State
 
-- Backend tests: `41 passed` (latest run on 2026-03-02).
+- Backend tests: `42 passed` (latest run on 2026-03-02).
 - Frontend production build: success (latest run on 2026-03-01).
 
 ## 7. Known Directional Gaps (intentional for current phase)
