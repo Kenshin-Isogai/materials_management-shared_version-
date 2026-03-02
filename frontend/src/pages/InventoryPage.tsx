@@ -1,6 +1,6 @@
 import { FormEvent, useMemo, useState } from "react";
 import useSWR from "swr";
-import { apiGetWithPagination, apiSend } from "../lib/api";
+import { apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
 import type { InventoryRow, Item } from "../lib/types";
 
 type MoveForm = {
@@ -31,6 +31,8 @@ export function InventoryPage() {
   });
   const [bulkRows, setBulkRows] = useState<MoveRow[]>([blankMoveRow(), blankMoveRow()]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [movementCsvFile, setMovementCsvFile] = useState<File | null>(null);
+  const [movementBatchId, setMovementBatchId] = useState("");
   const { data, error, isLoading, mutate } = useSWR("/inventory", () =>
     apiGetWithPagination<InventoryRow[]>("/inventory?per_page=200")
   );
@@ -41,6 +43,25 @@ export function InventoryPage() {
 
   function itemLabel(item: Item) {
     return `${item.item_number} (${item.manufacturer_name}) #${item.item_id}`;
+  }
+
+
+
+  async function submitMovementCsv(event: FormEvent) {
+    event.preventDefault();
+    if (!movementCsvFile) return;
+    const formData = new FormData();
+    formData.append("file", movementCsvFile);
+    if (movementBatchId.trim()) formData.append("batch_id", movementBatchId.trim());
+    setIsSubmitting(true);
+    try {
+      await apiSendForm("/inventory/import-csv", formData);
+      setMovementCsvFile(null);
+      setMovementBatchId("");
+      await mutate();
+    } finally {
+      setIsSubmitting(false);
+    }
   }
 
   async function submitMove(event: FormEvent) {
@@ -110,6 +131,33 @@ export function InventoryPage() {
         <p className="mt-1 text-sm text-slate-600">
           Transfer, consume, adjust inventory with single and bulk operations.
         </p>
+      </section>
+
+
+
+      <section className="panel grid gap-3 p-4">
+        <h2 className="font-display text-lg font-semibold">CSV Import (Movements)</h2>
+        <p className="text-xs text-slate-500">
+          Columns: operation_type,item_id,quantity,from_location,to_location,location,note
+        </p>
+        <form className="grid gap-2" onSubmit={submitMovementCsv}>
+          <input
+            className="input"
+            type="file"
+            accept=".csv,text/csv"
+            onChange={(e) => setMovementCsvFile(e.target.files?.[0] ?? null)}
+            required
+          />
+          <input
+            className="input"
+            placeholder="Batch ID (optional)"
+            value={movementBatchId}
+            onChange={(e) => setMovementBatchId(e.target.value)}
+          />
+          <button className="button" disabled={isSubmitting || !movementCsvFile} type="submit">
+            Import CSV
+          </button>
+        </form>
       </section>
 
       <section className="grid gap-5 lg:grid-cols-2">

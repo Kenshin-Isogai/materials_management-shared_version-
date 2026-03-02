@@ -445,6 +445,10 @@ def _load_csv_rows_from_content(content: bytes) -> list[dict[str, str]]:
     return [{k.strip(): (v.strip() if isinstance(v, str) else v) for k, v in row.items()} for row in reader]
 
 
+def _read_csv_text(content: bytes) -> str:
+    return content.decode("utf-8-sig")
+
+
 def _load_csv_rows_from_path(path: str | Path) -> list[dict[str, str]]:
     with Path(path).open("r", encoding="utf-8-sig", newline="") as fp:
         reader = csv.DictReader(fp)
@@ -2045,6 +2049,148 @@ def batch_inventory_operations(
     return {"batch_id": working_batch_id, "operations": results}
 
 
+
+
+def _normalize_inventory_csv_operation_type(value: str) -> str:
+    normalized = str(value or "").strip().upper()
+    if not normalized:
+        raise AppError(code="INVALID_OPERATION", message="operation_type is required", status_code=422)
+    aliases = {
+        "TRANSFER": "MOVE",
+    }
+    return aliases.get(normalized, normalized)
+
+
+def import_inventory_movements_from_rows(
+    conn: sqlite3.Connection,
+    *,
+    rows: list[dict[str, Any]],
+    batch_id: str | None = None,
+) -> dict[str, Any]:
+    operations: list[dict[str, Any]] = []
+    for idx, row in enumerate(rows, start=2):
+        op_type = _normalize_inventory_csv_operation_type(row.get("operation_type", ""))
+        item_id_raw = row.get("item_id")
+        if item_id_raw in (None, ""):
+            raise AppError(code="INVALID_ITEM", message=f"row {idx}: item_id is required", status_code=422)
+        quantity_raw = row.get("quantity")
+        if quantity_raw in (None, ""):
+            raise AppError(code="INVALID_QUANTITY", message=f"row {idx}: quantity is required", status_code=422)
+        quantity = require_positive_int(int(quantity_raw), f"row {idx} quantity")
+        operation: dict[str, Any] = {
+            "operation_type": op_type,
+            "item_id": int(item_id_raw),
+            "quantity": quantity,
+            "from_location": str(row.get("from_location") or "").strip() or None,
+            "to_location": str(row.get("to_location") or "").strip() or None,
+            "location": str(row.get("location") or "").strip() or None,
+            "note": str(row.get("note") or "").strip() or None,
+        }
+        if op_type in {"MOVE", "CONSUME", "RESERVE"} and not operation["from_location"]:
+            raise AppError(code="INVALID_LOCATION", message=f"row {idx}: from_location is required for {op_type}", status_code=422)
+        if op_type in {"MOVE", "ARRIVAL", "RESERVE"} and not operation["to_location"]:
+            raise AppError(code="INVALID_LOCATION", message=f"row {idx}: to_location is required for {op_type}", status_code=422)
+        if op_type == "ADJUST" and not operation["location"]:
+            operation["location"] = operation["to_location"] or operation["from_location"]
+            if not operation["location"]:
+                raise AppError(code="INVALID_LOCATION", message=f"row {idx}: location is required for ADJUST", status_code=422)
+        operations.append(operation)
+    if not operations:
+        raise AppError(code="EMPTY_CSV", message="No movement rows found in CSV", status_code=422)
+    return batch_inventory_operations(conn, operations=operations, batch_id=batch_id)
+
+
+def import_inventory_movements_from_content(
+    conn: sqlite3.Connection,
+    *,
+    content: bytes,
+    batch_id: str | None = None,
+) -> dict[str, Any]:
+    rows = _load_csv_rows_from_content(content)
+    return import_inventory_movements_from_rows(conn, rows=rows, batch_id=batch_id)
+
+
+def _assembly_lookup_map(conn: sqlite3.Connection) -> dict[str, int]:
+    rows = conn.execute("SELECT assembly_id, name FROM assemblies").fetchall()
+    result: dict[str, int] = {}
+    for row in rows:
+        result[str(row["assembly_id"]).casefold()] = int(row["assembly_id"])
+        result[str(row["name"]).strip().casefold()] = int(row["assembly_id"])
+    return result
+
+
+def import_reservations_from_rows(
+    conn: sqlite3.Connection,
+    *,
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    created: list[dict[str, Any]] = []
+    assembly_map = _assembly_lookup_map(conn)
+    for idx, row in enumerate(rows, start=2):
+        qty_raw = row.get("quantity")
+        if qty_raw in (None, ""):
+            raise AppError(code="INVALID_QUANTITY", message=f"row {idx}: quantity is required", status_code=422)
+        quantity = require_positive_int(int(qty_raw), f"row {idx} quantity")
+        purpose = str(row.get("purpose") or "").strip() or None
+        deadline = normalize_optional_date((row.get("deadline") or None), "deadline")
+        note = str(row.get("note") or "").strip() or None
+        project_id_raw = row.get("project_id")
+        project_id = int(project_id_raw) if project_id_raw not in (None, "") else None
+
+        item_id_raw = row.get("item_id")
+        assembly_ref = str(row.get("assembly") or row.get("assembly_name") or "").strip()
+        assembly_qty_raw = row.get("assembly_quantity")
+
+        if item_id_raw not in (None, ""):
+            created.append(
+                create_reservation(
+                    conn,
+                    {
+                        "item_id": int(item_id_raw),
+                        "quantity": quantity,
+                        "purpose": purpose,
+                        "deadline": deadline,
+                        "note": note,
+                        "project_id": project_id,
+                    },
+                )
+            )
+            continue
+
+        if not assembly_ref:
+            raise AppError(code="INVALID_ITEM", message=f"row {idx}: either item_id or assembly is required", status_code=422)
+        assembly_id = assembly_map.get(assembly_ref.casefold())
+        if assembly_id is None:
+            raise AppError(code="ASSEMBLY_NOT_FOUND", message=f"row {idx}: assembly '{assembly_ref}' not found", status_code=404)
+        assembly_quantity = int(assembly_qty_raw) if assembly_qty_raw not in (None, "") else 1
+        assembly_quantity = require_positive_int(assembly_quantity, f"row {idx} assembly_quantity")
+        assembly = get_assembly(conn, assembly_id)
+        for component in assembly.get("components", []):
+            created.append(
+                create_reservation(
+                    conn,
+                    {
+                        "item_id": int(component["item_id"]),
+                        "quantity": int(component["quantity"]) * quantity * assembly_quantity,
+                        "purpose": purpose or f"Assembly:{assembly['name']}",
+                        "deadline": deadline,
+                        "note": note,
+                        "project_id": project_id,
+                    },
+                )
+            )
+    if not rows:
+        raise AppError(code="EMPTY_CSV", message="No reservation rows found in CSV", status_code=422)
+    return created
+
+
+def import_reservations_from_content(
+    conn: sqlite3.Connection,
+    *,
+    content: bytes,
+) -> list[dict[str, Any]]:
+    rows = _load_csv_rows_from_content(content)
+    return import_reservations_from_rows(conn, rows=rows)
 def list_orders(
     conn: sqlite3.Connection,
     *,

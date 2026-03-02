@@ -54,3 +54,9 @@ Run migration in two steps:
 
 1. `uv run main.py migrate-quotations-layout --dry-run`
 2. `uv run main.py migrate-quotations-layout --apply`
+
+
+## Additional CSV imports
+
+- `POST /api/inventory/import-csv` with CSV columns `operation_type,item_id,quantity,from_location,to_location,location,note`
+- `POST /api/reservations/import-csv` with CSV columns `item_id` or `assembly`, `quantity`, optional `assembly_quantity,purpose,deadline,note,project_id`

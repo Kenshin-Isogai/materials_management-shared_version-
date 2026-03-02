@@ -1174,3 +1174,62 @@ def test_delete_quotation_rejects_if_any_linked_order_arrived(conn):
     assert excinfo.value.code == "QUOTATION_HAS_ARRIVED_ORDERS"
     assert conn.execute("SELECT COUNT(*) AS c FROM quotations").fetchone()["c"] == 1
     assert conn.execute("SELECT COUNT(*) AS c FROM orders").fetchone()["c"] == 1
+
+
+def test_import_inventory_movements_from_rows(conn):
+    item = _create_basic_item(conn, item_number="ITEM-MOVE-CSV")
+    service.adjust_inventory(conn, item_id=item["item_id"], quantity_delta=10, location="STOCK")
+
+    result = service.import_inventory_movements_from_rows(
+        conn,
+        rows=[
+            {
+                "operation_type": "MOVE",
+                "item_id": str(item["item_id"]),
+                "quantity": "3",
+                "from_location": "STOCK",
+                "to_location": "BENCH_A",
+                "note": "csv move",
+            },
+            {
+                "operation_type": "CONSUME",
+                "item_id": str(item["item_id"]),
+                "quantity": "2",
+                "from_location": "STOCK",
+            },
+        ],
+    )
+    conn.commit()
+
+    assert len(result["operations"]) == 2
+    assert _inventory_qty(conn, item["item_id"], "STOCK") == 5
+    assert _inventory_qty(conn, item["item_id"], "BENCH_A") == 3
+
+
+def test_import_reservations_from_rows_with_assembly(conn):
+    item = _create_basic_item(conn, item_number="ITEM-RES-CSV-A")
+    service.adjust_inventory(conn, item_id=item["item_id"], quantity_delta=20, location="STOCK")
+    assembly = service.create_assembly(
+        conn,
+        {
+            "name": "RES-CSV-ASM",
+            "components": [{"item_id": item["item_id"], "quantity": 2}],
+        },
+    )
+
+    created = service.import_reservations_from_rows(
+        conn,
+        rows=[
+            {
+                "assembly": assembly["name"],
+                "assembly_quantity": "3",
+                "quantity": "2",
+                "purpose": "csv assembly reserve",
+            }
+        ],
+    )
+    conn.commit()
+
+    assert len(created) == 1
+    assert int(created[0]["quantity"]) == 12
+    assert created[0]["status"] == "ACTIVE"

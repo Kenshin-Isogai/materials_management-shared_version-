@@ -1,6 +1,6 @@
 import { FormEvent, useMemo, useState } from "react";
 import useSWR from "swr";
-import { apiGetWithPagination, apiSend } from "../lib/api";
+import { apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
 import type { Item, Reservation } from "../lib/types";
 
 type ReservationRow = {
@@ -23,6 +23,7 @@ export function ReservationsPage() {
   const [form, setForm] = useState<ReservationRow>(blankRow());
   const [bulkRows, setBulkRows] = useState<ReservationRow[]>([blankRow(), blankRow()]);
   const [loading, setLoading] = useState(false);
+  const [reservationCsvFile, setReservationCsvFile] = useState<File | null>(null);
   const { data, error, isLoading, mutate } = useSWR("/reservations", () =>
     apiGetWithPagination<Reservation[]>("/reservations?per_page=200")
   );
@@ -82,6 +83,23 @@ export function ReservationsPage() {
         body: JSON.stringify({ reservations })
       });
       setBulkRows([blankRow(), blankRow()]);
+      await mutate();
+    } finally {
+      setLoading(false);
+    }
+  }
+
+
+
+  async function importReservationCsv(event: FormEvent) {
+    event.preventDefault();
+    if (!reservationCsvFile) return;
+    const formData = new FormData();
+    formData.append("file", reservationCsvFile);
+    setLoading(true);
+    try {
+      await apiSendForm("/reservations/import-csv", formData);
+      setReservationCsvFile(null);
       await mutate();
     } finally {
       setLoading(false);
@@ -149,6 +167,27 @@ export function ReservationsPage() {
         <p className="mt-1 text-sm text-slate-600">
           Reserve stock for future use and handle release or consume transitions.
         </p>
+      </section>
+
+
+
+      <section className="panel grid gap-3 p-4">
+        <h2 className="font-display text-lg font-semibold">CSV Import (Reservations)</h2>
+        <p className="text-xs text-slate-500">
+          Columns: item_id or assembly, quantity, assembly_quantity(optional), purpose, deadline, note, project_id(optional)
+        </p>
+        <form className="grid gap-2" onSubmit={importReservationCsv}>
+          <input
+            className="input"
+            type="file"
+            accept=".csv,text/csv"
+            onChange={(e) => setReservationCsvFile(e.target.files?.[0] ?? null)}
+            required
+          />
+          <button className="button" disabled={loading || !reservationCsvFile} type="submit">
+            Import CSV
+          </button>
+        </form>
       </section>
 
       <section className="grid gap-5 lg:grid-cols-2">

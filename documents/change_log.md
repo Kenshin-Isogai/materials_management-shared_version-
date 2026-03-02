@@ -227,3 +227,20 @@ Format style: Keep a simple date-based log while repository versioning policy is
   - release failure when reservation has no/insufficient `ACTIVE` allocations
   - consume failure when reservation has no/insufficient `ACTIVE` allocations
   - ARRIVAL undo partial behavior when most inventory has moved out of `STOCK`
+
+
+## 2026-03-02 (movement/reservation CSV import + assembly-aware reservation expansion)
+
+### Added
+
+- API endpoints:
+  - `POST /api/inventory/import-csv`
+  - `POST /api/reservations/import-csv`
+- Backend services for CSV imports:
+  - movement CSV -> normalized batch operations
+  - reservation CSV -> direct item reservations or assembly-expanded component reservations
+- Frontend upload forms on Movements and Reserve pages with explicit column format hints.
+
+### Changed
+
+- Assembly feature is now used directly in reservation CSV import by expanding assembly rows to component reservation rows, improving workflow efficiency without turning assemblies into enforced inventory constraints.

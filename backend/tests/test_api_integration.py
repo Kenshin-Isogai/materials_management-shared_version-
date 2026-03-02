@@ -1411,3 +1411,67 @@ def test_delete_quotation_endpoint_removes_related_orders(client):
     remaining_orders = client.get("/api/orders?supplier=SupplierDeleteQuotation&per_page=50")
     assert remaining_orders.status_code == 200
     assert remaining_orders.json()["data"] == []
+
+
+def test_inventory_import_csv_endpoint(client):
+    manufacturer = client.post("/api/manufacturers", json={"name": "API-MOVE-CSV-MFG"}).json()["data"]
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-MOVE-CSV-ITEM",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Lens",
+        },
+    ).json()["data"]
+    client.post(
+        "/api/inventory/adjust",
+        json={"item_id": item["item_id"], "quantity_delta": 10, "location": "STOCK"},
+    )
+
+    csv_content = (
+        "operation_type,item_id,quantity,from_location,to_location,location,note\n"
+        f"MOVE,{item['item_id']},4,STOCK,BENCH_A,,bulk move\n"
+    ).encode("utf-8")
+
+    response = client.post(
+        "/api/inventory/import-csv",
+        files={"file": ("movements.csv", csv_content, "text/csv")},
+        data={"batch_id": "api-move-csv-batch"},
+    )
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["batch_id"] == "api-move-csv-batch"
+    assert len(payload["operations"]) == 1
+
+
+def test_reservations_import_csv_endpoint_with_assembly(client):
+    manufacturer = client.post("/api/manufacturers", json={"name": "API-RES-CSV-MFG"}).json()["data"]
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-RES-CSV-ITEM",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Mirror",
+        },
+    ).json()["data"]
+    client.post(
+        "/api/inventory/adjust",
+        json={"item_id": item["item_id"], "quantity_delta": 50, "location": "STOCK"},
+    )
+    assembly = client.post(
+        "/api/assemblies",
+        json={"name": "API-CSV-ASM", "components": [{"item_id": item["item_id"], "quantity": 2}]},
+    ).json()["data"]
+
+    csv_content = (
+        "assembly,assembly_quantity,quantity,purpose\n"
+        f"{assembly['name']},3,2,api csv reservation\n"
+    ).encode("utf-8")
+    response = client.post(
+        "/api/reservations/import-csv",
+        files={"file": ("reservations.csv", csv_content, "text/csv")},
+    )
+    assert response.status_code == 200
+    rows = response.json()["data"]
+    assert len(rows) == 1
+    assert rows[0]["quantity"] == 12

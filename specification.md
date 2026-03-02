@@ -687,6 +687,14 @@ Projected Available =
 - All quotations can be edited
 - Date fields must be YYYY-MM-DD format
 
+
+
+### **4.8.1 Movement/Reservation CSV Import**
+
+- Inventory movement CSV import supports `MOVE`, `CONSUME`, `ADJUST`, `ARRIVAL`, `RESERVE` operation rows and executes them via the existing batch transaction service.
+- Reservation CSV import supports either direct `item_id` reservations or assembly-driven rows (`assembly` + optional `assembly_quantity`) that expand to component reservations using assembly definitions.
+- Assembly expansion is intentionally advisory/planning-oriented (no automatic inventory movement beyond reservation allocation), which aligns with current assembly policy and avoids unnecessary complexity.
+
 ### **4.9 Inventory Snapshots**
 
 **Purpose:** View inventory state at any point in time (past or future).
@@ -731,8 +739,8 @@ All management pages handling CRUD operations (Items, Orders, Reservations, etc.
 | Projects | CRUD projects, requirements, gap analysis |
 | Orders | Bulk import orders, register missing items, alias CSV import, **batch import+move from unregistered folders**, **orders/quotations management** |
 | Arrival | Process arrivals, partial deliveries (supports bulk resolution) |
-| Movements | Single/batch movements, all operation types |
-| Reserve | Reservation management, BOM batch reservation |
+| Movements | Single/batch movements, all operation types, CSV import (`operation_type,item_id,quantity,from_location,to_location,location,note`) |
+| Reserve | Reservation management, BOM batch reservation, CSV import (`item_id` or `assembly`, `quantity`, optional `assembly_quantity/purpose/deadline/note/project_id`) |
 | BOM | Gap analysis, reserve available |
 | Assemblies | Define assemblies, location usage, requirements |
 | Items | Bulk edit item attributes; soft-merge categories via alias mapping |
