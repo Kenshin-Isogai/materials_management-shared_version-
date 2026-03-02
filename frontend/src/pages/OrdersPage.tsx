@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import useSWR from "swr";
 import { apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
-import type { MissingItemResolverRow, Order } from "../lib/types";
+import type { MissingItemResolverRow, Order, Quotation } from "../lib/types";
 
 const PENDING_MISSING_ITEMS_KEY = "mm.pending_missing_items";
 const PENDING_ORDER_IMPORT_KEY = "mm.pending_order_import";
@@ -144,9 +144,15 @@ export function OrdersPage() {
   const [sortKey, setSortKey] = useState<"order_id" | "supplier_name" | "canonical_item_number" | "order_amount" | "expected_arrival" | "status">("order_id");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
 
-  const { data, error, isLoading, mutate } = useSWR("/orders", () =>
+  const { data, error, isLoading, mutate: mutateOrders } = useSWR("/orders", () =>
     apiGetWithPagination<Order[]>("/orders?per_page=200")
   );
+  const {
+    data: quotationsData,
+    error: quotationsError,
+    isLoading: quotationsLoading,
+    mutate: mutateQuotations,
+  } = useSWR("/quotations", () => apiGetWithPagination<Quotation[]>("/quotations?per_page=200"));
 
   const sortedOrders = useMemo(() => {
     const rows = [...(data?.data ?? [])];
@@ -269,7 +275,7 @@ export function OrdersPage() {
         sessionStorage.removeItem(PENDING_BATCH_RETRY_KEY);
         setMessage(`Imported ${result.imported_count ?? 0} rows.`);
       }
-      await mutate();
+      await Promise.all([mutateOrders(), mutateQuotations()]);
     } catch (error) {
       const messageText = String(error ?? "");
       if (messageText.includes("quotations/registered/pdf_files")) {
@@ -289,7 +295,7 @@ export function OrdersPage() {
     setLoading(true);
     try {
       await apiSend(`/orders/${orderId}/arrival`, { method: "POST", body: JSON.stringify({}) });
-      await mutate();
+      await Promise.all([mutateOrders(), mutateQuotations()]);
     } finally {
       setLoading(false);
     }
@@ -317,7 +323,7 @@ export function OrdersPage() {
       setMessage(
         `Missing registration batch: status=${result.status}, processed=${result.processed}, succeeded=${result.succeeded}, failed=${result.failed}`
       );
-      await mutate();
+      await Promise.all([mutateOrders(), mutateQuotations()]);
     } finally {
       setLoading(false);
     }
@@ -349,7 +355,7 @@ export function OrdersPage() {
       setMessage(
         `Unregistered import batch: status=${result.status}, processed=${result.processed}, succeeded=${result.succeeded}, missing_items=${result.missing_items}, failed=${result.failed}`
       );
-      await mutate();
+      await Promise.all([mutateOrders(), mutateQuotations()]);
     } finally {
       setLoading(false);
     }
@@ -401,7 +407,7 @@ export function OrdersPage() {
       setMessage(
         `Unregistered batch complete: register(status=${registerResult.status}, processed=${registerResult.processed}, succeeded=${registerResult.succeeded}, failed=${registerResult.failed}) + import(status=${importResult.status}, processed=${importResult.processed}, succeeded=${importResult.succeeded}, missing_items=${importResult.missing_items}, failed=${importResult.failed})`
       );
-      await mutate();
+      await Promise.all([mutateOrders(), mutateQuotations()]);
     } finally {
       setLoading(false);
     }
@@ -748,6 +754,38 @@ export function OrdersPage() {
                         <span className="text-slate-400">-</span>
                       )}
                     </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      <section className="panel p-4">
+        <h2 className="mb-3 font-display text-lg font-semibold">Imported Quotations</h2>
+        {quotationsLoading && <p className="text-sm text-slate-500">Loading...</p>}
+        {quotationsError && <p className="text-sm text-red-600">{String(quotationsError)}</p>}
+        {quotationsData?.data && (
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="border-b border-slate-200 text-left text-slate-500">
+                  <th className="px-2 py-2">ID</th>
+                  <th className="px-2 py-2">Supplier</th>
+                  <th className="px-2 py-2">Quotation #</th>
+                  <th className="px-2 py-2">Issue Date</th>
+                  <th className="px-2 py-2">PDF Link</th>
+                </tr>
+              </thead>
+              <tbody>
+                {quotationsData.data.map((row) => (
+                  <tr key={row.quotation_id} className="border-b border-slate-100">
+                    <td className="px-2 py-2">#{row.quotation_id}</td>
+                    <td className="px-2 py-2">{row.supplier_name}</td>
+                    <td className="px-2 py-2 font-semibold">{row.quotation_number}</td>
+                    <td className="px-2 py-2">{row.issue_date ?? "-"}</td>
+                    <td className="px-2 py-2 text-slate-600">{row.pdf_link ?? "-"}</td>
                   </tr>
                 ))}
               </tbody>
