@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import AliasChoices, BaseModel, Field, model_validator
 
 
 class ItemCreate(BaseModel):
@@ -104,6 +104,10 @@ class UnregisteredFileRetryRequest(BaseModel):
 class MissingItemRegistrationRow(BaseModel):
     item_number: str = Field(min_length=1)
     supplier: str = Field(min_length=1)
+    manufacturer_name: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("manufacturer_name", "manufacturer"),
+    )
     resolution_type: Literal["new_item", "alias"] = "new_item"
     category: str | None = None
     url: str | None = None

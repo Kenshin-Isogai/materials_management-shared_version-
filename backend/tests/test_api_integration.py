@@ -1093,6 +1093,7 @@ def test_register_missing_rows_endpoint(client):
                 {
                     "supplier": "SupplierResolver",
                     "item_number": "MISS-ITEM-NEW",
+                    "manufacturer_name": "RESOLVER-MFG",
                     "resolution_type": "new_item",
                     "category": "Lens",
                     "description": "from resolver",
@@ -1109,6 +1110,34 @@ def test_register_missing_rows_endpoint(client):
     rows = items.json()["data"]
     assert len(rows) == 1
     assert rows[0]["item_number"] == "MISS-ITEM-NEW"
+    assert rows[0]["manufacturer_name"] == "RESOLVER-MFG"
+
+
+def test_register_missing_rows_endpoint_accepts_manufacturer_alias_field(client):
+    response = client.post(
+        "/api/register-missing/rows",
+        json={
+            "rows": [
+                {
+                    "supplier": "SupplierResolver",
+                    "item_number": "MISS-ITEM-NEW-ALIAS",
+                    "manufacturer": "RESOLVER-MFG-ALIAS",
+                    "resolution_type": "new_item",
+                    "category": "Lens",
+                    "description": "from resolver alias",
+                }
+            ]
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["created_items"] == 1
+
+    items = client.get("/api/items?q=MISS-ITEM-NEW-ALIAS&per_page=50")
+    assert items.status_code == 200
+    rows = items.json()["data"]
+    assert len(rows) == 1
+    assert rows[0]["manufacturer_name"] == "RESOLVER-MFG-ALIAS"
 
 
 def test_register_missing_rows_endpoint_rejects_unresolved_new_item(client):

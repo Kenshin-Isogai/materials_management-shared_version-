@@ -947,12 +947,17 @@ Base URL: `http://localhost:8000/api`
 |--------|----------|------|
 | item_number | Yes | String |
 | supplier | Yes | String |
+| manufacturer_name | No | String (used for `new_item`; defaults to `UNKNOWN` when blank; accepts alias header `manufacturer`) |
 | resolution_type | No | `new_item` (default) or `alias` |
 | category | No | String (used for `new_item`; optional in current app) |
 | url | No | URL |
 | description | No | String |
 | canonical_item_number | Conditional | String (required for `alias`; must exist for supplier as existing item or `new_item` in same registration batch) |
 | units_per_order | No | Integer > 0 (defaults to 1 for alias when blank) |
+
+Notes:
+- `supplier` here is the supplier namespace used for order-SKU resolution/alias mapping. It is not the same concept as item `manufacturer`.
+- `new_item` rows can optionally set `manufacturer_name` (or `manufacturer` alias header). When blank, manufacturer defaults to `UNKNOWN`.
 
 For batch-generated consolidated register CSV, additional provenance columns may be prepended:
 
