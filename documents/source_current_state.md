@@ -85,10 +85,11 @@ Last updated: 2026-03-02 (JST)
 - Order import accepts common date formats with slash or flexible month/day (`YYYY/M/D`, `YYYY-MM-DD`) and normalizes to `YYYY-MM-DD`.
 - Fully empty CSV rows are ignored during order import to avoid false validation failures from trailing blank lines.
 - Missing-item registration now rejects unresolved `new_item` rows with all metadata blank, preventing accidental `UNKNOWN` placeholder item creation.
+- Manual and unregistered batch order imports reject duplicate quotation re-import for the same supplier when existing orders already reference that quotation.
 
 ## 6. Quality State
 
-- Backend tests: `40 passed` (latest run on 2026-03-02).
+- Backend tests: `41 passed` (latest run on 2026-03-02).
 - Frontend production build: success (latest run on 2026-03-01).
 
 ## 7. Known Directional Gaps (intentional for current phase)
