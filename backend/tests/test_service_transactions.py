@@ -276,6 +276,21 @@ def test_import_unregistered_orders_missing_items_keeps_source_files(conn, tmp_p
     assert not (registered_root / "csv_files" / "SupplierMissing" / "Q-MISS-001.csv").exists()
     assert not (registered_root / "pdf_files" / "SupplierMissing" / "Q-MISS-001.pdf").exists()
 
+    register_path = result.get("missing_items_register_csv")
+    assert register_path is not None
+    register_file = Path(register_path)
+    assert register_file.exists()
+    assert register_file.parent == (unregistered_root / "missing_item_registers")
+
+    with register_file.open("r", encoding="utf-8", newline="") as fp:
+        reader = csv.DictReader(fp)
+        rows = list(reader)
+
+    assert len(rows) == 1
+    assert rows[0]["source_supplier"] == "SupplierMissing"
+    assert rows[0]["source_csv"].endswith("Q-MISS-001.csv")
+    assert rows[0]["item_number"] == "MISSING-ITEM-001"
+
 
 def test_import_unregistered_orders_rolls_back_pdf_move_on_csv_move_failure(
     conn,
@@ -473,3 +488,67 @@ def test_register_missing_requires_details_for_new_item(conn):
         )
 
     assert exc_info.value.code == "MISSING_ITEM_UNRESOLVED"
+
+
+def test_register_unregistered_missing_items_reads_consolidated_register_folder(conn, tmp_path: Path):
+    unregistered_root = tmp_path / "quotations" / "unregistered"
+    registered_root = tmp_path / "quotations" / "registered"
+    register_dir = unregistered_root / "missing_item_registers"
+    register_dir.mkdir(parents=True, exist_ok=True)
+
+    register_csv = register_dir / "batch_missing_items_registration_20260302_120000.csv"
+    with register_csv.open("w", encoding="utf-8", newline="") as fp:
+        writer = csv.DictWriter(
+            fp,
+            fieldnames=[
+                "source_csv",
+                "source_supplier",
+                "item_number",
+                "supplier",
+                "resolution_type",
+                "category",
+                "url",
+                "description",
+                "canonical_item_number",
+                "units_per_order",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "source_csv": "quotations/unregistered/csv_files/SupplierBatch/QB-001.csv",
+                "source_supplier": "SupplierBatch",
+                "item_number": "BATCH-NEW-001",
+                "supplier": "SupplierBatch",
+                "resolution_type": "new_item",
+                "category": "Lens",
+                "url": "",
+                "description": "",
+                "canonical_item_number": "",
+                "units_per_order": "",
+            }
+        )
+
+    result = service.register_unregistered_missing_items_csvs(
+        conn,
+        unregistered_root=unregistered_root,
+        registered_root=registered_root,
+    )
+    conn.commit()
+
+    assert result["status"] == "ok"
+    assert result["succeeded"] == 1
+    assert not register_csv.exists()
+    moved = registered_root / "csv_files" / "UNKNOWN" / register_csv.name
+    assert moved.exists()
+
+    row = conn.execute(
+        """
+        SELECT i.item_number
+        FROM items_master i
+        JOIN manufacturers m ON m.manufacturer_id = i.manufacturer_id
+        WHERE i.item_number = ? AND m.name = ?
+        """,
+        ("BATCH-NEW-001", "UNKNOWN"),
+    ).fetchone()
+    assert row is not None

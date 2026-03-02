@@ -293,6 +293,7 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 
 - Manual order import accepts only canonical registered PDF links or filename-only values.
 - Unregistered batch import resolves/moves CSV and PDF files and rewrites links to canonical workspace-relative paths.
+- Missing items discovered during unregistered batch import are aggregated into a single register CSV per batch run under `quotations/unregistered/missing_item_registers/` (instead of per-quotation output beside source CSVs).
 - Manual and batch order imports reject quotations already imported for the same supplier (same `quotation_number` with existing orders), returning a conflict to avoid duplicate order ingestion.
 - Per-file unregistered import must keep filesystem moves atomic: if any move fails, rollback already moved files for that CSV and return file-level error.
 - File collisions are handled by non-destructive renaming (`_1`, `_2`, ...).
@@ -302,6 +303,7 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
   - `quotations/unregistered/pdf_files/<supplier>/`
   - `quotations/registered/csv_files/<supplier>/`
   - `quotations/registered/pdf_files/<supplier>/`
+  - `quotations/unregistered/missing_item_registers/`
 
 ### 5) Reservation partial-actions policy
 

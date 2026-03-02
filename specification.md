@@ -527,7 +527,7 @@ Maps raw category names to canonical category names for soft-merge behavior.
    - Process only order CSV files (skip `*_missing_items_registration.csv`)
    - Run standard `import_orders()` for each CSV
    - If result is `ok`: move CSV to `registered/csv_files`, move referenced PDFs to `registered/pdf_files`, normalize CSV/quotation `pdf_link`
-   - If result is `missing_items`: generate `*_missing_items_registration.csv`; do not move source files
+   - If result is `missing_items`: keep source CSV/PDF under `unregistered`; collect missing rows into one consolidated batch register CSV under `quotations/unregistered/missing_item_registers/`; do not move source files
 5. If one file errors, continue or stop based on `continue_on_error`
 
 **Arrival Processing:**
@@ -954,6 +954,13 @@ Base URL: `http://localhost:8000/api`
 | canonical_item_number | Conditional | String (required for `alias`; must exist for supplier as existing item or `new_item` in same registration batch) |
 | units_per_order | No | Integer > 0 (defaults to 1 for alias when blank) |
 
+For batch-generated consolidated register CSV, additional provenance columns may be prepended:
+
+| Column | Required | Type |
+|--------|----------|------|
+| source_csv | Yes (batch-generated only) | String path |
+| source_supplier | Yes (batch-generated only) | String |
+
 ### **6.3 bom_input.csv**
 
 | Column | Required | Type |
@@ -1009,6 +1016,8 @@ Base URL: `http://localhost:8000/api`
       pdf_files/
         <supplier_name>/
           <quotation>.pdf
+      missing_item_registers/
+        batch_missing_items_registration_<timestamp>.csv
     registered/
       csv_files/
         <supplier_name>/
@@ -1027,7 +1036,8 @@ Base URL: `http://localhost:8000/api`
 |-----------|---------|---------|
 | Quotation PDF | `<quotation_number>.pdf` | `Q2026-0001.pdf` |
 | Order CSV | `<quotation_number>.csv` or free | `Q2026-0001.csv` |
-| Missing Items CSV | `<original>_missing_items_registration.csv` | `Q2026-0001_missing_items_registration.csv` |
+| Missing Items CSV (single file import) | `<original>_missing_items_registration.csv` | `Q2026-0001_missing_items_registration.csv` |
+| Missing Item Register CSV (batch import) | `batch_missing_items_registration_<timestamp>.csv` | `batch_missing_items_registration_20260302_120000.csv` |
 | Export CSV | `<type>_<timestamp>.csv` | `inventory_20260223_143052.csv` |
 
 ### **7.3 PDF Storage Rules**

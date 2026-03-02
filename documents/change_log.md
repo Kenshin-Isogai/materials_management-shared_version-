@@ -6,6 +6,13 @@ Format style: Keep a simple date-based log while repository versioning policy is
 
 ## 2026-03-02
 
+### Changed
+
+- Updated missing-item output behavior for unregistered order batch import.
+  - Per-file unresolved rows are no longer left beside quotation CSV files.
+  - A single consolidated register CSV is generated per batch run under `quotations/unregistered/missing_item_registers/`.
+  - Missing-item batch registration now scans that consolidated folder in addition to legacy per-file locations.
+
 ### Fixed
 
 - Fixed unregistered order batch behavior where PDF files could be moved even if the same CSV ended in an error later in the per-file flow.

@@ -527,6 +527,18 @@ def _raise_import_undo_conflict(message: str, *, effect_id: int, row_number: int
     )
 
 
+MISSING_ITEMS_FIELDNAMES = [
+    "item_number",
+    "supplier",
+    "resolution_type",
+    "category",
+    "url",
+    "description",
+    "canonical_item_number",
+    "units_per_order",
+]
+
+
 def _write_missing_items_csv(
     rows: list[dict[str, Any]],
     source_name: str,
@@ -537,21 +549,42 @@ def _write_missing_items_csv(
     stem = Path(source_name).stem or "order_import"
     file_path = target_dir / f"{stem}_missing_items_registration.csv"
     with file_path.open("w", encoding="utf-8", newline="") as fp:
+        writer = csv.DictWriter(fp, fieldnames=MISSING_ITEMS_FIELDNAMES)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({k: row.get(k, "") for k in MISSING_ITEMS_FIELDNAMES})
+    return str(file_path)
+
+
+def _write_batch_missing_items_register(
+    missing_reports: list[dict[str, Any]],
+    *,
+    output_dir: Path,
+) -> str:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    batch_timestamp = now_jst().strftime("%Y%m%d_%H%M%S")
+    target_path = output_dir / f"batch_missing_items_registration_{batch_timestamp}.csv"
+
+    with target_path.open("w", encoding="utf-8", newline="") as fp:
         fieldnames = [
-            "item_number",
-            "supplier",
-            "resolution_type",
-            "category",
-            "url",
-            "description",
-            "canonical_item_number",
-            "units_per_order",
+            "source_csv",
+            "source_supplier",
+            *MISSING_ITEMS_FIELDNAMES,
         ]
         writer = csv.DictWriter(fp, fieldnames=fieldnames)
         writer.writeheader()
-        for row in rows:
-            writer.writerow({k: row.get(k, "") for k in fieldnames})
-    return str(file_path)
+        for report in missing_reports:
+            source_csv = str(report.get("file", ""))
+            source_supplier = str(report.get("supplier", ""))
+            for row in report.get("missing_rows", []):
+                out_row = {
+                    "source_csv": source_csv,
+                    "source_supplier": source_supplier,
+                }
+                for key in MISSING_ITEMS_FIELDNAMES:
+                    out_row[key] = row.get(key, "")
+                writer.writerow(out_row)
+    return str(target_path)
 
 
 def _safe_workspace_relative(path: Path) -> str:
@@ -2361,7 +2394,7 @@ def _import_unregistered_order_csv_file(
         rows=rows,
         default_order_date=default_order_date,
         source_name=csv_path.name,
-        missing_output_dir=csv_path.parent,
+        missing_output_dir=roots.unregistered_missing_root,
         allow_noncanonical_pdf_link=True,
     )
     file_warnings: list[str] = []
@@ -2537,6 +2570,7 @@ def import_unregistered_order_csvs(
     failed = 0
     warnings: list[str] = []
     normalizations: list[dict[str, str]] = []
+    missing_reports: list[dict[str, Any]] = []
 
     for csv_path in files:
         processed += 1
@@ -2565,6 +2599,7 @@ def import_unregistered_order_csvs(
 
             if file_report["status"] == "missing_items":
                 missing_items += 1
+                missing_reports.append(file_report)
             elif file_report["status"] == "ok":
                 succeeded += 1
             else:
@@ -2598,6 +2633,19 @@ def import_unregistered_order_csvs(
             if not continue_on_error:
                 break
 
+    batch_missing_csv_path: str | None = None
+    if missing_reports:
+        for item in missing_reports:
+            per_file_path = item.get("missing_csv_path")
+            if per_file_path:
+                Path(per_file_path).unlink(missing_ok=True)
+        batch_missing_csv_path = _write_batch_missing_items_register(
+            missing_reports,
+            output_dir=roots.unregistered_missing_root,
+        )
+        for item in missing_reports:
+            item["missing_csv_path"] = batch_missing_csv_path
+
     status = "ok" if failed == 0 else ("partial" if (succeeded or missing_items) else "error")
     return {
         "status": status,
@@ -2606,6 +2654,7 @@ def import_unregistered_order_csvs(
         "missing_items": missing_items,
         "failed": failed,
         "files": report,
+        "missing_items_register_csv": batch_missing_csv_path,
         "warnings": warnings,
         "normalizations": normalizations,
     }

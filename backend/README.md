@@ -40,6 +40,7 @@ Canonical batch paths:
 
 - `quotations/unregistered/csv_files/<supplier>/*.csv`
 - `quotations/unregistered/pdf_files/<supplier>/*`
+- `quotations/unregistered/missing_item_registers/*_missing_items_registration*.csv` (generated consolidated register files)
 - `quotations/registered/csv_files/<supplier>/*.csv`
 - `quotations/registered/pdf_files/<supplier>/*`
 
