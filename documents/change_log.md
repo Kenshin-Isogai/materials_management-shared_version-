@@ -16,6 +16,8 @@ Format style: Keep a simple date-based log while repository versioning policy is
 ### Fixed
 
 - Fixed consolidated missing-item register follow-up regressions.
+  - Per-file temporary missing-item filenames are now supplier-prefixed to avoid same-stem collisions across suppliers during a batch run.
+  - Batch flow now writes the consolidated register before deleting per-file temporary files, preventing data loss on consolidated-write failures.
   - Corrected batch register filename timestamp generation (`datetime.now`) to avoid runtime `NameError`.
   - Expanded consolidated register discovery glob to include timestamped names (`*_missing_items_registration*.csv`).
   - Consolidated register archive during `register-unregistered-missing` now uses `registered/csv_files/UNKNOWN/` with an explicit warning, instead of treating `missing_item_registers` as a supplier name.

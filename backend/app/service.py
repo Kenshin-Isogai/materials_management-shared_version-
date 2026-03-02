@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
 from io import StringIO
 import json
+import re
 from pathlib import Path
 import shutil
 import sqlite3
@@ -537,6 +538,13 @@ MISSING_ITEMS_FIELDNAMES = [
     "canonical_item_number",
     "units_per_order",
 ]
+
+
+
+
+def _safe_filename_component(value: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9._-]+", "_", str(value).strip())
+    return sanitized.strip("._") or "unknown"
 
 
 def _write_missing_items_csv(
@@ -2399,7 +2407,7 @@ def _import_unregistered_order_csv_file(
         supplier_name=supplier_name,
         rows=rows,
         default_order_date=default_order_date,
-        source_name=csv_path.name,
+        source_name=f"{_safe_filename_component(supplier_name)}__{csv_path.name}",
         missing_output_dir=roots.unregistered_missing_root,
         allow_noncanonical_pdf_link=True,
     )
@@ -2641,15 +2649,22 @@ def import_unregistered_order_csvs(
 
     batch_missing_csv_path: str | None = None
     if missing_reports:
-        for item in missing_reports:
-            per_file_path = item.get("missing_csv_path")
-            if per_file_path:
-                Path(per_file_path).unlink(missing_ok=True)
         batch_missing_csv_path = _write_batch_missing_items_register(
             missing_reports,
             output_dir=roots.unregistered_missing_root,
         )
         for item in missing_reports:
+            per_file_path = item.get("missing_csv_path")
+            if per_file_path:
+                try:
+                    Path(per_file_path).unlink(missing_ok=True)
+                except OSError as exc:
+                    warning = f"Failed to remove temporary missing-items CSV {per_file_path}: {exc}"
+                    file_warnings = item.setdefault("warnings", [])
+                    if warning not in file_warnings:
+                        file_warnings.append(warning)
+                    if warning not in warnings:
+                        warnings.append(warning)
             item["missing_csv_path"] = batch_missing_csv_path
 
     status = "ok" if failed == 0 else ("partial" if (succeeded or missing_items) else "error")

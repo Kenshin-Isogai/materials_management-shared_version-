@@ -80,6 +80,7 @@ Last updated: 2026-03-02 (JST)
   - `quotations/registered/pdf_files/<supplier>/`
 - Batch import functions normalize legacy/typo paths, move files safely, and emit warnings for unresolved paths.
 - Unregistered batch order import writes missing-item rows into one consolidated register CSV per run under `quotations/unregistered/missing_item_registers/`; source CSV/PDF files remain in place for unresolved quotations.
+- Temporary per-file missing-item CSVs generated during batch consolidation are supplier-prefixed and only removed after consolidated register creation succeeds.
 - Collision-safe file move behavior is implemented (`_1`, `_2`, ... suffixing).
 - Unregistered batch order import accepts non-canonical `pdf_link` path forms (including `quotations/unregistered/...` and typo-normalizable variants) and normalizes/moves links during processing.
 - Per-file unregistered order import now executes CSV/PDF moves atomically with rollback on move failure, preventing partial file relocation.
