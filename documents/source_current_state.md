@@ -129,3 +129,7 @@ Last updated: 2026-03-02 (JST)
   - deleting quotations directly from `Imported Quotations` (blocked if any linked order is already `Arrived`)
 - Backend now keeps CSV and DB aligned for these maintenance operations by rewriting/deleting matching rows in discovered quotation CSV files under registered/unregistered CSV roots.
 - For duplicate item rows under the same quotation, order-level CSV sync now matches a single row by per-order occurrence identity so update/delete touches only the targeted order row.
+
+- Added movement CSV import endpoint and service mapping to batch operations (`/api/inventory/import-csv`).
+- Added reservation CSV import endpoint with assembly-aware expansion (`/api/reservations/import-csv`), allowing one row to reserve all assembly components.
+- Movement/reservation CSV import numeric parse failures now return API validation errors (`422`) instead of internal errors for malformed rows.

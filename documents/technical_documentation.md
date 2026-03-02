@@ -374,3 +374,12 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
   - `DELETE /api/quotations/{quotation_id}` deletes quotation and linked orders only when no linked order is already arrived.
 - Consistency rule: when these operations mutate DB rows, matching order CSV records are rewritten/removed so CSV source files and database state do not diverge.
 - CSV row identity rule for order-level maintenance: `update_order`/`delete_order` must target exactly one CSV row by order identity (including duplicate `(supplier, quotation_number, item_number)` occurrences) to prevent fan-out edits/deletes when a quotation contains repeated item rows.
+
+
+## CSV import extensions (movements/reservations)
+
+- Added API endpoints:
+  - `POST /api/inventory/import-csv` (multipart CSV, optional `batch_id`)
+  - `POST /api/reservations/import-csv` (multipart CSV)
+- Movement CSV rows are normalized into existing `batch_inventory_operations`, preserving transaction log semantics and undo behavior consistency.
+- Reservation CSV supports assembly references by assembly name/id and expands to component-level reservations; this reuses assembly data efficiently for planning input while keeping assembly behavior advisory.

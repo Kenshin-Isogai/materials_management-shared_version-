@@ -82,6 +82,14 @@ class InventoryBatchRequest(BaseModel):
     batch_id: str | None = None
 
 
+
+
+class InventoryImportRequest(BaseModel):
+    batch_id: str | None = None
+
+
+class ReservationImportRequest(BaseModel):
+    pass
 class OrderUpdateRequest(BaseModel):
     expected_arrival: str | None = None
     status: Literal["Ordered"] | None = None

@@ -8,14 +8,12 @@ import pytest
 from app.errors import AppError
 from app import service
 
-
 def _inventory_qty(conn, item_id: int, location: str) -> int:
     row = conn.execute(
         "SELECT quantity FROM inventory_ledger WHERE item_id = ? AND location = ?",
         (item_id, location),
     ).fetchone()
     return int(row["quantity"]) if row else 0
-
 
 def _create_basic_item(conn, item_number: str = "ITEM-001") -> dict:
     manufacturer = service.create_manufacturer(conn, "TEST-MFG")
@@ -28,7 +26,6 @@ def _create_basic_item(conn, item_number: str = "ITEM-001") -> dict:
         },
     )
     return item
-
 
 def test_move_and_undo_restores_quantities(conn):
     item = _create_basic_item(conn)
@@ -53,7 +50,6 @@ def test_move_and_undo_restores_quantities(conn):
     assert undo_result["applied_quantity"] == 4
     assert _inventory_qty(conn, item["item_id"], "STOCK") == 10
     assert _inventory_qty(conn, item["item_id"], "BENCH_A") == 0
-
 
 def test_reservation_release_roundtrip(conn):
     item = _create_basic_item(conn, item_number="ITEM-RES-001")
@@ -82,7 +78,6 @@ def test_reservation_release_roundtrip(conn):
         (reservation["reservation_id"],),
     ).fetchone()
     assert int(active_alloc["qty"]) == 0
-
 
 def test_reservation_partial_release_keeps_active(conn):
     item = _create_basic_item(conn, item_number="ITEM-RES-PART-REL")
@@ -113,7 +108,6 @@ def test_reservation_partial_release_keeps_active(conn):
     ).fetchone()
     assert int(active_alloc["qty"]) == 4
 
-
 def test_reservation_partial_consume_keeps_active(conn):
     item = _create_basic_item(conn, item_number="ITEM-RES-PART-CON")
     service.adjust_inventory(
@@ -143,7 +137,6 @@ def test_reservation_partial_consume_keeps_active(conn):
     ).fetchone()
     assert int(active_alloc["qty"]) == 4
 
-
 def test_reservation_partial_quantity_cannot_exceed_remaining(conn):
     item = _create_basic_item(conn, item_number="ITEM-RES-PART-ERR")
     service.adjust_inventory(
@@ -166,7 +159,6 @@ def test_reservation_partial_quantity_cannot_exceed_remaining(conn):
         service.release_reservation(conn, reservation["reservation_id"], quantity=3)
 
     assert exc_info.value.code == "INVALID_RESERVATION_QUANTITY"
-
 
 def test_release_reservation_fails_when_active_allocations_missing(conn):
     item = _create_basic_item(conn, item_number="ITEM-RES-INCONS-REL")
@@ -195,7 +187,6 @@ def test_release_reservation_fails_when_active_allocations_missing(conn):
 
     assert exc_info.value.code == "RESERVATION_ALLOCATION_INCONSISTENT"
 
-
 def test_consume_reservation_fails_when_active_allocations_missing(conn):
     item = _create_basic_item(conn, item_number="ITEM-RES-INCONS-CON")
     service.adjust_inventory(
@@ -223,7 +214,6 @@ def test_consume_reservation_fails_when_active_allocations_missing(conn):
 
     assert exc_info.value.code == "RESERVATION_ALLOCATION_INCONSISTENT"
 
-
 def test_arrival_undo_is_limited_by_stock_when_other_locations_have_inventory(conn):
     item = _create_basic_item(conn, item_number="ITEM-UNDO-ARRIVAL-STOCK")
     arrival_log = service.adjust_inventory(
@@ -248,7 +238,6 @@ def test_arrival_undo_is_limited_by_stock_when_other_locations_have_inventory(co
     assert undo_result["applied_quantity"] == 2
     assert _inventory_qty(conn, item["item_id"], "STOCK") == 0
     assert _inventory_qty(conn, item["item_id"], "BENCH_A") == 8
-
 
 def test_import_unregistered_orders_moves_csv_and_pdf(conn, tmp_path: Path):
     item = _create_basic_item(conn, item_number="U-ITEM-001")
@@ -315,7 +304,6 @@ def test_import_unregistered_orders_moves_csv_and_pdf(conn, tmp_path: Path):
     ).fetchone()
     assert row is not None
     assert str(row["pdf_link"]).endswith("Q-001.pdf")
-
 
 def test_import_unregistered_orders_missing_items_keeps_source_files(conn, tmp_path: Path):
     unregistered_root = tmp_path / "quotations" / "unregistered"
@@ -384,7 +372,6 @@ def test_import_unregistered_orders_missing_items_keeps_source_files(conn, tmp_p
     assert rows[0]["source_supplier"] == "SupplierMissing"
     assert rows[0]["source_csv"].endswith("Q-MISS-001.csv")
     assert rows[0]["item_number"] == "MISSING-ITEM-001"
-
 
 def test_import_unregistered_orders_rolls_back_pdf_move_on_csv_move_failure(
     conn,
@@ -458,7 +445,6 @@ def test_import_unregistered_orders_rolls_back_pdf_move_on_csv_move_failure(
     row = conn.execute("SELECT COUNT(*) AS c FROM orders").fetchone()
     assert row is not None
     assert int(row["c"]) == 0
-
 
 def test_migrate_quotations_layout_dry_run_apply_and_idempotent(conn, tmp_path: Path):
     unregistered_root = tmp_path / "quotations" / "unregistered"
@@ -564,7 +550,6 @@ def test_migrate_quotations_layout_dry_run_apply_and_idempotent(conn, tmp_path: 
     assert rerun["planned_csv_rewrites"] == 0
     assert rerun["planned_db_rewrites"] == 0
 
-
 def test_register_missing_requires_details_for_new_item(conn):
     with pytest.raises(AppError) as exc_info:
         service.register_missing_items_from_rows(
@@ -582,9 +567,6 @@ def test_register_missing_requires_details_for_new_item(conn):
         )
 
     assert exc_info.value.code == "MISSING_ITEM_UNRESOLVED"
-
-
-
 
 def test_register_missing_new_item_uses_manufacturer_from_csv(conn):
     result = service.register_missing_items_from_rows(
@@ -615,7 +597,6 @@ def test_register_missing_new_item_uses_manufacturer_from_csv(conn):
     assert row is not None
     assert row["manufacturer_name"] == "MFG-SPEC"
 
-
 def test_import_orders_missing_items_csv_includes_manufacturer_column(conn, tmp_path: Path):
     supplier = service.create_supplier(conn, "SupplierA")
     rows = [
@@ -645,7 +626,6 @@ def test_import_orders_missing_items_csv_includes_manufacturer_column(conn, tmp_
         row = next(reader)
     assert "manufacturer_name" in headers
     assert row["manufacturer_name"] == ""
-
 
 def test_import_orders_resolves_alias_with_case_insensitive_supplier_name(conn):
     supplier = service.create_supplier(conn, "SupplierAlias")
@@ -688,7 +668,6 @@ def test_import_orders_resolves_alias_with_case_insensitive_supplier_name(conn):
     assert int(order["ordered_quantity"]) == 2
     assert int(order["order_amount"]) == 6
 
-
 def test_register_missing_items_alias_uses_case_insensitive_supplier_lookup(conn):
     supplier = service.create_supplier(conn, "SupplierCase")
     manufacturer = service.create_manufacturer(conn, "MFG-CASE")
@@ -718,7 +697,6 @@ def test_register_missing_items_alias_uses_case_insensitive_supplier_lookup(conn
     aliases = service.list_supplier_item_aliases(conn, int(supplier["supplier_id"]))
     assert len(aliases) == 1
     assert aliases[0]["ordered_item_number"] == "CASE-ALIAS-001"
-
 
 def test_import_orders_resolves_alias_with_dash_variant_item_number(conn):
     supplier = service.create_supplier(conn, "SupplierDash")
@@ -824,7 +802,6 @@ def test_register_unregistered_missing_items_reads_consolidated_register_folder(
     ).fetchone()
     assert row is not None
 
-
 def test_import_unregistered_orders_missing_items_same_csv_name_different_suppliers_preserves_rows(conn, tmp_path: Path):
     unregistered_root = tmp_path / "quotations" / "unregistered"
     registered_root = tmp_path / "quotations" / "registered"
@@ -890,7 +867,6 @@ def test_import_unregistered_orders_missing_items_same_csv_name_different_suppli
     assert any("SupplierA__Q-001_missing_items_registration.csv" in path for path in captured_paths)
     assert any("SupplierB__Q-001_missing_items_registration.csv" in path for path in captured_paths)
 
-
 def test_import_unregistered_orders_missing_items_batch_register_deduplicates_by_supplier_manufacturer_and_item_number(
     conn,
     tmp_path: Path,
@@ -946,7 +922,6 @@ def test_import_unregistered_orders_missing_items_batch_register_deduplicates_by
     assert {row["item_number"] for row in rows} == {"DUP-001"}
     assert {row["manufacturer_name"] for row in rows} == {""}
 
-
 def test_import_unregistered_orders_keeps_per_file_missing_csv_when_batch_register_write_fails(
     conn,
     tmp_path: Path,
@@ -998,7 +973,6 @@ def test_import_unregistered_orders_keeps_per_file_missing_csv_when_batch_regist
 
     temp_register = unregistered_root / "missing_item_registers" / "SupplierFail__Q-FAIL-MISSING_missing_items_registration.csv"
     assert temp_register.exists()
-
 
 def test_update_and_delete_quotation_syncs_csv_and_db(conn, tmp_path: Path, monkeypatch):
     item = _create_basic_item(conn, item_number="SYNC-ITEM-001")
@@ -1072,7 +1046,6 @@ def test_update_and_delete_quotation_syncs_csv_and_db(conn, tmp_path: Path, monk
     with csv_path.open("r", encoding="utf-8", newline="") as fp:
         remaining_rows = list(csv.DictReader(fp))
     assert remaining_rows == []
-
 
 def test_update_and_delete_order_with_duplicate_item_rows_only_touches_target_order(conn, tmp_path: Path, monkeypatch):
     item = _create_basic_item(conn, item_number="SYNC-DUP-001")
@@ -1148,7 +1121,6 @@ def test_update_and_delete_order_with_duplicate_item_rows_only_touches_target_or
     assert len(rows_after_delete) == 1
     assert rows_after_delete[0]["quantity"] == "3"
 
-
 def test_delete_quotation_rejects_if_any_linked_order_arrived(conn):
     item = _create_basic_item(conn, item_number="ARRIVE-GUARD-001")
     csv_content = "\n".join(
@@ -1174,3 +1146,133 @@ def test_delete_quotation_rejects_if_any_linked_order_arrived(conn):
     assert excinfo.value.code == "QUOTATION_HAS_ARRIVED_ORDERS"
     assert conn.execute("SELECT COUNT(*) AS c FROM quotations").fetchone()["c"] == 1
     assert conn.execute("SELECT COUNT(*) AS c FROM orders").fetchone()["c"] == 1
+
+def test_import_inventory_movements_from_rows(conn):
+    item = _create_basic_item(conn, item_number="ITEM-MOVE-CSV")
+    service.adjust_inventory(conn, item_id=item["item_id"], quantity_delta=10, location="STOCK")
+
+    result = service.import_inventory_movements_from_rows(
+        conn,
+        rows=[
+            {
+                "operation_type": "MOVE",
+                "item_id": str(item["item_id"]),
+                "quantity": "3",
+                "from_location": "STOCK",
+                "to_location": "BENCH_A",
+                "note": "csv move",
+            },
+            {
+                "operation_type": "CONSUME",
+                "item_id": str(item["item_id"]),
+                "quantity": "2",
+                "from_location": "STOCK",
+            },
+        ],
+    )
+    conn.commit()
+
+    assert len(result["operations"]) == 2
+    assert _inventory_qty(conn, item["item_id"], "STOCK") == 5
+    assert _inventory_qty(conn, item["item_id"], "BENCH_A") == 3
+
+def test_import_inventory_movements_from_rows_rejects_non_numeric_fields(conn):
+    item = _create_basic_item(conn, item_number="ITEM-MOVE-CSV-INVALID")
+
+    with pytest.raises(service.AppError) as excinfo_qty:
+        service.import_inventory_movements_from_rows(
+            conn,
+            rows=[
+                {
+                    "operation_type": "MOVE",
+                    "item_id": str(item["item_id"]),
+                    "quantity": "abc",
+                    "from_location": "STOCK",
+                    "to_location": "BENCH_A",
+                }
+            ],
+        )
+
+    assert excinfo_qty.value.status_code == 422
+    assert excinfo_qty.value.code == "INVALID_QUANTITY"
+
+    with pytest.raises(service.AppError) as excinfo_item:
+        service.import_inventory_movements_from_rows(
+            conn,
+            rows=[
+                {
+                    "operation_type": "MOVE",
+                    "item_id": "abc",
+                    "quantity": "1",
+                    "from_location": "STOCK",
+                    "to_location": "BENCH_A",
+                }
+            ],
+        )
+
+    assert excinfo_item.value.status_code == 422
+    assert excinfo_item.value.code == "INVALID_ITEM"
+
+def test_import_reservations_from_rows_rejects_non_numeric_fields(conn):
+    item = _create_basic_item(conn, item_number="ITEM-RES-CSV-INVALID")
+    service.adjust_inventory(conn, item_id=item["item_id"], quantity_delta=20, location="STOCK")
+    assembly = service.create_assembly(
+        conn,
+        {
+            "name": "RES-CSV-ASM-INVALID",
+            "components": [{"item_id": item["item_id"], "quantity": 2}],
+        },
+    )
+
+    with pytest.raises(service.AppError) as excinfo_qty:
+        service.import_reservations_from_rows(conn, rows=[{"item_id": str(item["item_id"]), "quantity": "abc"}])
+    assert excinfo_qty.value.status_code == 422
+    assert excinfo_qty.value.code == "INVALID_QUANTITY"
+
+    with pytest.raises(service.AppError) as excinfo_project:
+        service.import_reservations_from_rows(
+            conn,
+            rows=[{"item_id": str(item["item_id"]), "quantity": "1", "project_id": "abc"}],
+        )
+    assert excinfo_project.value.status_code == 422
+    assert excinfo_project.value.code == "INVALID_PROJECT"
+
+    with pytest.raises(service.AppError) as excinfo_item:
+        service.import_reservations_from_rows(conn, rows=[{"item_id": "abc", "quantity": "1"}])
+    assert excinfo_item.value.status_code == 422
+    assert excinfo_item.value.code == "INVALID_ITEM"
+
+    with pytest.raises(service.AppError) as excinfo_asm_qty:
+        service.import_reservations_from_rows(
+            conn,
+            rows=[{"assembly": assembly["name"], "quantity": "1", "assembly_quantity": "abc"}],
+        )
+    assert excinfo_asm_qty.value.status_code == 422
+    assert excinfo_asm_qty.value.code == "INVALID_QUANTITY"
+def test_import_reservations_from_rows_with_assembly(conn):
+    item = _create_basic_item(conn, item_number="ITEM-RES-CSV-A")
+    service.adjust_inventory(conn, item_id=item["item_id"], quantity_delta=20, location="STOCK")
+    assembly = service.create_assembly(
+        conn,
+        {
+            "name": "RES-CSV-ASM",
+            "components": [{"item_id": item["item_id"], "quantity": 2}],
+        },
+    )
+
+    created = service.import_reservations_from_rows(
+        conn,
+        rows=[
+            {
+                "assembly": assembly["name"],
+                "assembly_quantity": "3",
+                "quantity": "2",
+                "purpose": "csv assembly reserve",
+            }
+        ],
+    )
+    conn.commit()
+
+    assert len(created) == 1
+    assert int(created[0]["quantity"]) == 12
+    assert created[0]["status"] == "ACTIVE"

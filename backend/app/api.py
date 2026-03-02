@@ -290,6 +290,22 @@ def create_app(db_path: str | None = None) -> FastAPI:
         conn.commit()
         return ok(result)
 
+
+    @app.post("/api/inventory/import-csv")
+    async def post_inventory_import_csv(
+        file: UploadFile = File(...),
+        batch_id: str | None = Form(default=None),
+        conn= db,
+    ):
+        content = await file.read()
+        result = service.import_inventory_movements_from_content(
+            conn,
+            content=content,
+            batch_id=batch_id,
+        )
+        conn.commit()
+        return ok(result)
+
     @app.post("/api/inventory/batch")
     def post_inventory_batch(body: InventoryBatchRequest, conn= db):
         result = service.batch_inventory_operations(
@@ -488,6 +504,17 @@ def create_app(db_path: str | None = None) -> FastAPI:
             quantity=body.quantity if body else None,
             note=body.note if body else None,
         )
+        conn.commit()
+        return ok(result)
+
+
+    @app.post("/api/reservations/import-csv")
+    async def post_reservations_import_csv(
+        file: UploadFile = File(...),
+        conn= db,
+    ):
+        content = await file.read()
+        result = service.import_reservations_from_content(conn, content=content)
         conn.commit()
         return ok(result)
 

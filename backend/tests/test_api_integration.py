@@ -4,14 +4,12 @@ import csv
 from io import StringIO
 from pathlib import Path
 
-
 def test_health_endpoint(client):
     response = client.get("/api/health")
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["data"]["healthy"] is True
-
 
 def test_auth_capabilities_endpoint_defaults_and_header(client):
     response = client.get("/api/auth/capabilities")
@@ -26,7 +24,6 @@ def test_auth_capabilities_endpoint_defaults_and_header(client):
     assert header_response.status_code == 200
     header_payload = header_response.json()["data"]
     assert header_payload["effective_role"] == "viewer"
-
 
 def test_inventory_reservation_and_dashboard_flow(client):
     manufacturer = client.post("/api/manufacturers", json={"name": "API-MFG"}).json()["data"]
@@ -75,7 +72,6 @@ def test_inventory_reservation_and_dashboard_flow(client):
     assert payload["status"] == "ok"
     assert "overdue_orders" in payload["data"]
     assert "recent_activity" in payload["data"]
-
 
 def test_reservation_partial_release_and_consume_endpoints(client):
     manufacturer = client.post("/api/manufacturers", json={"name": "API-RES-PART-MFG"}).json()["data"]
@@ -144,7 +140,6 @@ def test_reservation_partial_release_and_consume_endpoints(client):
     assert over_payload["status"] == "error"
     assert over_payload["error"]["code"] == "INVALID_RESERVATION_QUANTITY"
 
-
 def test_unregistered_order_import_endpoint(client, tmp_path: Path):
     client.post("/api/manufacturers", json={"name": "API-UNREG-MFG"})
     client.post(
@@ -208,7 +203,6 @@ def test_unregistered_order_import_endpoint(client, tmp_path: Path):
     assert not csv_path.exists()
     assert (registered_root / "csv_files" / "SupplierEndpoint" / "QE-001.csv").exists()
     assert (registered_root / "pdf_files" / "SupplierEndpoint" / "QE-001.pdf").exists()
-
 
 def test_unregistered_order_import_endpoint_accepts_unregistered_pdf_path(client, tmp_path: Path):
     client.post("/api/manufacturers", json={"name": "API-UNREG-PATH-MFG"})
@@ -274,7 +268,6 @@ def test_unregistered_order_import_endpoint_accepts_unregistered_pdf_path(client
     assert (registered_root / "csv_files" / "SupplierPath" / "QP-001.csv").exists()
     assert (registered_root / "pdf_files" / "SupplierPath" / "QP-001.pdf").exists()
 
-
 def test_order_import_returns_missing_item_details(client):
     output = StringIO()
     writer = csv.DictWriter(
@@ -313,7 +306,6 @@ def test_order_import_returns_missing_item_details(client):
     assert data["rows"][0]["row"] == 2
     assert data["rows"][0]["supplier"] == "SupplierMissing"
     assert data["rows"][0]["item_number"] == "MISSING-ITEM-001"
-
 
 def test_order_import_autonormalizes_pdf_link_filename(client):
     client.post("/api/manufacturers", json={"name": "API-MANUAL-MFG"})
@@ -368,7 +360,6 @@ def test_order_import_autonormalizes_pdf_link_filename(client):
         == "quotations/registered/pdf_files/SupplierManual/Q-MANUAL-001.pdf"
     )
 
-
 def test_order_import_rejects_unregistered_pdf_link_path(client):
     client.post("/api/manufacturers", json={"name": "API-MANUAL-VALID-MFG"})
     client.post(
@@ -415,7 +406,6 @@ def test_order_import_rejects_unregistered_pdf_link_path(client):
     assert payload["status"] == "error"
     assert payload["error"]["code"] == "INVALID_CSV"
     assert "quotations/registered/pdf_files" in payload["error"]["message"]
-
 
 def test_order_import_rejects_duplicate_quotation_for_same_supplier(client):
     client.post("/api/manufacturers", json={"name": "API-DUP-QUOTE-MFG"})
@@ -473,7 +463,6 @@ def test_order_import_rejects_duplicate_quotation_for_same_supplier(client):
     assert payload["error"]["code"] == "DUPLICATE_QUOTATION_IMPORT"
     assert payload["error"]["details"]["quotation_numbers"] == ["Q-DUP-001"]
 
-
 def test_order_import_accepts_slash_date_format(client):
     client.post("/api/manufacturers", json={"name": "API-SLASH-DATE-MFG"})
     client.post(
@@ -517,7 +506,6 @@ def test_order_import_accepts_slash_date_format(client):
     )
     assert response.status_code == 200
     assert response.json()["data"]["status"] == "ok"
-
 
 def test_items_import_endpoint(client):
     output = StringIO()
@@ -579,7 +567,6 @@ def test_items_import_endpoint(client):
     rows = listing.json()["data"]
     assert len(rows) == 1
     assert rows[0]["item_number"] == "CSV-ITEM-001"
-
 
 def test_items_import_endpoint_supports_alias_rows(client):
     output = StringIO()
@@ -652,7 +639,6 @@ def test_items_import_endpoint_supports_alias_rows(client):
     assert aliases[0]["ordered_item_number"] == "CSV-ALIAS-CANONICAL-P4"
     assert aliases[0]["canonical_item_number"] == "CSV-ALIAS-CANONICAL"
     assert aliases[0]["units_per_order"] == 4
-
 
 def test_items_import_endpoint_supports_alias_rows_before_canonical_row(client):
     output = StringIO()
@@ -729,7 +715,6 @@ def test_items_import_endpoint_supports_alias_rows_before_canonical_row(client):
     assert aliases[0]["canonical_item_number"] == "CSV-ALIAS-FIRST-CANONICAL"
     assert aliases[0]["units_per_order"] == 5
 
-
 def test_items_import_alias_rejects_direct_item_number_collision(client):
     client.post(
         "/api/items",
@@ -774,7 +759,6 @@ def test_items_import_alias_rejects_direct_item_number_collision(client):
     assert data["created_count"] == 0
     assert data["failed_count"] == 1
     assert data["rows"][0]["code"] == "ALIAS_CONFLICT_DIRECT_ITEM"
-
 
 def test_items_import_job_undo_and_redo_flow(client):
     output = StringIO()
@@ -867,7 +851,6 @@ def test_items_import_job_undo_and_redo_flow(client):
     assert alias_after_redo.status_code == 200
     assert len(alias_after_redo.json()["data"]) == 1
 
-
 def test_items_import_jobs_listing_endpoint(client):
     response = client.get("/api/items/import-jobs?per_page=20")
     assert response.status_code == 200
@@ -875,7 +858,6 @@ def test_items_import_jobs_listing_endpoint(client):
     assert payload["status"] == "ok"
     assert isinstance(payload["data"], list)
     assert "pagination" in payload
-
 
 def test_items_import_job_undo_blocks_when_item_changed_after_import(client):
     output = StringIO()
@@ -915,7 +897,6 @@ def test_items_import_job_undo_blocks_when_item_changed_after_import(client):
     payload = undo.json()
     assert payload["status"] == "error"
     assert payload["error"]["code"] == "IMPORT_UNDO_CONFLICT"
-
 
 def test_update_item_blocks_identity_change_when_referenced(client):
     item = client.post(
@@ -963,7 +944,6 @@ def test_update_item_blocks_identity_change_when_referenced(client):
     assert remanufacturer_payload["status"] == "error"
     assert remanufacturer_payload["error"]["code"] == "ITEM_REFERENCED_IMMUTABLE"
 
-
 def test_update_item_allows_identity_change_when_unreferenced(client):
     item = client.post(
         "/api/items",
@@ -987,7 +967,6 @@ def test_update_item_allows_identity_change_when_unreferenced(client):
     assert payload["item_number"] == "MUTABLE-ITEM-RENAMED"
     assert payload["manufacturer_name"] == "MUTABLE-MFG-B"
     assert payload["description"] == "updated"
-
 
 def test_bulk_update_item_metadata_endpoint(client):
     item_a = client.post(
@@ -1051,7 +1030,6 @@ def test_bulk_update_item_metadata_endpoint(client):
     assert len(rows_b) == 1
     assert rows_b[0]["url"] == "https://example.com/meta-bulk-002"
 
-
 def test_bulk_update_item_metadata_endpoint_partial_on_missing_item(client):
     item = client.post(
         "/api/items",
@@ -1084,7 +1062,6 @@ def test_bulk_update_item_metadata_endpoint_partial_on_missing_item(client):
     assert len(rows) == 1
     assert rows[0]["description"] == "ok-update"
 
-
 def test_register_missing_rows_endpoint(client):
     response = client.post(
         "/api/register-missing/rows",
@@ -1112,7 +1089,6 @@ def test_register_missing_rows_endpoint(client):
     assert rows[0]["item_number"] == "MISS-ITEM-NEW"
     assert rows[0]["manufacturer_name"] == "RESOLVER-MFG"
 
-
 def test_register_missing_rows_endpoint_accepts_manufacturer_alias_field(client):
     response = client.post(
         "/api/register-missing/rows",
@@ -1139,7 +1115,6 @@ def test_register_missing_rows_endpoint_accepts_manufacturer_alias_field(client)
     assert len(rows) == 1
     assert rows[0]["manufacturer_name"] == "RESOLVER-MFG-ALIAS"
 
-
 def test_register_missing_rows_endpoint_rejects_unresolved_new_item(client):
     response = client.post(
         "/api/register-missing/rows",
@@ -1160,7 +1135,6 @@ def test_register_missing_rows_endpoint_rejects_unresolved_new_item(client):
     payload = response.json()
     assert payload["status"] == "error"
     assert payload["error"]["code"] == "MISSING_ITEM_UNRESOLVED"
-
 
 def test_retry_unregistered_file_endpoint(client, tmp_path: Path):
     unregistered_root = tmp_path / "quotations" / "unregistered"
@@ -1239,7 +1213,6 @@ def test_retry_unregistered_file_endpoint(client, tmp_path: Path):
     assert not csv_path.exists()
     assert (registered_root / "csv_files" / "SupplierRetry" / "QR-001.csv").exists()
 
-
 def test_retry_unregistered_legacy_layout_returns_warnings(client, tmp_path: Path):
     client.post("/api/manufacturers", json={"name": "API-LEGACY-MFG"})
     client.post(
@@ -1304,7 +1277,6 @@ def test_retry_unregistered_legacy_layout_returns_warnings(client, tmp_path: Pat
     assert (registered_root / "csv_files" / "LegacySupplier" / "QL-001.csv").exists()
     assert (registered_root / "pdf_files" / "LegacySupplier" / "QL-001.pdf").exists()
 
-
 def test_delete_order_endpoint(client):
     client.post("/api/manufacturers", json={"name": "API-DEL-ORDER-MFG"})
     client.post(
@@ -1353,8 +1325,6 @@ def test_delete_order_endpoint(client):
     deleted = client.delete(f"/api/orders/{order_id}")
     assert deleted.status_code == 200
     assert deleted.json()["data"]["deleted"] is True
-
-
 
 def test_delete_quotation_endpoint_removes_related_orders(client):
     client.post("/api/manufacturers", json={"name": "API-DEL-QUO-MFG"})
@@ -1411,3 +1381,88 @@ def test_delete_quotation_endpoint_removes_related_orders(client):
     remaining_orders = client.get("/api/orders?supplier=SupplierDeleteQuotation&per_page=50")
     assert remaining_orders.status_code == 200
     assert remaining_orders.json()["data"] == []
+
+def test_inventory_import_csv_endpoint(client):
+    manufacturer = client.post("/api/manufacturers", json={"name": "API-MOVE-CSV-MFG"}).json()["data"]
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-MOVE-CSV-ITEM",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Lens",
+        },
+    ).json()["data"]
+    client.post(
+        "/api/inventory/adjust",
+        json={"item_id": item["item_id"], "quantity_delta": 10, "location": "STOCK"},
+    )
+
+    csv_content = (
+        "operation_type,item_id,quantity,from_location,to_location,location,note\n"
+        f"MOVE,{item['item_id']},4,STOCK,BENCH_A,,bulk move\n"
+    ).encode("utf-8")
+
+    response = client.post(
+        "/api/inventory/import-csv",
+        files={"file": ("movements.csv", csv_content, "text/csv")},
+        data={"batch_id": "api-move-csv-batch"},
+    )
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["batch_id"] == "api-move-csv-batch"
+    assert len(payload["operations"]) == 1
+
+def test_inventory_import_csv_endpoint_rejects_non_numeric_fields(client):
+    csv_content = (
+        "operation_type,item_id,quantity,from_location,to_location\n"
+        "MOVE,abc,1,STOCK,BENCH_A\n"
+    ).encode("utf-8")
+
+    response = client.post(
+        "/api/inventory/import-csv",
+        files={"file": ("movements-invalid.csv", csv_content, "text/csv")},
+    )
+    assert response.status_code == 422
+
+def test_reservations_import_csv_endpoint_rejects_non_numeric_fields(client):
+    csv_content = (
+        "item_id,quantity\n"
+        "abc,1\n"
+    ).encode("utf-8")
+
+    response = client.post(
+        "/api/reservations/import-csv",
+        files={"file": ("reservations-invalid.csv", csv_content, "text/csv")},
+    )
+    assert response.status_code == 422
+def test_reservations_import_csv_endpoint_with_assembly(client):
+    manufacturer = client.post("/api/manufacturers", json={"name": "API-RES-CSV-MFG"}).json()["data"]
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-RES-CSV-ITEM",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Mirror",
+        },
+    ).json()["data"]
+    client.post(
+        "/api/inventory/adjust",
+        json={"item_id": item["item_id"], "quantity_delta": 50, "location": "STOCK"},
+    )
+    assembly = client.post(
+        "/api/assemblies",
+        json={"name": "API-CSV-ASM", "components": [{"item_id": item["item_id"], "quantity": 2}]},
+    ).json()["data"]
+
+    csv_content = (
+        "assembly,assembly_quantity,quantity,purpose\n"
+        f"{assembly['name']},3,2,api csv reservation\n"
+    ).encode("utf-8")
+    response = client.post(
+        "/api/reservations/import-csv",
+        files={"file": ("reservations.csv", csv_content, "text/csv")},
+    )
+    assert response.status_code == 200
+    rows = response.json()["data"]
+    assert len(rows) == 1
+    assert rows[0]["quantity"] == 12

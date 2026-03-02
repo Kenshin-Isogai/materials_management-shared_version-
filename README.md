@@ -99,3 +99,11 @@ uv run python -m pytest
 - Team onboarding (clone/install/run/test): [`documents/team_onboarding.md`](documents/team_onboarding.md)
 - Current source snapshot: [`documents/source_current_state.md`](documents/source_current_state.md)
 - Project change history: [`documents/change_log.md`](documents/change_log.md)
+
+
+### CSV import shortcuts
+
+- Movements CSV upload: `POST /api/inventory/import-csv`
+  - columns: `operation_type,item_id,quantity,from_location,to_location,location,note`
+- Reservations CSV upload: `POST /api/reservations/import-csv`
+  - columns: `item_id` or `assembly`, `quantity`, optional `assembly_quantity,purpose,deadline,note,project_id`
