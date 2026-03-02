@@ -10,6 +10,7 @@ Format style: Keep a simple date-based log while repository versioning policy is
 
 - Frontend list UX improvements:
   - Added sortable table headers to `Order List` on the Orders page.
+  - Added an `Imported Quotations` table to the Orders page to surface existing quotation records from the backend listing API.
   - Added sortable table headers to `Item List` on the Items page.
   - Item List URL column now renders active clickable external links.
   - Dashboard overdue widget now supports keyword filtering and an expanded table view to inspect all matching overdue orders (while still keeping the top summary list).

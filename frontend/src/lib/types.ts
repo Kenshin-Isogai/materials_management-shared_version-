@@ -69,6 +69,15 @@ export type Order = {
   quotation_number: string;
 };
 
+export type Quotation = {
+  quotation_id: number;
+  supplier_id: number;
+  supplier_name: string;
+  quotation_number: string;
+  issue_date: string | null;
+  pdf_link: string | null;
+};
+
 export type Transaction = {
   log_id: number;
   timestamp: string;
