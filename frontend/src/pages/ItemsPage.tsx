@@ -266,6 +266,8 @@ export function ItemsPage() {
   const [metadataMessage, setMetadataMessage] = useState("");
   const [metadataResult, setMetadataResult] = useState<MetadataBulkResult | null>(null);
   const [metadataBusy, setMetadataBusy] = useState(false);
+  const [sortKey, setSortKey] = useState<"item_id" | "item_number" | "manufacturer_name" | "category" | "url">("item_id");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const key = useMemo(() => `/items?q=${encodeURIComponent(q)}`, [q]);
 
   const { data, error, isLoading, mutate } = useSWR(key, () =>
@@ -300,6 +302,33 @@ export function ItemsPage() {
   const itemOptions = itemOptionsData?.data ?? [];
   const categoryOptions = categories ?? [];
   const importJobs = importJobsData?.data ?? [];
+  const sortedItems = useMemo(() => {
+    const rows = [...(data?.data ?? [])];
+    rows.sort((a, b) => {
+      const left = a[sortKey] ?? "";
+      const right = b[sortKey] ?? "";
+      if (typeof left === "number" && typeof right === "number") {
+        return sortDirection === "asc" ? left - right : right - left;
+      }
+      const compared = String(left).localeCompare(String(right));
+      return sortDirection === "asc" ? compared : -compared;
+    });
+    return rows;
+  }, [data?.data, sortDirection, sortKey]);
+
+  function toggleSort(nextKey: typeof sortKey) {
+    if (nextKey === sortKey) {
+      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setSortKey(nextKey);
+    setSortDirection("asc");
+  }
+
+  function sortIndicator(key: typeof sortKey): string {
+    if (key !== sortKey) return "↕";
+    return sortDirection === "asc" ? "↑" : "↓";
+  }
 
   useEffect(() => {
     if (!importJobs.length) {
@@ -1638,17 +1667,17 @@ export function ItemsPage() {
             <table className="min-w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-200 text-left text-slate-500">
-                  <th className="px-2 py-2">ID</th>
-                  <th className="px-2 py-2">Item Number</th>
-                  <th className="px-2 py-2">Manufacturer</th>
-                  <th className="px-2 py-2">Category</th>
-                  <th className="px-2 py-2">URL</th>
+                  <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("item_id")}>ID {sortIndicator("item_id")}</button></th>
+                  <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("item_number")}>Item Number {sortIndicator("item_number")}</button></th>
+                  <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("manufacturer_name")}>Manufacturer {sortIndicator("manufacturer_name")}</button></th>
+                  <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("category")}>Category {sortIndicator("category")}</button></th>
+                  <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("url")}>URL {sortIndicator("url")}</button></th>
                   <th className="px-2 py-2">Description</th>
                   <th className="px-2 py-2">Action</th>
                 </tr>
               </thead>
               <tbody>
-                {data.data.map((item) => (
+                {sortedItems.map((item) => (
                   <tr key={item.item_id} className="border-b border-slate-100">
                     <td className="px-2 py-2">{item.item_id}</td>
                     <td className="px-2 py-2 font-semibold">
@@ -1702,7 +1731,18 @@ export function ItemsPage() {
                           }
                         />
                       ) : (
-                        item.url ?? "-"
+                        item.url ? (
+                          <a
+                            href={item.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-blue-600 underline"
+                          >
+                            {item.url}
+                          </a>
+                        ) : (
+                          "-"
+                        )
                       )}
                     </td>
                     <td className="px-2 py-2">

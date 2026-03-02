@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import useSWR from "swr";
 import { apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
@@ -141,10 +141,44 @@ export function OrdersPage() {
   const [batchNormalizations, setBatchNormalizations] = useState<BatchNormalization[]>([]);
   const [showAdvancedBatch, setShowAdvancedBatch] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [sortKey, setSortKey] = useState<"order_id" | "supplier_name" | "canonical_item_number" | "order_amount" | "expected_arrival" | "status">("order_id");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
 
   const { data, error, isLoading, mutate } = useSWR("/orders", () =>
     apiGetWithPagination<Order[]>("/orders?per_page=200")
   );
+
+  const sortedOrders = useMemo(() => {
+    const rows = [...(data?.data ?? [])];
+    rows.sort((a, b) => {
+      const left = a[sortKey];
+      const right = b[sortKey];
+      const normalizedLeft = left ?? "";
+      const normalizedRight = right ?? "";
+
+      if (typeof normalizedLeft === "number" && typeof normalizedRight === "number") {
+        return sortDirection === "asc" ? normalizedLeft - normalizedRight : normalizedRight - normalizedLeft;
+      }
+
+      const compare = String(normalizedLeft).localeCompare(String(normalizedRight));
+      return sortDirection === "asc" ? compare : -compare;
+    });
+    return rows;
+  }, [data?.data, sortDirection, sortKey]);
+
+  function toggleSort(nextKey: typeof sortKey) {
+    if (sortKey === nextKey) {
+      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setSortKey(nextKey);
+    setSortDirection("asc");
+  }
+
+  function sortIndicator(key: typeof sortKey): string {
+    if (key !== sortKey) return "↕";
+    return sortDirection === "asc" ? "↑" : "↓";
+  }
 
   useEffect(() => {
     const state = location.state as { autoMessage?: string } | null;
@@ -683,17 +717,17 @@ export function OrdersPage() {
             <table className="min-w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-200 text-left text-slate-500">
-                  <th className="px-2 py-2">Order</th>
-                  <th className="px-2 py-2">Supplier</th>
-                  <th className="px-2 py-2">Item</th>
-                  <th className="px-2 py-2">Qty</th>
-                  <th className="px-2 py-2">Expected</th>
-                  <th className="px-2 py-2">Status</th>
+                  <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("order_id")}>Order {sortIndicator("order_id")}</button></th>
+                  <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("supplier_name")}>Supplier {sortIndicator("supplier_name")}</button></th>
+                  <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("canonical_item_number")}>Item {sortIndicator("canonical_item_number")}</button></th>
+                  <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("order_amount")}>Qty {sortIndicator("order_amount")}</button></th>
+                  <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("expected_arrival")}>Expected {sortIndicator("expected_arrival")}</button></th>
+                  <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("status")}>Status {sortIndicator("status")}</button></th>
                   <th className="px-2 py-2">Action</th>
                 </tr>
               </thead>
               <tbody>
-                {data.data.map((row) => (
+                {sortedOrders.map((row) => (
                   <tr key={row.order_id} className="border-b border-slate-100">
                     <td className="px-2 py-2">#{row.order_id}</td>
                     <td className="px-2 py-2">{row.supplier_name}</td>

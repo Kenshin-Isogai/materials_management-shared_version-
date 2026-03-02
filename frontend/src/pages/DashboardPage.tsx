@@ -1,3 +1,4 @@
+import { useMemo, useState } from "react";
 import useSWR from "swr";
 import { apiGet } from "../lib/api";
 import { StatCard } from "../components/StatCard";
@@ -10,11 +11,29 @@ type Summary = {
 };
 
 export function DashboardPage() {
+  const [overdueQuery, setOverdueQuery] = useState("");
   const { data, error, isLoading } = useSWR<Summary>(
     "/dashboard",
     () => apiGet<Summary>("/dashboard/summary"),
     { refreshInterval: 20_000 }
   );
+
+  const filteredOverdueOrders = useMemo(() => {
+    if (!data) return [];
+    const needle = overdueQuery.trim().toLowerCase();
+    if (!needle) return data.overdue_orders;
+    return data.overdue_orders.filter((order) =>
+      [
+        String(order.order_id ?? ""),
+        String(order.item_number ?? ""),
+        String(order.supplier_name ?? ""),
+        String(order.expected_arrival ?? ""),
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(needle)
+    );
+  }, [data, overdueQuery]);
 
   return (
     <div className="space-y-6">
@@ -43,16 +62,48 @@ export function DashboardPage() {
 
           <section className="grid gap-5 lg:grid-cols-2">
             <article className="panel p-4">
-              <h2 className="font-display text-lg font-semibold">Overdue Orders</h2>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h2 className="font-display text-lg font-semibold">Overdue Orders</h2>
+                <input
+                  className="input w-72"
+                  placeholder="Filter overdue orders"
+                  value={overdueQuery}
+                  onChange={(e) => setOverdueQuery(e.target.value)}
+                />
+              </div>
               <ul className="mt-3 space-y-2 text-sm">
-                {data.overdue_orders.slice(0, 8).map((order, idx) => (
+                {filteredOverdueOrders.slice(0, 8).map((order, idx) => (
                   <li key={idx} className="rounded-lg bg-slate-50 px-3 py-2">
                     #{String(order.order_id)} {String(order.item_number)} ({String(order.supplier_name)}) -{" "}
                     {String(order.expected_arrival)}
                   </li>
                 ))}
-                {!data.overdue_orders.length && <li className="text-slate-500">None</li>}
+                {!filteredOverdueOrders.length && <li className="text-slate-500">None</li>}
               </ul>
+              {filteredOverdueOrders.length > 8 && (
+                <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200">
+                  <table className="min-w-[560px] text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-left text-slate-500">
+                        <th className="px-2 py-2">Order</th>
+                        <th className="px-2 py-2">Item</th>
+                        <th className="px-2 py-2">Supplier</th>
+                        <th className="px-2 py-2">Expected Arrival</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredOverdueOrders.map((order, idx) => (
+                        <tr key={`${String(order.order_id)}-${idx}`} className="border-b border-slate-100">
+                          <td className="px-2 py-2">#{String(order.order_id)}</td>
+                          <td className="px-2 py-2">{String(order.item_number)}</td>
+                          <td className="px-2 py-2">{String(order.supplier_name)}</td>
+                          <td className="px-2 py-2">{String(order.expected_arrival)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </article>
 
             <article className="panel p-4">
@@ -72,4 +123,3 @@ export function DashboardPage() {
     </div>
   );
 }
-

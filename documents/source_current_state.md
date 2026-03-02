@@ -69,6 +69,10 @@ Last updated: 2026-03-02 (JST)
 - SPA navigation is implemented with React Router via `AppShell`.
 - Data fetching is SWR-based with typed API client wrappers.
 - Reservations page supports partial release/consume via quantity prompt.
+- Orders page `Order List` supports client-side sorting by order id, supplier, item, quantity, expected arrival, and status.
+- Items page `Item List` supports client-side sorting by ID, item number, manufacturer, category, and URL.
+- Item List URL values render as clickable external links (`target=_blank`, `rel=noopener noreferrer`).
+- Dashboard overdue section supports keyword filtering and shows a full-table view when more than eight overdue rows match the filter.
 - Build system: `npm run build` (Vite production build + TypeScript build).
 
 ## 5. File and Import Workflow State

@@ -8,6 +8,12 @@ Format style: Keep a simple date-based log while repository versioning policy is
 
 ### Changed
 
+- Frontend list UX improvements:
+  - Added sortable table headers to `Order List` on the Orders page.
+  - Added sortable table headers to `Item List` on the Items page.
+  - Item List URL column now renders active clickable external links.
+  - Dashboard overdue widget now supports keyword filtering and an expanded table view to inspect all matching overdue orders (while still keeping the top summary list).
+
 - Clarified missing-item registration semantics in docs: the CSV `supplier` column is supplier-alias scope (not manufacturer), and `new_item` rows default manufacturer to `UNKNOWN`.
 - Added missing-item registration support for manufacturer input: `new_item` rows can now specify `manufacturer_name` (or `manufacturer`) in CSV; blank still defaults to `UNKNOWN`.
 - Fixed `/api/register-missing/rows` schema to accept manufacturer input (`manufacturer_name`, plus `manufacturer` alias), so JSON row registration now persists manufacturer instead of dropping it.
