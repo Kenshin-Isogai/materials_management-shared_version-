@@ -146,6 +146,11 @@ export function OrdersPage() {
   const [editingQuotationIssueDate, setEditingQuotationIssueDate] = useState("");
   const [sortKey, setSortKey] = useState<"order_id" | "supplier_name" | "canonical_item_number" | "order_amount" | "expected_arrival" | "status">("order_id");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
+  const [quotationSortKey, setQuotationSortKey] = useState<"quotation_id" | "supplier_name" | "quotation_number" | "issue_date" | "pdf_link">("quotation_id");
+  const [quotationSortDirection, setQuotationSortDirection] = useState<"asc" | "desc">("desc");
+  const [quotationNumberSearch, setQuotationNumberSearch] = useState("");
+  const [quotationFilter, setQuotationFilter] = useState("");
+  const [isOrderListExpanded, setIsOrderListExpanded] = useState(false);
 
   const { data, error, isLoading, mutate: mutateOrders } = useSWR("/orders", () =>
     apiGetWithPagination<Order[]>("/orders?per_page=200")
@@ -175,6 +180,35 @@ export function OrdersPage() {
     return rows;
   }, [data?.data, sortDirection, sortKey]);
 
+  const filteredSortedQuotations = useMemo(() => {
+    const numberQuery = quotationNumberSearch.trim().toLowerCase();
+    const filterQuery = quotationFilter.trim().toLowerCase();
+    const rows = (quotationsData?.data ?? []).filter((row) => {
+      const quotationNumber = row.quotation_number.toLowerCase();
+      const matchesNumber = !numberQuery || quotationNumber.includes(numberQuery);
+      if (!matchesNumber) return false;
+
+      if (!filterQuery) return true;
+      const issueDate = row.issue_date ?? "";
+      const pdfLink = row.pdf_link ?? "";
+      return [row.supplier_name, issueDate, pdfLink]
+        .join(" ")
+        .toLowerCase()
+        .includes(filterQuery);
+    });
+
+    rows.sort((a, b) => {
+      const left = a[quotationSortKey] ?? "";
+      const right = b[quotationSortKey] ?? "";
+      if (typeof left === "number" && typeof right === "number") {
+        return quotationSortDirection === "asc" ? left - right : right - left;
+      }
+      const compare = String(left).localeCompare(String(right));
+      return quotationSortDirection === "asc" ? compare : -compare;
+    });
+    return rows;
+  }, [quotationsData?.data, quotationFilter, quotationNumberSearch, quotationSortDirection, quotationSortKey]);
+
   function toggleSort(nextKey: typeof sortKey) {
     if (sortKey === nextKey) {
       setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
@@ -187,6 +221,20 @@ export function OrdersPage() {
   function sortIndicator(key: typeof sortKey): string {
     if (key !== sortKey) return "↕";
     return sortDirection === "asc" ? "↑" : "↓";
+  }
+
+  function toggleQuotationSort(nextKey: typeof quotationSortKey) {
+    if (quotationSortKey === nextKey) {
+      setQuotationSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setQuotationSortKey(nextKey);
+    setQuotationSortDirection("asc");
+  }
+
+  function quotationSortIndicator(key: typeof quotationSortKey): string {
+    if (key !== quotationSortKey) return "↕";
+    return quotationSortDirection === "asc" ? "↑" : "↓";
   }
 
   useEffect(() => {
@@ -771,82 +819,112 @@ export function OrdersPage() {
       </section>
 
       <section className="panel p-4">
-        <h2 className="mb-3 font-display text-lg font-semibold">Order List</h2>
-        {isLoading && <p className="text-sm text-slate-500">Loading...</p>}
-        {error && <p className="text-sm text-red-600">{String(error)}</p>}
-        {data?.data && (
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 text-left text-slate-500">
-                  <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("order_id")}>Order {sortIndicator("order_id")}</button></th>
-                  <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("supplier_name")}>Supplier {sortIndicator("supplier_name")}</button></th>
-                  <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("canonical_item_number")}>Item {sortIndicator("canonical_item_number")}</button></th>
-                  <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("order_amount")}>Qty {sortIndicator("order_amount")}</button></th>
-                  <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("expected_arrival")}>Expected {sortIndicator("expected_arrival")}</button></th>
-                  <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("status")}>Status {sortIndicator("status")}</button></th>
-                  <th className="px-2 py-2">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedOrders.map((row) => (
-                  <tr key={row.order_id} className="border-b border-slate-100">
-                    <td className="px-2 py-2">#{row.order_id}</td>
-                    <td className="px-2 py-2">{row.supplier_name}</td>
-                    <td className="px-2 py-2 font-semibold">{row.canonical_item_number}</td>
-                    <td className="px-2 py-2">{row.order_amount}</td>
-                    <td className="px-2 py-2">{row.expected_arrival ?? "-"}</td>
-                    <td className="px-2 py-2">{row.status}</td>
-                    <td className="px-2 py-2">
-                      <div className="flex gap-2">
-                        {row.status === "Ordered" ? (
-                          <button
-                            className="button-subtle"
-                            onClick={() => markArrived(row.order_id)}
-                            disabled={loading}
-                          >
-                            Mark Arrived
-                          </button>
-                        ) : (
-                          <span className="text-slate-400">-</span>
-                        )}
-                        <button
-                          className="button-subtle"
-                          onClick={() => deleteOrder(row.order_id)}
-                          disabled={loading || row.status === "Arrived"}
-                          title={row.status === "Arrived" ? "Arrived orders cannot be deleted" : "Delete this order"}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="font-display text-lg font-semibold">Order List</h2>
+          <button
+            type="button"
+            className="button-subtle"
+            onClick={() => setIsOrderListExpanded((prev) => !prev)}
+            aria-expanded={isOrderListExpanded}
+          >
+            {isOrderListExpanded ? "Collapse" : "Expand"}
+          </button>
+        </div>
+        {isOrderListExpanded && (
+          <>
+            {isLoading && <p className="text-sm text-slate-500">Loading...</p>}
+            {error && <p className="text-sm text-red-600">{String(error)}</p>}
+            {data?.data && (
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-left text-slate-500">
+                      <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("order_id")}>Order {sortIndicator("order_id")}</button></th>
+                      <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("supplier_name")}>Supplier {sortIndicator("supplier_name")}</button></th>
+                      <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("canonical_item_number")}>Item {sortIndicator("canonical_item_number")}</button></th>
+                      <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("order_amount")}>Qty {sortIndicator("order_amount")}</button></th>
+                      <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("expected_arrival")}>Expected {sortIndicator("expected_arrival")}</button></th>
+                      <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("status")}>Status {sortIndicator("status")}</button></th>
+                      <th className="px-2 py-2">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {sortedOrders.map((row) => (
+                      <tr key={row.order_id} className="border-b border-slate-100">
+                        <td className="px-2 py-2">#{row.order_id}</td>
+                        <td className="px-2 py-2">{row.supplier_name}</td>
+                        <td className="px-2 py-2 font-semibold">{row.canonical_item_number}</td>
+                        <td className="px-2 py-2">{row.order_amount}</td>
+                        <td className="px-2 py-2">{row.expected_arrival ?? "-"}</td>
+                        <td className="px-2 py-2">{row.status}</td>
+                        <td className="px-2 py-2">
+                          <div className="flex gap-2">
+                            {row.status === "Ordered" ? (
+                              <button
+                                className="button-subtle"
+                                onClick={() => markArrived(row.order_id)}
+                                disabled={loading}
+                              >
+                                Mark Arrived
+                              </button>
+                            ) : (
+                              <span className="text-slate-400">-</span>
+                            )}
+                            <button
+                              className="button-subtle"
+                              onClick={() => deleteOrder(row.order_id)}
+                              disabled={loading || row.status === "Arrived"}
+                              title={row.status === "Arrived" ? "Arrived orders cannot be deleted" : "Delete this order"}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
         )}
       </section>
 
       <section className="panel p-4">
         <h2 className="mb-3 font-display text-lg font-semibold">Imported Quotations</h2>
+        <div className="mb-3 grid gap-2 md:grid-cols-2">
+          <input
+            className="input"
+            value={quotationNumberSearch}
+            onChange={(event) => setQuotationNumberSearch(event.target.value)}
+            placeholder="Search by quotation number"
+          />
+          <input
+            className="input"
+            value={quotationFilter}
+            onChange={(event) => setQuotationFilter(event.target.value)}
+            placeholder="Filter by supplier, issue date, or PDF link"
+          />
+        </div>
         {quotationsLoading && <p className="text-sm text-slate-500">Loading...</p>}
         {quotationsError && <p className="text-sm text-red-600">{String(quotationsError)}</p>}
         {quotationsData?.data && (
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 text-left text-slate-500">
-                  <th className="px-2 py-2">ID</th>
-                  <th className="px-2 py-2">Supplier</th>
-                  <th className="px-2 py-2">Quotation #</th>
-                  <th className="px-2 py-2">Issue Date</th>
-                  <th className="px-2 py-2">PDF Link</th>
-                  <th className="px-2 py-2">Action</th>
-                </tr>
-              </thead>
-              <tbody>
-                {quotationsData.data.map((row) => (
+          <>
+            <p className="mb-2 text-xs text-slate-500">Showing {filteredSortedQuotations.length} / {quotationsData.data.length} quotations</p>
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-left text-slate-500">
+                    <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("quotation_id")}>ID {quotationSortIndicator("quotation_id")}</button></th>
+                    <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("supplier_name")}>Supplier {quotationSortIndicator("supplier_name")}</button></th>
+                    <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("quotation_number")}>Quotation # {quotationSortIndicator("quotation_number")}</button></th>
+                    <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("issue_date")}>Issue Date {quotationSortIndicator("issue_date")}</button></th>
+                    <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("pdf_link")}>PDF Link {quotationSortIndicator("pdf_link")}</button></th>
+                    <th className="px-2 py-2">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredSortedQuotations.map((row) => (
                   <tr key={row.quotation_id} className="border-b border-slate-100">
                     <td className="px-2 py-2">#{row.quotation_id}</td>
                     <td className="px-2 py-2">{row.supplier_name}</td>
@@ -890,9 +968,10 @@ export function OrdersPage() {
                     </td>
                   </tr>
                 ))}
-              </tbody>
-            </table>
-          </div>
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </section>
     </div>
