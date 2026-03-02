@@ -91,7 +91,7 @@ Last updated: 2026-03-02 (JST)
 
 ## 6. Quality State
 
-- Backend tests: `41 passed` (latest run on 2026-03-02).
+- Backend tests: `42 passed` (latest run on 2026-03-02).
 - Frontend production build: success (latest run on 2026-03-01).
 
 ## 7. Known Directional Gaps (intentional for current phase)

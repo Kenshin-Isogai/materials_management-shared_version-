@@ -166,7 +166,7 @@ def validate_retry_unregistered_csv_path(csv_path: str | Path, *, roots: Quotati
 def iter_unregistered_missing_csvs(roots: QuotationRoots) -> list[Path]:
     paths = {
         *roots.unregistered_csv_root.rglob("*_missing_items_registration.csv"),
-        *roots.unregistered_missing_root.rglob("*_missing_items_registration.csv"),
+        *roots.unregistered_missing_root.rglob("*_missing_items_registration*.csv"),
     }
     return sorted(paths)
 

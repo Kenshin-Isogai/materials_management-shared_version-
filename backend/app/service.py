@@ -562,7 +562,7 @@ def _write_batch_missing_items_register(
     output_dir: Path,
 ) -> str:
     output_dir.mkdir(parents=True, exist_ok=True)
-    batch_timestamp = now_jst().strftime("%Y%m%d_%H%M%S")
+    batch_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     target_path = output_dir / f"batch_missing_items_registration_{batch_timestamp}.csv"
 
     with target_path.open("w", encoding="utf-8", newline="") as fp:
@@ -2321,7 +2321,13 @@ def register_unregistered_missing_items_csvs(
         supplier_name = "UNKNOWN"
         file_warnings: list[str] = []
         try:
-            supplier_name, supplier_warnings = _supplier_name_from_unregistered_path(csv_path, roots)
+            if csv_path.resolve().is_relative_to(roots.unregistered_missing_root.resolve()):
+                supplier_name = "UNKNOWN"
+                supplier_warnings = [
+                    "Consolidated missing-item register detected; registered archive folder uses UNKNOWN."
+                ]
+            else:
+                supplier_name, supplier_warnings = _supplier_name_from_unregistered_path(csv_path, roots)
             for warning in supplier_warnings:
                 if warning not in file_warnings:
                     file_warnings.append(warning)

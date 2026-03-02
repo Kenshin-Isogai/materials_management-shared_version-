@@ -15,6 +15,10 @@ Format style: Keep a simple date-based log while repository versioning policy is
 
 ### Fixed
 
+- Fixed consolidated missing-item register follow-up regressions.
+  - Corrected batch register filename timestamp generation (`datetime.now`) to avoid runtime `NameError`.
+  - Expanded consolidated register discovery glob to include timestamped names (`*_missing_items_registration*.csv`).
+  - Consolidated register archive during `register-unregistered-missing` now uses `registered/csv_files/UNKNOWN/` with an explicit warning, instead of treating `missing_item_registers` as a supplier name.
 - Fixed unregistered order batch behavior where PDF files could be moved even if the same CSV ended in an error later in the per-file flow.
   - Added atomic per-file filesystem move handling for unregistered import.
   - CSV/PDF moves are now executed as one planned set, with rollback of already moved files if any move fails.
