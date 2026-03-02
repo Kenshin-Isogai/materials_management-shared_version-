@@ -70,6 +70,7 @@ Last updated: 2026-03-02 (JST)
 - Data fetching is SWR-based with typed API client wrappers.
 - Reservations page supports partial release/consume via quantity prompt.
 - Orders page `Order List` supports client-side sorting by order id, supplier, item, quantity, expected arrival, and status.
+- Snapshot page supports client-side quick search, location/category filtering, low-stock/shortage-only threshold filtering, and table-column sorting (item, location, quantity, category) to accelerate planning and purchase checks from projected inventory states.
 - Orders page now also shows an `Imported Quotations` table sourced from `GET /api/quotations` (ID, supplier, quotation number, issue date, pdf_link) with client-side sorting and filtering controls.
 - Imported Quotations includes dedicated quotation-number search plus a secondary text filter for supplier/issue-date/PDF-link fields.
 - Orders page mutation flows (manual import, unregistered batch steps, arrival processing) revalidate both orders and quotations datasets to avoid stale `Imported Quotations` content after successful operations.

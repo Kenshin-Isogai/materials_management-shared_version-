@@ -170,3 +170,24 @@ Format style: Keep a simple date-based log while repository versioning policy is
 ### Tests
 
 - Added backend coverage for quotation update/delete CSV+DB synchronization and API delete endpoints.
+
+## 2026-03-02 (snapshot usability: sort/filter/search)
+
+### Added
+
+- Snapshot frontend UX controls:
+  - free-text quick search (item number, location, category, quantity)
+  - location filter
+  - category filter
+  - per-column sorting for item/location/quantity/category
+  - clear-filters action and filtered-row count display
+
+### Changed
+
+- Snapshot table now defaults to quantity ascending so low-stock items can be spotted sooner for purchasing decisions.
+- Snapshot summary now shows `filtered / total` row counts for situational awareness while planning.
+- Snapshot page now includes a low-stock/shortage-only toggle with a configurable quantity threshold (`quantity <= threshold`) for faster purchase candidate extraction.
+
+### Tests
+
+- Frontend production build executed successfully.

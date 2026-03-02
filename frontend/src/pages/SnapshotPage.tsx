@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { apiGet } from "../lib/api";
 
 type SnapshotRow = {
@@ -20,6 +20,66 @@ export function SnapshotPage() {
   const [mode, setMode] = useState<"past" | "future">("future");
   const [data, setData] = useState<SnapshotResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [query, setQuery] = useState("");
+  const [locationFilter, setLocationFilter] = useState("all");
+  const [categoryFilter, setCategoryFilter] = useState("all");
+  const [shortageOnly, setShortageOnly] = useState(false);
+  const [shortageThreshold, setShortageThreshold] = useState("0");
+  const [sortKey, setSortKey] = useState<"item_number" | "location" | "quantity" | "category">("quantity");
+  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+
+  const locationOptions = useMemo(() => {
+    const values = (data?.rows ?? []).map((row) => row.location);
+    return Array.from(new Set(values)).sort((a, b) => a.localeCompare(b));
+  }, [data?.rows]);
+
+  const categoryOptions = useMemo(() => {
+    const values = (data?.rows ?? []).map((row) => row.category ?? "Uncategorized");
+    return Array.from(new Set(values)).sort((a, b) => a.localeCompare(b));
+  }, [data?.rows]);
+
+  const filteredSortedRows = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    const parsedThreshold = Number(shortageThreshold);
+    const effectiveThreshold = Number.isFinite(parsedThreshold) ? parsedThreshold : 0;
+    const rows = (data?.rows ?? []).filter((row) => {
+      if (locationFilter !== "all" && row.location !== locationFilter) return false;
+      const normalizedCategory = row.category ?? "Uncategorized";
+      if (categoryFilter !== "all" && normalizedCategory !== categoryFilter) return false;
+      if (shortageOnly && row.quantity > effectiveThreshold) return false;
+      if (!normalizedQuery) return true;
+      return [row.item_number, row.location, normalizedCategory, String(row.quantity)]
+        .join(" ")
+        .toLowerCase()
+        .includes(normalizedQuery);
+    });
+
+    rows.sort((a, b) => {
+      if (sortKey === "quantity") {
+        return sortDirection === "asc" ? a.quantity - b.quantity : b.quantity - a.quantity;
+      }
+      const left = (a[sortKey] ?? "Uncategorized").toString();
+      const right = (b[sortKey] ?? "Uncategorized").toString();
+      const compared = left.localeCompare(right);
+      return sortDirection === "asc" ? compared : -compared;
+    });
+
+    return rows;
+  }, [categoryFilter, data?.rows, locationFilter, query, shortageOnly, shortageThreshold, sortDirection, sortKey]);
+
+  function toggleSort(nextKey: typeof sortKey) {
+    if (nextKey === sortKey) {
+      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+      return;
+    }
+    setSortKey(nextKey);
+    setSortDirection("asc");
+  }
+
+  function sortIndicator(key: typeof sortKey): string {
+    if (key !== sortKey) return "↕";
+    return sortDirection === "asc" ? "↑" : "↓";
+  }
 
   async function run() {
     const params = new URLSearchParams();
@@ -67,20 +127,77 @@ export function SnapshotPage() {
           <>
             <p className="mb-3 text-sm text-slate-600">
               Mode: <strong>{data.mode}</strong> / Date: <strong>{data.date}</strong> / Rows:{" "}
-              <strong>{data.rows.length}</strong>
+              <strong>{filteredSortedRows.length}</strong> / <strong>{data.rows.length}</strong>
+            </p>
+            <div className="mb-3 grid gap-3 md:grid-cols-5">
+              <input
+                className="input"
+                placeholder="Search item / location / category / qty"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+              <select className="input" value={locationFilter} onChange={(e) => setLocationFilter(e.target.value)}>
+                <option value="all">All locations</option>
+                {locationOptions.map((location) => (
+                  <option key={location} value={location}>
+                    {location}
+                  </option>
+                ))}
+              </select>
+              <select className="input" value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+                <option value="all">All categories</option>
+                {categoryOptions.map((category) => (
+                  <option key={category} value={category}>
+                    {category}
+                  </option>
+                ))}
+              </select>
+              <label className="flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={shortageOnly}
+                  onChange={(e) => setShortageOnly(e.target.checked)}
+                />
+                Shortage only
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  className="input"
+                  type="number"
+                  value={shortageThreshold}
+                  onChange={(e) => setShortageThreshold(e.target.value)}
+                  disabled={!shortageOnly}
+                />
+                <button
+                  type="button"
+                  className="button-secondary"
+                  onClick={() => {
+                    setQuery("");
+                    setLocationFilter("all");
+                    setCategoryFilter("all");
+                    setShortageOnly(false);
+                    setShortageThreshold("0");
+                  }}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+            <p className="mb-3 text-xs text-slate-500">
+              {shortageOnly ? `Showing rows with quantity ≤ ${shortageThreshold || "0"}.` : "Shortage filter is off."}
             </p>
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead>
                   <tr className="border-b border-slate-200 text-left text-slate-500">
-                    <th className="px-2 py-2">Item</th>
-                    <th className="px-2 py-2">Location</th>
-                    <th className="px-2 py-2">Quantity</th>
-                    <th className="px-2 py-2">Category</th>
+                    <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("item_number")}>Item {sortIndicator("item_number")}</button></th>
+                    <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("location")}>Location {sortIndicator("location")}</button></th>
+                    <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("quantity")}>Quantity {sortIndicator("quantity")}</button></th>
+                    <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("category")}>Category {sortIndicator("category")}</button></th>
                   </tr>
                 </thead>
                 <tbody>
-                  {data.rows.map((row) => (
+                  {filteredSortedRows.map((row) => (
                     <tr key={`${row.item_id}-${row.location}`} className="border-b border-slate-100">
                       <td className="px-2 py-2">{row.item_number}</td>
                       <td className="px-2 py-2">{row.location}</td>
@@ -97,4 +214,3 @@ export function SnapshotPage() {
     </div>
   );
 }
-
