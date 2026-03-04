@@ -367,6 +367,15 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 4. Update frontend API usage/types in `frontend/src/lib`.
 5. Add or update tests in `backend/tests`.
 
+### Item flow traceability (item-first workflow)
+
+- Added `GET /api/items/{item_id}/flow` for item-centric stock-change planning/traceability.
+- Response merges three sources into a single timeline sorted by event time:
+  - transaction-driven stock deltas (`transaction_log`)
+  - planned stock increases from open orders with `expected_arrival`
+  - planned stock decreases from active reservations with `deadline`
+- UI integration: Item List row action opens a dedicated timeline panel showing **when**, **how many (+/-)**, and **why** (demand source reference/reason).
+
 ### Order/quotation correction operations (UI + consistency)
 
 - Correction endpoints:

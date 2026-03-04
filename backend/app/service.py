@@ -1820,6 +1820,141 @@ def list_item_history(conn: sqlite3.Connection, item_id: int) -> list[dict[str, 
     return _rows_to_dict(rows)
 
 
+def _stock_delta_from_transaction(row: sqlite3.Row) -> int:
+    op = str(row["operation_type"] or "")
+    qty = int(row["quantity"] or 0)
+    from_location = row["from_location"]
+    to_location = row["to_location"]
+
+    if op == "ARRIVAL":
+        return qty
+    if op == "CONSUME":
+        return -qty if from_location == "STOCK" else 0
+    if op == "RESERVE":
+        # Reservation lifecycle logs are allocation-only events in the current
+        # architecture and typically store NULL locations. Only legacy reserve
+        # rows that explicitly touch STOCK should contribute to stock deltas.
+        delta = 0
+        if to_location == "STOCK":
+            delta += qty
+        if from_location == "STOCK":
+            delta -= qty
+        return delta
+    if op == "MOVE":
+        delta = 0
+        if to_location == "STOCK":
+            delta += qty
+        if from_location == "STOCK":
+            delta -= qty
+        return delta
+    if op == "ADJUST":
+        delta = 0
+        if to_location == "STOCK":
+            delta += qty
+        if from_location == "STOCK":
+            delta -= qty
+        return delta
+    return 0
+
+
+def get_item_flow_timeline(conn: sqlite3.Connection, item_id: int) -> dict[str, Any]:
+    item = get_item(conn, item_id)
+
+    events: list[dict[str, Any]] = []
+
+    tx_rows = conn.execute(
+        """
+        SELECT log_id, timestamp, operation_type, quantity, from_location, to_location, note
+        FROM transaction_log
+        WHERE item_id = ?
+        ORDER BY timestamp ASC, log_id ASC
+        """,
+        (item_id,),
+    ).fetchall()
+    for row in tx_rows:
+        delta = _stock_delta_from_transaction(row)
+        if delta == 0:
+            continue
+        events.append(
+            {
+                "event_at": row["timestamp"],
+                "delta": delta,
+                "quantity": int(row["quantity"]),
+                "direction": "increase" if delta > 0 else "decrease",
+                "source_type": "transaction",
+                "source_ref": f"log#{int(row['log_id'])}",
+                "reason": f"{row['operation_type']} ({row['from_location'] or '-'} -> {row['to_location'] or '-'})",
+                "note": row["note"],
+            }
+        )
+
+    order_rows = conn.execute(
+        """
+        SELECT o.order_id, o.order_amount, o.expected_arrival, q.quotation_number, s.name AS supplier_name
+        FROM orders o
+        JOIN quotations q ON q.quotation_id = o.quotation_id
+        JOIN suppliers s ON s.supplier_id = q.supplier_id
+        WHERE o.item_id = ?
+          AND o.status <> 'Arrived'
+          AND o.expected_arrival IS NOT NULL
+        ORDER BY o.expected_arrival ASC, o.order_id ASC
+        """,
+        (item_id,),
+    ).fetchall()
+    for row in order_rows:
+        events.append(
+            {
+                "event_at": row["expected_arrival"],
+                "delta": int(row["order_amount"]),
+                "quantity": int(row["order_amount"]),
+                "direction": "increase",
+                "source_type": "expected_arrival",
+                "source_ref": f"order#{int(row['order_id'])}",
+                "reason": f"Expected arrival from {row['supplier_name']} / {row['quotation_number']}",
+                "note": None,
+            }
+        )
+
+    reservation_rows = conn.execute(
+        """
+        SELECT reservation_id, quantity, deadline, purpose, note
+        FROM reservations
+        WHERE item_id = ?
+          AND status = 'ACTIVE'
+          AND deadline IS NOT NULL
+        ORDER BY deadline ASC, reservation_id ASC
+        """,
+        (item_id,),
+    ).fetchall()
+    for row in reservation_rows:
+        events.append(
+            {
+                "event_at": row["deadline"],
+                "delta": -int(row["quantity"]),
+                "quantity": int(row["quantity"]),
+                "direction": "decrease",
+                "source_type": "reservation_deadline",
+                "source_ref": f"reservation#{int(row['reservation_id'])}",
+                "reason": f"Reserved demand: {row['purpose'] or 'N/A'}",
+                "note": row["note"],
+            }
+        )
+
+    events.sort(key=lambda row: (str(row["event_at"]), str(row["source_ref"])))
+
+    current_stock_row = conn.execute(
+        "SELECT COALESCE(SUM(quantity), 0) AS qty FROM inventory_ledger WHERE item_id = ? AND location = 'STOCK'",
+        (item_id,),
+    ).fetchone()
+
+    return {
+        "item_id": int(item["item_id"]),
+        "item_number": item["item_number"],
+        "manufacturer_name": item["manufacturer_name"],
+        "current_stock": int(current_stock_row["qty"] if current_stock_row else 0),
+        "events": events,
+    }
+
 def list_inventory(
     conn: sqlite3.Connection,
     *,
@@ -5488,7 +5623,8 @@ def get_inventory_snapshot(
             im.item_id,
             im.item_number,
             m.name AS manufacturer_name,
-            COALESCE(ca.canonical_category, im.category) AS category
+            COALESCE(ca.canonical_category, im.category) AS category,
+            im.description
         FROM items_master im
         JOIN manufacturers m ON m.manufacturer_id = im.manufacturer_id
         LEFT JOIN category_aliases ca ON ca.alias_category = im.category
@@ -5509,6 +5645,7 @@ def get_inventory_snapshot(
                 "item_number": item["item_number"] if item else None,
                 "manufacturer_name": item["manufacturer_name"] if item else None,
                 "category": item["category"] if item else None,
+                "description": item["description"] if item else None,
                 "location": location,
                 "quantity": quantity,
             }

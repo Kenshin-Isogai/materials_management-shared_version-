@@ -125,6 +125,25 @@ type RegisterMissingResult = {
   created_aliases: number;
 };
 
+type ItemFlowEvent = {
+  event_at: string;
+  delta: number;
+  quantity: number;
+  direction: "increase" | "decrease";
+  source_type: string;
+  source_ref: string;
+  reason: string;
+  note: string | null;
+};
+
+type ItemFlowTimeline = {
+  item_id: number;
+  item_number: string;
+  manufacturer_name: string;
+  current_stock: number;
+  events: ItemFlowEvent[];
+};
+
 const PENDING_MISSING_ITEMS_KEY = "mm.pending_missing_items";
 const PENDING_ORDER_IMPORT_KEY = "mm.pending_order_import";
 const PENDING_BATCH_RETRY_KEY = "mm.pending_batch_retry";
@@ -268,6 +287,7 @@ export function ItemsPage() {
   const [metadataBusy, setMetadataBusy] = useState(false);
   const [sortKey, setSortKey] = useState<"item_id" | "item_number" | "manufacturer_name" | "category" | "url">("item_id");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [selectedFlowItemId, setSelectedFlowItemId] = useState<number | null>(null);
   const key = useMemo(() => `/items?q=${encodeURIComponent(q)}`, [q]);
 
   const { data, error, isLoading, mutate } = useSWR(key, () =>
@@ -299,6 +319,15 @@ export function ItemsPage() {
   const { data: categories } = useSWR("/category-options-missing-resolver", () =>
     apiGet<string[]>("/categories")
   );
+  const selectedFlowKey = useMemo(
+    () => (selectedFlowItemId == null ? null : `/items/${selectedFlowItemId}/flow`),
+    [selectedFlowItemId]
+  );
+  const {
+    data: selectedFlowData,
+    error: selectedFlowError,
+    isLoading: selectedFlowLoading,
+  } = useSWR(selectedFlowKey, () => apiGet<ItemFlowTimeline>(selectedFlowKey ?? ""));
   const itemOptions = itemOptionsData?.data ?? [];
   const categoryOptions = categories ?? [];
   const importJobs = importJobsData?.data ?? [];
@@ -1792,6 +1821,14 @@ export function ItemsPage() {
                             className="button-subtle"
                             type="button"
                             disabled={listBusy}
+                            onClick={() => setSelectedFlowItemId(item.item_id)}
+                          >
+                            Flow
+                          </button>
+                          <button
+                            className="button-subtle"
+                            type="button"
+                            disabled={listBusy}
                             onClick={() => removeItem(item)}
                           >
                             Delete
@@ -1806,6 +1843,63 @@ export function ItemsPage() {
           </div>
         )}
       </section>
+
+      {selectedFlowItemId != null && (
+        <section className="panel p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <h2 className="font-display text-lg font-semibold">Item Increase/Decrease Timeline</h2>
+            <button className="button-subtle" type="button" onClick={() => setSelectedFlowItemId(null)}>
+              Close
+            </button>
+          </div>
+          {selectedFlowLoading && <p className="text-sm text-slate-500">Loading timeline...</p>}
+          {selectedFlowError && <p className="text-sm text-red-600">{String(selectedFlowError)}</p>}
+          {selectedFlowData && (
+            <>
+              <p className="mb-2 text-sm text-slate-700">
+                <strong>{selectedFlowData.item_number}</strong> ({selectedFlowData.manufacturer_name}) / Current STOCK: <strong>{selectedFlowData.current_stock}</strong>
+              </p>
+              <p className="mb-3 text-xs text-slate-500">
+                This timeline combines transaction history (actual past changes) with open-order arrivals and active reservation deadlines (planned demand changes).
+              </p>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-left text-slate-500">
+                      <th className="px-2 py-2">When</th>
+                      <th className="px-2 py-2">Change</th>
+                      <th className="px-2 py-2">Direction</th>
+                      <th className="px-2 py-2">Why</th>
+                      <th className="px-2 py-2">Reference</th>
+                      <th className="px-2 py-2">Note</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedFlowData.events.map((event, idx) => (
+                      <tr key={`${event.source_ref}-${event.event_at}-${idx}`} className="border-b border-slate-100">
+                        <td className="px-2 py-2">{event.event_at}</td>
+                        <td className={`px-2 py-2 font-semibold ${event.delta >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                          {event.delta >= 0 ? `+${event.delta}` : String(event.delta)}
+                        </td>
+                        <td className="px-2 py-2">{event.direction}</td>
+                        <td className="px-2 py-2">{event.reason}</td>
+                        <td className="px-2 py-2">{event.source_ref}</td>
+                        <td className="px-2 py-2">{event.note ?? "-"}</td>
+                      </tr>
+                    ))}
+                    {selectedFlowData.events.length === 0 && (
+                      <tr>
+                        <td className="px-2 py-3 text-slate-500" colSpan={6}>No increase/decrease events found for this item.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </section>
+      )}
+
     </div>
   );
 }

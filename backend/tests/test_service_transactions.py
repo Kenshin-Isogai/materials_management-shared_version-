@@ -239,6 +239,32 @@ def test_arrival_undo_is_limited_by_stock_when_other_locations_have_inventory(co
     assert _inventory_qty(conn, item["item_id"], "STOCK") == 0
     assert _inventory_qty(conn, item["item_id"], "BENCH_A") == 8
 
+def test_item_flow_ignores_allocation_only_reserve_logs(conn):
+    item = _create_basic_item(conn, item_number="ITEM-FLOW-RESERVE")
+    service.adjust_inventory(
+        conn,
+        item_id=item["item_id"],
+        quantity_delta=10,
+        location="STOCK",
+        note="seed",
+    )
+    reservation = service.create_reservation(
+        conn,
+        {
+            "item_id": item["item_id"],
+            "quantity": 4,
+            "purpose": "flow check",
+        },
+    )
+    service.release_reservation(conn, reservation["reservation_id"])
+
+    timeline = service.get_item_flow_timeline(conn, item["item_id"])
+    transaction_events = [
+        event for event in timeline["events"] if event["source_type"] == "transaction"
+    ]
+
+    assert [event["delta"] for event in transaction_events] == [10]
+
 def test_import_unregistered_orders_moves_csv_and_pdf(conn, tmp_path: Path):
     item = _create_basic_item(conn, item_number="U-ITEM-001")
 

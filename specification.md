@@ -804,6 +804,7 @@ Base URL: `http://localhost:8000/api`
 | PUT | `/items/{item_id}` | Update item |
 | DELETE | `/items/{item_id}` | Delete item (blocked if referenced) |
 | GET | `/items/{item_id}/history` | Get item transaction history |
+| GET | `/items/{item_id}/flow` | Get item-centric increase/decrease timeline (transactions + expected arrivals + reservation demand) |
 
 #### **Inventory**
 

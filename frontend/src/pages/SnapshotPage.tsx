@@ -7,6 +7,7 @@ type SnapshotRow = {
   location: string;
   quantity: number;
   category: string | null;
+  description: string | null;
 };
 
 type SnapshotResponse = {
@@ -24,6 +25,7 @@ export function SnapshotPage() {
   const ALL_FILTER = "__ALL__";
   const [locationFilter, setLocationFilter] = useState(ALL_FILTER);
   const [categoryFilter, setCategoryFilter] = useState(ALL_FILTER);
+  const [descriptionFilter, setDescriptionFilter] = useState("");
   const [shortageOnly, setShortageOnly] = useState(false);
   const [shortageThreshold, setShortageThreshold] = useState("0");
   const [sortKey, setSortKey] = useState<"item_number" | "location" | "quantity" | "category">("quantity");
@@ -48,8 +50,10 @@ export function SnapshotPage() {
       const normalizedCategory = row.category ?? "Uncategorized";
       if (categoryFilter !== ALL_FILTER && normalizedCategory !== categoryFilter) return false;
       if (shortageOnly && row.quantity > effectiveThreshold) return false;
+      const normalizedDescription = (row.description ?? "").toLowerCase();
+      if (descriptionFilter.trim() && !normalizedDescription.includes(descriptionFilter.trim().toLowerCase())) return false;
       if (!normalizedQuery) return true;
-      return [row.item_number, row.location, normalizedCategory, String(row.quantity)]
+      return [row.item_number, row.location, normalizedCategory, row.description ?? "", String(row.quantity)]
         .join(" ")
         .toLowerCase()
         .includes(normalizedQuery);
@@ -66,7 +70,7 @@ export function SnapshotPage() {
     });
 
     return rows;
-  }, [categoryFilter, data?.rows, locationFilter, query, shortageOnly, shortageThreshold, sortDirection, sortKey]);
+  }, [categoryFilter, data?.rows, descriptionFilter, locationFilter, query, shortageOnly, shortageThreshold, sortDirection, sortKey]);
 
   function toggleSort(nextKey: typeof sortKey) {
     if (nextKey === sortKey) {
@@ -130,10 +134,10 @@ export function SnapshotPage() {
               Mode: <strong>{data.mode}</strong> / Date: <strong>{data.date}</strong> / Rows:{" "}
               <strong>{filteredSortedRows.length}</strong> / <strong>{data.rows.length}</strong>
             </p>
-            <div className="mb-3 grid gap-3 md:grid-cols-5">
+            <div className="mb-3 grid gap-3 md:grid-cols-6">
               <input
                 className="input"
-                placeholder="Search item / location / category / qty"
+                placeholder="Search item / location / category / description / qty"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
               />
@@ -153,6 +157,12 @@ export function SnapshotPage() {
                   </option>
                 ))}
               </select>
+              <input
+                className="input"
+                placeholder="Description contains (e.g. kinematic)"
+                value={descriptionFilter}
+                onChange={(e) => setDescriptionFilter(e.target.value)}
+              />
               <label className="flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">
                 <input
                   type="checkbox"
@@ -178,6 +188,7 @@ export function SnapshotPage() {
                     setCategoryFilter(ALL_FILTER);
                     setShortageOnly(false);
                     setShortageThreshold("0");
+                    setDescriptionFilter("");
                   }}
                 >
                   Clear
@@ -195,6 +206,7 @@ export function SnapshotPage() {
                     <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("location")}>Location {sortIndicator("location")}</button></th>
                     <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("quantity")}>Quantity {sortIndicator("quantity")}</button></th>
                     <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("category")}>Category {sortIndicator("category")}</button></th>
+                    <th className="px-2 py-2">Description</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -204,6 +216,7 @@ export function SnapshotPage() {
                       <td className="px-2 py-2">{row.location}</td>
                       <td className="px-2 py-2">{row.quantity}</td>
                       <td className="px-2 py-2">{row.category ?? "-"}</td>
+                      <td className="px-2 py-2 text-slate-600">{row.description ?? "-"}</td>
                     </tr>
                   ))}
                 </tbody>

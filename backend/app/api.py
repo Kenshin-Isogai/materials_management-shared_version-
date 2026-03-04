@@ -248,6 +248,10 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def get_item_history(item_id: int, conn= db):
         return ok(service.list_item_history(conn, item_id))
 
+    @app.get("/api/items/{item_id}/flow")
+    def get_item_flow(item_id: int, conn= db):
+        return ok(service.get_item_flow_timeline(conn, item_id))
+
     @app.get("/api/inventory")
     def get_inventory(
         item_id: int | None = None,

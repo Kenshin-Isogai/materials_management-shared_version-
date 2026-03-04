@@ -57,6 +57,7 @@ export type Reservation = {
 export type Order = {
   order_id: number;
   item_id: number;
+  quotation_id: number;
   canonical_item_number: string;
   order_amount: number;
   ordered_quantity: number;

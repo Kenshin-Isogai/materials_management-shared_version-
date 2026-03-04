@@ -216,6 +216,14 @@ export function OrdersPage() {
     return rows;
   }, [quotationsData?.data, quotationFilter, quotationNumberSearch, quotationSortDirection, quotationSortKey]);
 
+  const orderCountByQuotationId = useMemo(() => {
+    const counts = new Map<number, number>();
+    for (const row of sortedOrders) {
+      counts.set(row.quotation_id, (counts.get(row.quotation_id) ?? 0) + 1);
+    }
+    return counts;
+  }, [sortedOrders]);
+
   const itemByNumber = useMemo(() => {
     return new Map((itemsData?.data ?? []).map((item) => [item.item_number, item]));
   }, [itemsData?.data]);
@@ -1117,6 +1125,7 @@ export function OrdersPage() {
                     <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("quotation_number")}>Quotation # {quotationSortIndicator("quotation_number")}</button></th>
                     <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("issue_date")}>Issue Date {quotationSortIndicator("issue_date")}</button></th>
                     <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("pdf_link")}>PDF Link {quotationSortIndicator("pdf_link")}</button></th>
+                    <th className="px-2 py-2">Orders</th>
                     <th className="px-2 py-2">Action</th>
                   </tr>
                 </thead>
@@ -1150,6 +1159,7 @@ export function OrdersPage() {
                         row.pdf_link ?? "-"
                       )}
                     </td>
+                    <td className="px-2 py-2">{orderCountByQuotationId.get(row.quotation_id) ?? 0}</td>
                     <td className="px-2 py-2">
                       <div className="flex gap-2">
                         {editingQuotationId === row.quotation_id ? (
