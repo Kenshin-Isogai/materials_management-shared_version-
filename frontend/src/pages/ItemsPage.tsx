@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import useSWR from "swr";
 import { apiGet, apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
@@ -287,7 +287,9 @@ export function ItemsPage() {
   const [metadataBusy, setMetadataBusy] = useState(false);
   const [sortKey, setSortKey] = useState<"item_id" | "item_number" | "manufacturer_name" | "category" | "url">("item_id");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [isItemListExpanded, setIsItemListExpanded] = useState(true);
   const [selectedFlowItemId, setSelectedFlowItemId] = useState<number | null>(null);
+  const flowPanelRef = useRef<HTMLElement | null>(null);
   const key = useMemo(() => `/items?q=${encodeURIComponent(q)}`, [q]);
 
   const { data, error, isLoading, mutate } = useSWR(key, () =>
@@ -391,6 +393,11 @@ export function ItemsPage() {
       setMissingRows(nextRows);
     }
   }, [location.key, location.state]);
+
+  useEffect(() => {
+    if (selectedFlowItemId == null) return;
+    flowPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }, [selectedFlowItemId]);
 
   async function registerAliasRow(
     orderedItemNumber: string,
@@ -1678,6 +1685,14 @@ export function ItemsPage() {
       <section className="panel p-4">
         <div className="mb-3 flex flex-wrap items-center gap-3">
           <h2 className="font-display text-lg font-semibold">Item List</h2>
+          <button
+            type="button"
+            className="button-subtle"
+            onClick={() => setIsItemListExpanded((prev) => !prev)}
+            aria-expanded={isItemListExpanded}
+          >
+            {isItemListExpanded ? "Collapse" : "Expand"}
+          </button>
           <input
             className="input w-80"
             placeholder="Search by keyword"
@@ -1689,9 +1704,9 @@ export function ItemsPage() {
         <p className="mb-2 text-xs text-slate-500">
           Referenced items can update metadata, but item number/manufacturer changes are blocked.
         </p>
-        {isLoading && <p className="text-sm text-slate-500">Loading...</p>}
-        {error && <p className="text-sm text-red-600">{String(error)}</p>}
-        {data?.data && (
+        {isItemListExpanded && isLoading && <p className="text-sm text-slate-500">Loading...</p>}
+        {isItemListExpanded && error && <p className="text-sm text-red-600">{String(error)}</p>}
+        {isItemListExpanded && data?.data && (
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead>
@@ -1821,7 +1836,10 @@ export function ItemsPage() {
                             className="button-subtle"
                             type="button"
                             disabled={listBusy}
-                            onClick={() => setSelectedFlowItemId(item.item_id)}
+                            onClick={() => {
+                              setSelectedFlowItemId(item.item_id);
+                              setIsItemListExpanded(false);
+                            }}
                           >
                             Flow
                           </button>
@@ -1845,7 +1863,7 @@ export function ItemsPage() {
       </section>
 
       {selectedFlowItemId != null && (
-        <section className="panel p-4">
+        <section className="panel p-4" ref={flowPanelRef}>
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <h2 className="font-display text-lg font-semibold">Item Increase/Decrease Timeline</h2>
             <button className="button-subtle" type="button" onClick={() => setSelectedFlowItemId(null)}>
