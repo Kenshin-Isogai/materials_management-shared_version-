@@ -1277,6 +1277,119 @@ def test_merge_open_orders_records_lineage_and_syncs_csv(conn, tmp_path: Path, m
     assert rows_after[0]["expected_arrival"] == "2026-05-30"
 
 
+
+
+def test_merge_open_orders_removes_correct_source_row_for_nonfirst_sibling(conn, tmp_path: Path, monkeypatch):
+    item = _create_basic_item(conn, item_number="SYNC-MERGE-ORDER-001")
+    roots = service.build_roots(
+        unregistered_root=tmp_path / "quotations" / "unregistered",
+        registered_root=tmp_path / "quotations" / "registered",
+    )
+    service.ensure_roots(roots)
+    monkeypatch.setattr(service, "build_roots", lambda **_: roots)
+
+    csv_path = roots.registered_csv_root / "SupplierMergeOrder" / "Q-MERGE-ORDER-001.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with csv_path.open("w", encoding="utf-8", newline="") as fp:
+        writer = csv.DictWriter(
+            fp,
+            fieldnames=[
+                "supplier",
+                "item_number",
+                "quantity",
+                "quotation_number",
+                "issue_date",
+                "order_date",
+                "expected_arrival",
+                "pdf_link",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow({"supplier": "SupplierMergeOrder", "item_number": item["item_number"], "quantity": "10", "quotation_number": "Q-MERGE-ORDER-001", "issue_date": "2026-06-01", "order_date": "2026-06-01", "expected_arrival": "2026-06-10", "pdf_link": ""})
+        writer.writerow({"supplier": "SupplierMergeOrder", "item_number": item["item_number"], "quantity": "20", "quotation_number": "Q-MERGE-ORDER-001", "issue_date": "2026-06-01", "order_date": "2026-06-01", "expected_arrival": "2026-06-20", "pdf_link": ""})
+        writer.writerow({"supplier": "SupplierMergeOrder", "item_number": item["item_number"], "quantity": "30", "quotation_number": "Q-MERGE-ORDER-001", "issue_date": "2026-06-01", "order_date": "2026-06-01", "expected_arrival": "2026-06-30", "pdf_link": ""})
+
+    import_result = service.import_orders_from_csv_path(conn, supplier_name="SupplierMergeOrder", csv_path=csv_path)
+    assert import_result["status"] == "ok"
+    first_order_id, second_order_id, third_order_id = [int(v) for v in import_result["order_ids"]]
+
+    merged = service.merge_open_orders(
+        conn,
+        source_order_id=second_order_id,
+        target_order_id=third_order_id,
+        expected_arrival="2026-07-05",
+    )
+    assert merged["merged"] is True
+
+    with csv_path.open("r", encoding="utf-8", newline="") as fp:
+        rows_after = list(csv.DictReader(fp))
+
+    assert len(rows_after) == 2
+    assert rows_after[0]["quantity"] == "10"
+    assert rows_after[0]["expected_arrival"] == "2026-06-10"
+    assert rows_after[1]["quantity"] == "50"
+    assert rows_after[1]["expected_arrival"] == "2026-07-05"
+    assert conn.execute("SELECT COUNT(*) AS c FROM orders WHERE order_id = ?", (second_order_id,)).fetchone()["c"] == 0
+    assert conn.execute("SELECT COUNT(*) AS c FROM orders WHERE order_id = ?", (first_order_id,)).fetchone()["c"] == 1
+    assert conn.execute("SELECT COUNT(*) AS c FROM orders WHERE order_id = ?", (third_order_id,)).fetchone()["c"] == 1
+
+
+def test_split_order_appends_new_csv_row_after_sibling_block(conn, tmp_path: Path, monkeypatch):
+    item = _create_basic_item(conn, item_number="SYNC-SPLIT-ORDER-001")
+    roots = service.build_roots(
+        unregistered_root=tmp_path / "quotations" / "unregistered",
+        registered_root=tmp_path / "quotations" / "registered",
+    )
+    service.ensure_roots(roots)
+    monkeypatch.setattr(service, "build_roots", lambda **_: roots)
+
+    csv_path = roots.registered_csv_root / "SupplierSplitOrder" / "Q-SPLIT-ORDER-001.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with csv_path.open("w", encoding="utf-8", newline="") as fp:
+        writer = csv.DictWriter(
+            fp,
+            fieldnames=[
+                "supplier",
+                "item_number",
+                "quantity",
+                "quotation_number",
+                "issue_date",
+                "order_date",
+                "expected_arrival",
+                "pdf_link",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow({"supplier": "SupplierSplitOrder", "item_number": item["item_number"], "quantity": "10", "quotation_number": "Q-SPLIT-ORDER-001", "issue_date": "2026-08-01", "order_date": "2026-08-01", "expected_arrival": "2026-08-10", "pdf_link": ""})
+        writer.writerow({"supplier": "SupplierSplitOrder", "item_number": item["item_number"], "quantity": "10", "quotation_number": "Q-SPLIT-ORDER-001", "issue_date": "2026-08-01", "order_date": "2026-08-01", "expected_arrival": "2026-08-20", "pdf_link": ""})
+        writer.writerow({"supplier": "SupplierSplitOrder", "item_number": item["item_number"], "quantity": "10", "quotation_number": "Q-SPLIT-ORDER-001", "issue_date": "2026-08-01", "order_date": "2026-08-01", "expected_arrival": "2026-08-30", "pdf_link": ""})
+
+    import_result = service.import_orders_from_csv_path(conn, supplier_name="SupplierSplitOrder", csv_path=csv_path)
+    assert import_result["status"] == "ok"
+    _, second_order_id, _ = [int(v) for v in import_result["order_ids"]]
+
+    service.update_order(
+        conn,
+        second_order_id,
+        {
+            "expected_arrival": "2026-09-05",
+            "split_quantity": 4,
+        },
+    )
+
+    with csv_path.open("r", encoding="utf-8", newline="") as fp:
+        rows_after = list(csv.DictReader(fp))
+
+    assert len(rows_after) == 4
+    assert rows_after[0]["quantity"] == "10"
+    assert rows_after[0]["expected_arrival"] == "2026-08-10"
+    assert rows_after[1]["quantity"] == "6"
+    assert rows_after[1]["expected_arrival"] == "2026-08-20"
+    assert rows_after[2]["quantity"] == "10"
+    assert rows_after[2]["expected_arrival"] == "2026-08-30"
+    assert rows_after[3]["quantity"] == "4"
+    assert rows_after[3]["expected_arrival"] == "2026-09-05"
+
 def test_delete_quotation_rejects_if_any_linked_order_arrived(conn):
     item = _create_basic_item(conn, item_number="ARRIVE-GUARD-001")
     csv_content = "\n".join(

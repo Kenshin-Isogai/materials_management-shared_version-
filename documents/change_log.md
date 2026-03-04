@@ -261,3 +261,17 @@ Format style: Keep a simple date-based log while repository versioning policy is
 
 - Assembly feature is now used directly in reservation CSV import by expanding assembly rows to component reservation rows, improving workflow efficiency without turning assemblies into enforced inventory constraints.
 - CSV movement/reservation imports now convert non-numeric numeric fields (`item_id`, `quantity`, `project_id`, `assembly_quantity`) into `AppError` validation responses (`422`) instead of surfacing unhandled `ValueError` as internal errors.
+
+## 2026-03-04 (CSV sibling-order bug fixes for split/merge)
+
+### Fixed
+
+- Fixed merge CSV synchronization to compute source/target sibling occurrence matchers before deleting source DB row, and adjusted target occurrence handling when source precedes target so merged quantity/ETA updates apply to the correct CSV row.
+- Fixed split CSV insertion ordering so newly created split rows are appended after the existing sibling block (order-id occurrence order), preventing row-identity drift when splitting a non-final sibling row.
+
+### Tests
+
+- Backend test suite executed successfully: `73 passed`.
+- Added targeted regression coverage for:
+  - merging non-first sibling rows without deleting/updating the wrong CSV entry
+  - splitting a non-final sibling row while preserving sibling-block row order in CSV

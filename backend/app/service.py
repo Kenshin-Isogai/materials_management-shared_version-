@@ -2473,7 +2473,10 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
 
     _rewrite_order_csv_rows(roots, row_matcher=row_matcher, row_updater=_updater)
 
-    row_matcher_for_insert = _order_csv_row_matcher_for_identity(conn, get_order(conn, order_id))
+    split_order = get_order(conn, split_order_id)
+    sibling_ids = _order_csv_sibling_ids_for_identity(conn, split_order)
+    anchor_occurrence_index = max(len(sibling_ids) - 2, 0)
+    row_matcher_for_insert = _order_csv_row_matcher_for_occurrence(split_order, anchor_occurrence_index)
 
     def _builder(row: dict[str, Any]) -> dict[str, Any]:
         next_row = dict(row)
@@ -2574,6 +2577,13 @@ def merge_open_orders(
     target_ordered = int(target["ordered_quantity"] or target_amount)
     source_ordered = int(source["ordered_quantity"] or source_amount)
 
+    sibling_ids = _order_csv_sibling_ids_for_identity(conn, source)
+    source_idx = sibling_ids.index(source_order_id) if source_order_id in sibling_ids else 0
+    target_idx = sibling_ids.index(target_order_id) if target_order_id in sibling_ids else 0
+    adjusted_target_idx = target_idx - 1 if source_idx < target_idx else target_idx
+    source_matcher = _order_csv_row_matcher_for_occurrence(source, source_idx)
+    target_matcher = _order_csv_row_matcher_for_occurrence(target, adjusted_target_idx)
+
     conn.execute(
         """
         UPDATE orders
@@ -2588,8 +2598,6 @@ def merge_open_orders(
     conn.execute("DELETE FROM orders WHERE order_id = ?", (source_order_id,))
 
     roots = build_roots()
-    source_matcher = _order_csv_row_matcher_for_identity(conn, source)
-    target_matcher = _order_csv_row_matcher_for_identity(conn, target)
 
     def _target_updater(row: dict[str, Any]) -> dict[str, Any]:
         row["quantity"] = str(target_ordered + source_ordered)
@@ -2623,10 +2631,10 @@ def merge_open_orders(
     }
 
 
-def _order_csv_row_matcher_for_identity(
+def _order_csv_sibling_ids_for_identity(
     conn: sqlite3.Connection,
     order_row: dict[str, Any],
-) -> Any:
+) -> list[int]:
     sibling_rows = conn.execute(
         """
         SELECT o.order_id
@@ -2644,24 +2652,17 @@ def _order_csv_row_matcher_for_identity(
             str(order_row.get("ordered_item_number") or ""),
         ),
     ).fetchall()
-    sibling_ids = [int(row["order_id"]) for row in sibling_rows]
+    return [int(row["order_id"]) for row in sibling_rows]
+
+
+def _order_csv_row_matcher_for_identity(
+    conn: sqlite3.Connection,
+    order_row: dict[str, Any],
+) -> Any:
+    sibling_ids = _order_csv_sibling_ids_for_identity(conn, order_row)
     order_id = int(order_row["order_id"])
     occurrence_index = sibling_ids.index(order_id) if order_id in sibling_ids else 0
-    seen = -1
-
-    def _matcher(csv_row: dict[str, Any]) -> bool:
-        nonlocal seen
-        is_same_order_key = (
-            str(csv_row.get("supplier") or "").strip() == str(order_row.get("supplier_name") or "")
-            and str(csv_row.get("quotation_number") or "").strip() == str(order_row.get("quotation_number") or "")
-            and str(csv_row.get("item_number") or "").strip() == str(order_row.get("ordered_item_number") or "")
-        )
-        if not is_same_order_key:
-            return False
-        seen += 1
-        return seen == occurrence_index
-
-    return _matcher
+    return _order_csv_row_matcher_for_occurrence(order_row, occurrence_index)
 
 
 def _normalize_manual_pdf_link(
@@ -2865,6 +2866,28 @@ def _insert_order_csv_row_after_match(
         return {"inserted": True, "file": str(csv_file)}
 
     return {"inserted": False, "file": None}
+
+
+def _order_csv_row_matcher_for_occurrence(
+    order_row: dict[str, Any],
+    occurrence_index: int,
+) -> Any:
+    safe_occurrence_index = max(int(occurrence_index), 0)
+    seen = -1
+
+    def _matcher(csv_row: dict[str, Any]) -> bool:
+        nonlocal seen
+        is_same_order_key = (
+            str(csv_row.get("supplier") or "").strip() == str(order_row.get("supplier_name") or "")
+            and str(csv_row.get("quotation_number") or "").strip() == str(order_row.get("quotation_number") or "")
+            and str(csv_row.get("item_number") or "").strip() == str(order_row.get("ordered_item_number") or "")
+        )
+        if not is_same_order_key:
+            return False
+        seen += 1
+        return seen == safe_occurrence_index
+
+    return _matcher
 
 
 def _merge_order_csv_rows(
