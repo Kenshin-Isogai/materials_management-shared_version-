@@ -368,3 +368,18 @@ Format style: Keep a simple date-based log while repository versioning policy is
 - Added targeted regression coverage for:
   - merging non-first sibling rows without deleting/updating the wrong CSV entry
   - splitting a non-final sibling row while preserving sibling-block row order in CSV
+
+## 2026-03-04 (UI navigation improvements for Item Flow / Order Context)
+
+### Changed
+
+- Items page ergonomics:
+  - Added expand/collapse controls to `Item List` to reduce page-height occupation when many items exist.
+  - `Flow` action now auto-collapses `Item List` and smooth-scrolls to `Item Increase/Decrease Timeline` for quicker access.
+- Orders page ergonomics:
+  - `Order List` row-level `Details` now auto-collapses `Order List` and smooth-scrolls to `Order Context`.
+  - Added `Details` action in `Imported Quotations` to open `Order Context` directly via a linked order, removing the need to expand `Order List` first when reviewing quotation details.
+
+### Tests
+
+- Frontend production build executed successfully.

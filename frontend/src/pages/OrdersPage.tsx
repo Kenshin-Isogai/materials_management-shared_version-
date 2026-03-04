@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import useSWR from "swr";
 import { apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
@@ -155,6 +155,7 @@ export function OrdersPage() {
   const [editingOrderExpectedArrival, setEditingOrderExpectedArrival] = useState("");
   const [editingOrderSplitQuantity, setEditingOrderSplitQuantity] = useState("");
   const [focusOrderId, setFocusOrderId] = useState<number | null>(null);
+  const orderContextRef = useRef<HTMLElement | null>(null);
 
   const { data, error, isLoading, mutate: mutateOrders } = useSWR("/orders", () =>
     apiGetWithPagination<Order[]>("/orders?per_page=200")
@@ -245,6 +246,24 @@ export function OrdersPage() {
     const quotationNumbers = new Set(relatedOrders.map((row) => row.quotation_number));
     return (quotationsData?.data ?? []).filter((row) => quotationNumbers.has(row.quotation_number));
   }, [quotationsData?.data, relatedOrders]);
+
+  function focusOrderContext(orderId: number) {
+    setFocusOrderId(orderId);
+    setIsOrderListExpanded(false);
+    requestAnimationFrame(() => {
+      orderContextRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
+  }
+
+  function openQuotationContext(quotationId: number) {
+    const candidate = sortedOrders.find((row) => row.quotation_id === quotationId);
+    if (!candidate) {
+      setMessage(`No linked orders found for quotation #${quotationId}.`);
+      return;
+    }
+    setMessage("");
+    focusOrderContext(candidate.order_id);
+  }
 
   function toggleSort(nextKey: typeof sortKey) {
     if (sortKey === nextKey) {
@@ -993,7 +1012,7 @@ export function OrdersPage() {
                             )}
                             <button
                               className="button-subtle"
-                              onClick={() => setFocusOrderId(row.order_id)}
+                              onClick={() => focusOrderContext(row.order_id)}
                               disabled={loading}
                             >
                               Details
@@ -1018,7 +1037,7 @@ export function OrdersPage() {
         )}
       </section>
 
-      <section className="panel p-4">
+      <section className="panel p-4" ref={orderContextRef}>
         <div className="mb-3 flex items-center justify-between gap-3">
           <h2 className="font-display text-lg font-semibold">Order Context</h2>
           {focusedOrder && (
@@ -1162,6 +1181,7 @@ export function OrdersPage() {
                     <td className="px-2 py-2">{orderCountByQuotationId.get(row.quotation_id) ?? 0}</td>
                     <td className="px-2 py-2">
                       <div className="flex gap-2">
+                        <button className="button-subtle" onClick={() => openQuotationContext(row.quotation_id)} disabled={loading}>Details</button>
                         {editingQuotationId === row.quotation_id ? (
                           <>
                             <button className="button-subtle" onClick={() => saveQuotationEdit(row.quotation_id)} disabled={loading}>Save</button>

@@ -84,7 +84,10 @@ Last updated: 2026-03-04 (JST)
 - Orders page mutation flows (manual import, unregistered batch steps, arrival processing) revalidate both orders and quotations datasets to avoid stale `Imported Quotations` content after successful operations.
 - Order List panel now starts collapsed and can be expanded/collapsed inline, reducing scroll distance to the `Imported Quotations` section when reviewing quotations.
 - Orders page includes an `Order Context` panel (row-level Details action) that consolidates item metadata, related order arrivals, and related quotation metadata to reduce cross-tab lookup overhead.
+- `Order List` row-level `Details` now auto-collapses the list and smooth-scrolls to `Order Context` to reduce manual navigation.
+- `Imported Quotations` now also includes a row-level `Details` action that directly opens `Order Context` using a linked order, so quotation review no longer requires expanding `Order List` first.
 - Item List now includes a row-level `Flow` action that opens an item-specific increase/decrease timeline (when/how many/why) combining transaction logs, expected order arrivals, and active reservation deadlines.
+- Items page `Item List` now supports expand/collapse and auto-collapses when `Flow` is opened, reducing scroll overhead to reach the timeline panel.
 - Items page `Item List` supports client-side sorting by ID, item number, manufacturer, category, and URL.
 - Item List URL values render as clickable external links (`target=_blank`, `rel=noopener noreferrer`).
 - Dashboard overdue section supports keyword filtering and shows a full-table view when more than eight overdue rows match the filter.
