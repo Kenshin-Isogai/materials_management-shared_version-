@@ -115,13 +115,6 @@ Format style: Keep a simple date-based log while repository versioning policy is
 
 ### Changed
 
-- Frontend workflow visibility update:
-  - Added an `Orders` count column to the Orders page `Imported Quotations` table so users can immediately see how many order rows are linked to each quotation.
-
-- Snapshot filtering enhancement:
-  - Added a dedicated description-substring filter on the Snapshot page (`description contains`) so users can narrow rows by terms like `kinematic` in item descriptions.
-  - Extended snapshot API row payloads to include item `description`, enabling description-aware filtering in the frontend.
-
 - Reservation architecture reconstructed for long-term scalability and traceability:
   - reservation creation no longer moves stock from `STOCK` to `RESERVED`
   - release no longer moves stock back to `STOCK`
