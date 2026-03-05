@@ -11,8 +11,9 @@ backend/database/*.sqlite3
 # Quotation assets (PDF/CSV imports)
 quotations/
 
-# Personal/local item list files
+# Personal/local item list files and imported docs
 item_lists/
+imported_documents/
 
 # Exported/generated CSV outputs
 exports/
