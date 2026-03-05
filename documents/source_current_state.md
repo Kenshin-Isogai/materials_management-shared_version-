@@ -1,6 +1,6 @@
 # Source Current State
 
-Last updated: 2026-03-04 (JST)
+Last updated: 2026-03-05 (JST)
 
 ## 1. System Snapshot
 
@@ -75,6 +75,10 @@ Last updated: 2026-03-04 (JST)
 - Reservations page supports partial release/consume via quantity prompt.
 - Reservations page now uses a single expanded `Reservation Entry` table for both one-off and multi-row reservation creation (the separate `Single Reservation` form was removed).
 - Reservations and Projects page headers now include guidance clarifying scope: Reservations is execution-time allocation, Projects is future-demand planning.
+- Projects page requirement entry now supports item search suggestions (`item_number #id`) to reduce lookup time in large item catalogs.
+- Projects page requirement entry now supports bulk text parsing (`item_number,quantity` per line) with immediate warnings for unregistered item numbers and ambiguous duplicate item numbers across manufacturers.
+- Projects page `#id` free-text matching now validates the parsed id against loaded item/assembly options before marking a requirement row as matched.
+- Projects page now supports editing an existing project (load details into form, then save via project update API) including requirement composition/quantities.
 - Orders page `Order List` supports client-side sorting by order id, supplier, item, quantity, expected arrival, and status.
 - Orders page `Order List` now supports inline editing of `expected_arrival` (ETA) for open orders, backed by `PUT /api/orders/{order_id}`.
 - ETA edit flow supports partial postponement using split quantity (e.g., postpone 30 of 50), which creates a second open-order row with the new ETA while preserving traceability-safe quantities.
