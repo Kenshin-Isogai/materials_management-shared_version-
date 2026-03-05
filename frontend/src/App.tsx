@@ -10,6 +10,7 @@ import { LocationsPage } from "./pages/LocationsPage";
 import { MasterPage } from "./pages/MasterPage";
 import { OrdersPage } from "./pages/OrdersPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
+import { PurchaseCandidatesPage } from "./pages/PurchaseCandidatesPage";
 import { ReservationsPage } from "./pages/ReservationsPage";
 import { SnapshotPage } from "./pages/SnapshotPage";
 
@@ -24,6 +25,7 @@ export default function App() {
         <Route path="/reservations" element={<ReservationsPage />} />
         <Route path="/assemblies" element={<AssembliesPage />} />
         <Route path="/projects" element={<ProjectsPage />} />
+        <Route path="/purchase-candidates" element={<PurchaseCandidatesPage />} />
         <Route path="/bom" element={<BomPage />} />
         <Route path="/locations" element={<LocationsPage />} />
         <Route path="/snapshot" element={<SnapshotPage />} />

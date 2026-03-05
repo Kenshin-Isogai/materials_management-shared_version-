@@ -6,6 +6,18 @@
   - Added searchable item target input on Projects requirements (`item_number #item_id` suggestions) to avoid long dropdown scanning when item count is large.
   - Added bulk requirement text parser (`item_number,quantity` per line) that auto-maps registered items and warns on unregistered item numbers.
   - Added project edit workflow in Projects page (load existing project, update requirement rows/quantities/types, save via update API).
+- BOM planning workflow enhancement:
+  - Added optional `target_date` to `POST /api/bom/analyze` for date-aware gap analysis.
+  - BOM projected availability now includes open orders with `expected_arrival <= target_date` in addition to current net available stock.
+  - Added CLI support for date-aware BOM analysis via `bom-analyze --target-date YYYY-MM-DD`.
+  - Updated BOM page UI to accept an analysis date and show the effective analysis basis (`target_date` or current availability).
+- Project planning gap projection enhancement:
+  - Added optional `target_date` query support to `GET /api/projects/{project_id}/gap-analysis`.
+  - Project gap analysis now uses the same future-arrival projection basis as BOM analysis.
+- Pre-PO purchasing workflow enhancement:
+  - Added persistent `purchase_candidates` table and API/CLI workflows for shortage tracking before PO creation.
+  - Added endpoints to create candidates from BOM or project gap analyses and to update candidate status.
+  - Added a dedicated frontend `Purchase Candidates` page and BOM-page `Save Shortages` action.
 
 ### Fixed
 
@@ -21,6 +33,15 @@
 - Reservations page entry workflow simplification:
   - Removed the separate `Single Reservation` form.
   - Expanded the table-based reservation entry section (single + batch in one place) and increased default row count for faster multi-line input.
+- Prevented misleading historical BOM projections by rejecting past `target_date` values for BOM analysis.
+  - `target_date < today` now returns `422` with `INVALID_TARGET_DATE`.
+- Prevented misleading historical project-gap projections by rejecting past `target_date` values in project gap analysis (`422`, `INVALID_TARGET_DATE`).
+
+### Tests
+
+- Added backend service regression tests for BOM date-aware analysis and past-date validation.
+- Added backend API integration tests for `/api/bom/analyze` with and without `target_date`.
+- Added backend service/API regression coverage for project-gap `target_date` projection and purchase-candidate create/list/update flows.
 
 # Change Log
 

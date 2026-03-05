@@ -125,12 +125,36 @@ def _build_parser() -> argparse.ArgumentParser:
 
     bom = sub.add_parser("bom-analyze", help="BOM gap analysis")
     bom.add_argument("--csv-path", required=True)
+    bom.add_argument("--target-date", default=None, help="Optional date (YYYY-MM-DD) for future-arrival-aware analysis")
 
     bom_res = sub.add_parser("bom-reserve", help="Reserve BOM items")
     bom_res.add_argument("--csv-path", required=True)
     bom_res.add_argument("--purpose", default="BOM reserve")
     bom_res.add_argument("--deadline", default=None)
     bom_res.add_argument("--note", default=None)
+
+    pc_list = sub.add_parser("list-purchase-candidates", help="List purchase candidates")
+    pc_list.add_argument("--status", default=None)
+    pc_list.add_argument("--source-type", default=None)
+    pc_list.add_argument("--target-date", default=None)
+
+    pc_bom = sub.add_parser("purchase-candidates-from-bom", help="Create purchase candidates from BOM shortage rows")
+    pc_bom.add_argument("--csv-path", required=True)
+    pc_bom.add_argument("--target-date", default=None)
+    pc_bom.add_argument("--note", default=None)
+
+    pc_project = sub.add_parser(
+        "purchase-candidates-from-project",
+        help="Create purchase candidates from project gap analysis",
+    )
+    pc_project.add_argument("--project-id", type=int, required=True)
+    pc_project.add_argument("--target-date", default=None)
+    pc_project.add_argument("--note", default=None)
+
+    pc_update = sub.add_parser("update-purchase-candidate", help="Update purchase candidate")
+    pc_update.add_argument("--candidate-id", type=int, required=True)
+    pc_update.add_argument("--status", default=None)
+    pc_update.add_argument("--note", default=None)
 
     search = sub.add_parser("search", help="Search items")
     search.add_argument("--q", default=None)
@@ -326,7 +350,7 @@ def main(argv: list[str] | None = None) -> int:
         rows = _load_bom_rows(args.csv_path)
         return _run_with_db(
             args,
-            lambda conn: service.analyze_bom_rows(conn, rows),
+            lambda conn: service.analyze_bom_rows(conn, rows, target_date=args.target_date),
         )
 
     if args.command == "bom-reserve":
@@ -339,6 +363,52 @@ def main(argv: list[str] | None = None) -> int:
                 purpose=args.purpose,
                 deadline=args.deadline,
                 note=args.note,
+            ),
+        )
+
+    if args.command == "list-purchase-candidates":
+        return _run_with_db(
+            args,
+            lambda conn: service.list_purchase_candidates(
+                conn,
+                status=args.status,
+                source_type=args.source_type,
+                target_date=args.target_date,
+                page=1,
+                per_page=1000,
+            )[0],
+        )
+
+    if args.command == "purchase-candidates-from-bom":
+        rows = _load_bom_rows(args.csv_path)
+        return _run_with_db(
+            args,
+            lambda conn: service.create_purchase_candidates_from_bom(
+                conn,
+                rows=rows,
+                target_date=args.target_date,
+                note=args.note,
+            ),
+        )
+
+    if args.command == "purchase-candidates-from-project":
+        return _run_with_db(
+            args,
+            lambda conn: service.create_purchase_candidates_from_project_gap(
+                conn,
+                args.project_id,
+                target_date=args.target_date,
+                note=args.note,
+            ),
+        )
+
+    if args.command == "update-purchase-candidate":
+        return _run_with_db(
+            args,
+            lambda conn: service.update_purchase_candidate(
+                conn,
+                args.candidate_id,
+                {k: v for k, v in {"status": args.status, "note": args.note}.items() if v is not None},
             ),
         )
 

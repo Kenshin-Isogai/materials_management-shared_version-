@@ -197,6 +197,28 @@ SCHEMA_STATEMENTS = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS purchase_candidates (
+        candidate_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_type TEXT NOT NULL CHECK (source_type IN ('BOM', 'PROJECT')),
+        project_id INTEGER,
+        item_id INTEGER,
+        supplier_name TEXT,
+        ordered_item_number TEXT,
+        canonical_item_number TEXT,
+        required_quantity INTEGER NOT NULL CHECK (required_quantity >= 0),
+        available_stock INTEGER NOT NULL CHECK (available_stock >= 0),
+        shortage_quantity INTEGER NOT NULL CHECK (shortage_quantity >= 0),
+        target_date TEXT,
+        status TEXT NOT NULL DEFAULT 'OPEN'
+            CHECK (status IN ('OPEN', 'ORDERING', 'ORDERED', 'CANCELLED')),
+        note TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (project_id) REFERENCES projects (project_id) ON DELETE SET NULL,
+        FOREIGN KEY (item_id) REFERENCES items_master (item_id)
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS supplier_item_aliases (
         alias_id INTEGER PRIMARY KEY AUTOINCREMENT,
         supplier_id INTEGER NOT NULL,
@@ -284,6 +306,10 @@ INDEX_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_project_requirements_project_id ON project_requirements (project_id)",
     "CREATE INDEX IF NOT EXISTS idx_project_requirements_assembly_id ON project_requirements (assembly_id)",
     "CREATE INDEX IF NOT EXISTS idx_project_requirements_item_id ON project_requirements (item_id)",
+    "CREATE INDEX IF NOT EXISTS idx_purchase_candidates_status_target_date ON purchase_candidates (status, target_date)",
+    "CREATE INDEX IF NOT EXISTS idx_purchase_candidates_source_type ON purchase_candidates (source_type)",
+    "CREATE INDEX IF NOT EXISTS idx_purchase_candidates_project_id ON purchase_candidates (project_id)",
+    "CREATE INDEX IF NOT EXISTS idx_purchase_candidates_item_id ON purchase_candidates (item_id)",
     "CREATE INDEX IF NOT EXISTS idx_orders_ordered_item_number ON orders (ordered_item_number)",
     "CREATE INDEX IF NOT EXISTS idx_orders_status_expected_arrival ON orders (status, expected_arrival)",
     "CREATE INDEX IF NOT EXISTS idx_orders_item_status_expected_arrival ON orders (item_id, status, expected_arrival)",
@@ -494,6 +520,7 @@ def migrate_db(conn: sqlite3.Connection) -> None:
     _normalize_date_column(conn, "quotations", "issue_date")
     _normalize_date_column(conn, "projects", "planned_start")
     _normalize_date_column(conn, "reservations", "deadline")
+    _normalize_date_column(conn, "purchase_candidates", "target_date")
 
     conn.commit()
 

@@ -1570,3 +1570,248 @@ def test_reservations_import_csv_endpoint_with_assembly(client):
     rows = response.json()["data"]
     assert len(rows) == 1
     assert rows[0]["quantity"] == 12
+
+
+def test_bom_analyze_endpoint_supports_target_date_projection(client):
+    client.post("/api/manufacturers", json={"name": "API-BOM-DATE-MFG"})
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-BOM-DATE-ITEM",
+            "manufacturer_name": "API-BOM-DATE-MFG",
+            "category": "Lens",
+        },
+    ).json()["data"]
+    client.post(
+        "/api/inventory/adjust",
+        json={
+            "item_id": item["item_id"],
+            "quantity_delta": 2,
+            "location": "STOCK",
+            "note": "seed",
+        },
+    )
+
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "item_number",
+            "quantity",
+            "quotation_number",
+            "issue_date",
+            "order_date",
+            "expected_arrival",
+            "pdf_link",
+        ],
+    )
+    writer.writeheader()
+    writer.writerow(
+        {
+            "item_number": "API-BOM-DATE-ITEM",
+            "quantity": "5",
+            "quotation_number": "Q-BOM-DATE-001",
+            "issue_date": "2026-03-01",
+            "order_date": "2026-03-02",
+            "expected_arrival": "2026-03-20",
+            "pdf_link": "",
+        }
+    )
+    imported = client.post(
+        "/api/orders/import",
+        files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
+        data={"supplier_name": "SupplierBomDate"},
+    )
+    assert imported.status_code == 200
+
+    without_date = client.post(
+        "/api/bom/analyze",
+        json={
+            "rows": [
+                {
+                    "supplier": "SupplierBomDate",
+                    "item_number": "API-BOM-DATE-ITEM",
+                    "required_quantity": 6,
+                }
+            ]
+        },
+    )
+    assert without_date.status_code == 200
+    without_rows = without_date.json()["data"]["rows"]
+    assert int(without_rows[0]["available_stock"]) == 2
+    assert int(without_rows[0]["shortage"]) == 4
+
+    with_date = client.post(
+        "/api/bom/analyze",
+        json={
+            "target_date": "2026-03-25",
+            "rows": [
+                {
+                    "supplier": "SupplierBomDate",
+                    "item_number": "API-BOM-DATE-ITEM",
+                    "required_quantity": 6,
+                }
+            ],
+        },
+    )
+    assert with_date.status_code == 200
+    with_payload = with_date.json()["data"]
+    assert with_payload["target_date"] == "2026-03-25"
+    with_rows = with_payload["rows"]
+    assert int(with_rows[0]["available_stock"]) == 7
+    assert int(with_rows[0]["shortage"]) == 0
+
+
+def test_bom_analyze_endpoint_rejects_past_target_date(client):
+    response = client.post(
+        "/api/bom/analyze",
+        json={
+            "target_date": "2000-01-01",
+            "rows": [
+                {
+                    "supplier": "SupplierPastDate",
+                    "item_number": "ANY-ITEM",
+                    "required_quantity": 1,
+                }
+            ],
+        },
+    )
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["error"]["code"] == "INVALID_TARGET_DATE"
+
+
+def test_project_gap_analysis_endpoint_supports_target_date(client):
+    client.post("/api/manufacturers", json={"name": "API-PROJ-GAP-DATE-MFG"})
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-PROJ-GAP-DATE-ITEM",
+            "manufacturer_name": "API-PROJ-GAP-DATE-MFG",
+            "category": "Lens",
+        },
+    ).json()["data"]
+    client.post(
+        "/api/inventory/adjust",
+        json={"item_id": item["item_id"], "quantity_delta": 2, "location": "STOCK"},
+    )
+    project = client.post(
+        "/api/projects",
+        json={
+            "name": "API-PROJ-GAP-DATE-001",
+            "requirements": [{"item_id": item["item_id"], "quantity": 6}],
+        },
+    ).json()["data"]
+
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "item_number",
+            "quantity",
+            "quotation_number",
+            "issue_date",
+            "order_date",
+            "expected_arrival",
+            "pdf_link",
+        ],
+    )
+    writer.writeheader()
+    writer.writerow(
+        {
+            "item_number": "API-PROJ-GAP-DATE-ITEM",
+            "quantity": "5",
+            "quotation_number": "Q-PROJ-GAP-001",
+            "issue_date": "2026-03-01",
+            "order_date": "2026-03-02",
+            "expected_arrival": "2026-03-20",
+            "pdf_link": "",
+        }
+    )
+    imported = client.post(
+        "/api/orders/import",
+        files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
+        data={"supplier_name": "SupplierProjectGapDate"},
+    )
+    assert imported.status_code == 200
+
+    without_date = client.get(f"/api/projects/{project['project_id']}/gap-analysis")
+    assert without_date.status_code == 200
+    without_rows = without_date.json()["data"]["rows"]
+    assert int(without_rows[0]["available_stock"]) == 2
+    assert int(without_rows[0]["shortage"]) == 4
+
+    with_date = client.get(
+        f"/api/projects/{project['project_id']}/gap-analysis?target_date=2026-03-25"
+    )
+    assert with_date.status_code == 200
+    with_payload = with_date.json()["data"]
+    assert with_payload["target_date"] == "2026-03-25"
+    with_rows = with_payload["rows"]
+    assert int(with_rows[0]["available_stock"]) == 7
+    assert int(with_rows[0]["shortage"]) == 0
+
+
+def test_purchase_candidates_endpoints_flow(client):
+    client.post("/api/manufacturers", json={"name": "API-PURCHASE-CAND-MFG"})
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-PURCHASE-CAND-ITEM",
+            "manufacturer_name": "API-PURCHASE-CAND-MFG",
+            "category": "Lens",
+        },
+    ).json()["data"]
+    client.post(
+        "/api/inventory/adjust",
+        json={"item_id": item["item_id"], "quantity_delta": 2, "location": "STOCK"},
+    )
+    project = client.post(
+        "/api/projects",
+        json={
+            "name": "API-PURCHASE-CAND-PROJ-001",
+            "requirements": [{"item_id": item["item_id"], "quantity": 6}],
+        },
+    ).json()["data"]
+
+    from_project = client.post(
+        f"/api/purchase-candidates/from-project/{project['project_id']}",
+        json={"target_date": "2026-03-25"},
+    )
+    assert from_project.status_code == 200
+    from_project_payload = from_project.json()["data"]
+    assert from_project_payload["created_count"] == 1
+    candidate_id = from_project_payload["created"][0]["candidate_id"]
+
+    listed = client.get("/api/purchase-candidates?status=OPEN&per_page=50")
+    assert listed.status_code == 200
+    assert any(int(row["candidate_id"]) == int(candidate_id) for row in listed.json()["data"])
+
+    updated = client.put(
+        f"/api/purchase-candidates/{candidate_id}",
+        json={"status": "ORDERING", "note": "RFQ in progress"},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["data"]["status"] == "ORDERING"
+    assert updated.json()["data"]["note"] == "RFQ in progress"
+
+    from_bom = client.post(
+        "/api/purchase-candidates/from-bom",
+        json={
+            "rows": [
+                {
+                    "supplier": "SupplierPurchaseCandidate",
+                    "item_number": "API-PURCHASE-CAND-ITEM",
+                    "required_quantity": 5,
+                },
+                {
+                    "supplier": "SupplierPurchaseCandidate",
+                    "item_number": "MISSING-PURCHASE-CAND",
+                    "required_quantity": 2,
+                },
+            ]
+        },
+    )
+    assert from_bom.status_code == 200
+    assert from_bom.json()["data"]["created_count"] == 2

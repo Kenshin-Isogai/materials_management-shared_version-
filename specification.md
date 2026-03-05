@@ -83,6 +83,7 @@ When statements conflict, interpret in this order:
 | `location_assembly_usage` | Assembly deployment by location | location, assembly_id, quantity |
 | `projects` | Project definitions | project_id, name, status |
 | `project_requirements` | Project component needs | requirement_id, project_id |
+| `purchase_candidates` | Persistent pre-PO shortage candidates | candidate_id, source_type, status |
 
 ### **2.3 ER Diagram (Mermaid)**
 
@@ -222,6 +223,24 @@ erDiagram
     TEXT created_at
   }
 
+  purchase_candidates {
+    INTEGER candidate_id PK
+    TEXT source_type
+    INTEGER project_id FK
+    INTEGER item_id FK
+    TEXT supplier_name
+    TEXT ordered_item_number
+    TEXT canonical_item_number
+    INTEGER required_quantity
+    INTEGER available_stock
+    INTEGER shortage_quantity
+    TEXT target_date
+    TEXT status
+    TEXT note
+    TEXT created_at
+    TEXT updated_at
+  }
+
   manufacturers ||--o{ items_master : manufactures
   suppliers ||--o{ quotations : issues
 
@@ -242,6 +261,8 @@ erDiagram
   projects ||--o{ project_requirements : requires
   assemblies ||--o{ project_requirements : requires_assembly
   items_master ||--o{ project_requirements : requires_item
+  projects ||--o{ purchase_candidates : shortage_source
+  items_master ||--o{ purchase_candidates : shortage_item
 
   transaction_log ||--o{ transaction_log : undo_of
 ```
@@ -460,7 +481,29 @@ Defines component requirements per project.
 
 **Check Constraint:** Either assembly_id OR item_id must be set (not both, not neither).
 
-### **3.14 supplier_item_aliases**
+### **3.14 purchase_candidates**
+
+Stores persistent shortage candidates before purchase order creation.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| candidate_id | INTEGER | PK, AUTOINCREMENT | Internal candidate ID |
+| source_type | TEXT | NOT NULL | `BOM` or `PROJECT` |
+| project_id | INTEGER | FK -> projects, Nullable | Linked project (if source is project gap) |
+| item_id | INTEGER | FK -> items_master, Nullable | Canonical item (nullable for unresolved/missing item rows) |
+| supplier_name | TEXT | Nullable | Supplier label for BOM-driven rows |
+| ordered_item_number | TEXT | Nullable | Supplier-facing ordered item number |
+| canonical_item_number | TEXT | Nullable | Canonical item number at analysis time |
+| required_quantity | INTEGER | NOT NULL, CHECK >= 0 | Required quantity at analysis time |
+| available_stock | INTEGER | NOT NULL, CHECK >= 0 | Available quantity at analysis time |
+| shortage_quantity | INTEGER | NOT NULL, CHECK >= 0 | Gap quantity to purchase |
+| target_date | TEXT | Nullable | Analysis target date (`YYYY-MM-DD`) |
+| status | TEXT | NOT NULL, DEFAULT `OPEN` | `OPEN`, `ORDERING`, `ORDERED`, `CANCELLED` |
+| note | TEXT | Nullable | Operator note |
+| created_at | TEXT | NOT NULL | Creation timestamp |
+| updated_at | TEXT | NOT NULL | Last update timestamp |
+
+### **3.15 supplier_item_aliases**
 
 Maps supplier-facing order SKUs (for example pack SKUs) to canonical items in `items_master`.
 
@@ -475,7 +518,7 @@ Maps supplier-facing order SKUs (for example pack SKUs) to canonical items in `i
 
 **Unique Constraint:** `(supplier_id, ordered_item_number)`
 
-### **3.15 category_aliases**
+### **3.16 category_aliases**
 
 Maps raw category names to canonical category names for soft-merge behavior.
 
@@ -743,11 +786,12 @@ All management pages handling CRUD operations (Items, Orders, Reservations, etc.
 | Search | Keyword search (multi-word support), filtering/sorting, inventory snapshot export |
 | Location | Location inspection, assembly view, disassemble |
 | Projects | CRUD projects, requirements, gap analysis |
+| Purchase Candidates | Persistent pre-PO shortage list, status tracking |
 | Orders | Bulk import orders, register missing items, alias CSV import, **batch import+move from unregistered folders**, **orders/quotations management** |
 | Arrival | Process arrivals, partial deliveries (supports bulk resolution) |
 | Movements | Single/batch movements, all operation types, CSV import (`operation_type,item_id,quantity,from_location,to_location,location,note`) |
 | Reserve | Reservation management, BOM batch reservation, CSV import (`item_id` or `assembly`, `quantity`, optional `assembly_quantity/purpose/deadline/note/project_id`) |
-| BOM | Gap analysis, reserve available |
+| BOM | Gap analysis, reserve available, optional date-aware projection |
 | Assemblies | Define assemblies, location usage, requirements |
 | Items | Bulk edit item attributes; soft-merge categories via alias mapping |
 | History | Transaction log, undo operations |
@@ -767,8 +811,12 @@ All management pages handling CRUD operations (Items, Orders, Reservations, etc.
 | `list-reservations` | List reservations |
 | `release-reservation` | Release reservation (full or partial with `--quantity`) |
 | `consume-reservation` | Consume reservation (full or partial with `--quantity`) |
-| `bom-analyze` | BOM gap analysis |
+| `bom-analyze` | BOM gap analysis (supports optional `--target-date`) |
 | `bom-reserve` | Reserve BOM items |
+| `list-purchase-candidates` | List persistent pre-PO shortage candidates |
+| `purchase-candidates-from-bom` | Create shortage candidates from BOM rows |
+| `purchase-candidates-from-project` | Create shortage candidates from project gap |
+| `update-purchase-candidate` | Update candidate status/note |
 | `search` | Search items |
 | `location-inspect` | Inspect location |
 | `location-disassemble` | Return location items to STOCK |
@@ -864,15 +912,33 @@ Base URL: `http://localhost:8000/api`
 | POST | `/projects` | Create project |
 | PUT | `/projects/{project_id}` | Update project |
 | DELETE | `/projects/{project_id}` | Delete project |
-| GET | `/projects/{project_id}/gap-analysis` | Analyze requirement gaps |
+| GET | `/projects/{project_id}/gap-analysis` | Analyze requirement gaps (optional `target_date`) |
 | POST | `/projects/{project_id}/reserve` | Reserve project requirements |
 
 #### **BOM Analysis**
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| POST | `/bom/analyze` | Analyze BOM gaps (accepts CSV or JSON) |
+| POST | `/bom/analyze` | Analyze BOM gaps (accepts CSV or JSON; optional `target_date`) |
 | POST | `/bom/reserve` | Reserve BOM items |
+
+`POST /bom/analyze` request body supports optional `target_date` (`YYYY-MM-DD`):
+- If omitted: compare BOM required quantity against current net available stock.
+- If provided (today or future): compare against projected available stock where
+  `projected_available = current_net_available + open_orders(expected_arrival <= target_date)`.
+- `target_date` earlier than today returns `422` (`INVALID_TARGET_DATE`).
+
+`GET /projects/{project_id}/gap-analysis` supports optional query `target_date` (`YYYY-MM-DD`) with the same projected-availability behavior and validation.
+
+#### **Purchase Candidates**
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/purchase-candidates` | List candidates (supports `?status=`, `?source_type=`, `?target_date=`) |
+| GET | `/purchase-candidates/{candidate_id}` | Get one candidate |
+| POST | `/purchase-candidates/from-bom` | Analyze BOM rows and persist shortage/missing candidates |
+| POST | `/purchase-candidates/from-project/{project_id}` | Analyze project gap and persist shortage candidates |
+| PUT | `/purchase-candidates/{candidate_id}` | Update candidate status/note |
 
 #### **Locations**
 

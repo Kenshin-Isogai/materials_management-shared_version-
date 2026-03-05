@@ -32,6 +32,9 @@ from .schemas import (
     OrderMergeRequest,
     OrderUpdateRequest,
     PartialArrivalRequest,
+    PurchaseCandidateUpdate,
+    PurchaseCandidatesFromBomRequest,
+    PurchaseCandidatesFromProjectRequest,
     ProjectCreate,
     ProjectUpdate,
     ReservationActionRequest,
@@ -615,8 +618,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return ok({"deleted": True})
 
     @app.get("/api/projects/{project_id}/gap-analysis")
-    def get_project_gap(project_id: int, conn= db):
-        return ok(service.project_gap_analysis(conn, project_id))
+    def get_project_gap(project_id: int, target_date: str | None = None, conn= db):
+        return ok(service.project_gap_analysis(conn, project_id, target_date=target_date))
 
     @app.post("/api/projects/{project_id}/reserve")
     def post_project_reserve(project_id: int, conn= db):
@@ -626,7 +629,11 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.post("/api/bom/analyze")
     def post_bom_analyze(body: BomAnalyzeRequest, conn= db):
-        result = service.analyze_bom_rows(conn, [row.model_dump() for row in body.rows])
+        result = service.analyze_bom_rows(
+            conn,
+            [row.model_dump() for row in body.rows],
+            target_date=body.target_date,
+        )
         return ok(result)
 
     @app.post("/api/bom/reserve")
@@ -637,6 +644,65 @@ def create_app(db_path: str | None = None) -> FastAPI:
             purpose=body.purpose,
             deadline=body.deadline,
             note=body.note,
+        )
+        conn.commit()
+        return ok(result)
+
+    @app.get("/api/purchase-candidates")
+    def get_purchase_candidates(
+        status: str | None = None,
+        source_type: str | None = None,
+        target_date: str | None = None,
+        page: int = 1,
+        per_page: int = 50,
+        conn= db,
+    ):
+        data, pagination = service.list_purchase_candidates(
+            conn,
+            status=status,
+            source_type=source_type,
+            target_date=target_date,
+            page=page,
+            per_page=per_page,
+        )
+        return ok(data, pagination)
+
+    @app.get("/api/purchase-candidates/{candidate_id}")
+    def get_purchase_candidate(candidate_id: int, conn= db):
+        return ok(service.get_purchase_candidate(conn, candidate_id))
+
+    @app.post("/api/purchase-candidates/from-bom")
+    def post_purchase_candidates_from_bom(body: PurchaseCandidatesFromBomRequest, conn= db):
+        result = service.create_purchase_candidates_from_bom(
+            conn,
+            rows=[row.model_dump() for row in body.rows],
+            target_date=body.target_date,
+            note=body.note,
+        )
+        conn.commit()
+        return ok(result)
+
+    @app.post("/api/purchase-candidates/from-project/{project_id}")
+    def post_purchase_candidates_from_project(
+        project_id: int,
+        body: PurchaseCandidatesFromProjectRequest,
+        conn= db,
+    ):
+        result = service.create_purchase_candidates_from_project_gap(
+            conn,
+            project_id,
+            target_date=body.target_date,
+            note=body.note,
+        )
+        conn.commit()
+        return ok(result)
+
+    @app.put("/api/purchase-candidates/{candidate_id}")
+    def put_purchase_candidate(candidate_id: int, body: PurchaseCandidateUpdate, conn= db):
+        result = service.update_purchase_candidate(
+            conn,
+            candidate_id,
+            body.model_dump(exclude_unset=True),
         )
         conn.commit()
         return ok(result)

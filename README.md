@@ -71,6 +71,8 @@ Example CLI commands:
 ```powershell
 uv run main.py import-orders --supplier "Thorlabs" --csv-path ".\sample\order_import.csv"
 uv run main.py import-unregistered-orders --continue-on-error
+uv run main.py bom-analyze --csv-path ".\sample\bom.csv" --target-date 2026-04-01
+uv run main.py purchase-candidates-from-project --project-id 1 --target-date 2026-04-01
 uv run main.py move --item-id 1 --quantity 5 --from-location STOCK --to-location BENCH_A
 uv run main.py reserve --item-id 1 --quantity 2 --purpose "Experiment A"
 ```

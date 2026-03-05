@@ -383,6 +383,42 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
   - planned stock decreases from active reservations with `deadline`
 - UI integration: Item List row action opens a dedicated timeline panel showing **when**, **how many (+/-)**, and **why** (demand source reference/reason).
 
+### BOM date-aware gap analysis
+
+- `POST /api/bom/analyze` now accepts optional `target_date` (`YYYY-MM-DD`).
+- Domain rule (`service.analyze_bom_rows`):
+  - no `target_date`: use current net available (`inventory_ledger.on_hand - active_allocations`)
+  - with `target_date` (today/future): use
+    `current_net_available + sum(open order_amount where expected_arrival <= target_date)`
+- Validation:
+  - `target_date` earlier than today is rejected with `422` / `INVALID_TARGET_DATE`.
+- `POST /api/bom/reserve` remains current-stock reservation behavior (execution-time allocation); it does not reserve future arrivals.
+
+### Project gap date-aware analysis
+
+- `GET /api/projects/{project_id}/gap-analysis` now accepts optional query `target_date` (`YYYY-MM-DD`).
+- Domain rule (`service.project_gap_analysis`) mirrors BOM projection logic:
+  - no `target_date`: current net available
+  - with `target_date`: current net available + open orders arriving by date
+- Validation:
+  - `target_date` earlier than today is rejected with `422` / `INVALID_TARGET_DATE`.
+
+### Purchase candidate persistence (pre-PO planning)
+
+- Added persistent shortage table `purchase_candidates` for planning between gap analysis and PO creation.
+- New endpoints:
+  - `GET /api/purchase-candidates`
+  - `GET /api/purchase-candidates/{candidate_id}`
+  - `POST /api/purchase-candidates/from-bom`
+  - `POST /api/purchase-candidates/from-project/{project_id}`
+  - `PUT /api/purchase-candidates/{candidate_id}`
+- Status lifecycle for planning execution:
+  - `OPEN` -> `ORDERING` -> `ORDERED`
+  - `CANCELLED` for abandoned candidates
+- UI flow:
+  - BOM page can persist shortages directly via `Save Shortages`.
+  - Purchase Candidates page tracks status and can create candidates from project gap analysis with optional target date.
+
 ### Order/quotation correction operations (UI + consistency)
 
 - Correction endpoints:

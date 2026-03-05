@@ -246,6 +246,7 @@ class BomLineInput(BaseModel):
 
 class BomAnalyzeRequest(BaseModel):
     rows: list[BomLineInput]
+    target_date: str | None = None
 
 
 class BomReserveRequest(BaseModel):
@@ -253,6 +254,28 @@ class BomReserveRequest(BaseModel):
     purpose: str | None = "BOM reserve"
     deadline: str | None = None
     note: str | None = None
+
+
+class PurchaseCandidatesFromBomRequest(BaseModel):
+    rows: list[BomLineInput]
+    target_date: str | None = None
+    note: str | None = None
+
+
+class PurchaseCandidatesFromProjectRequest(BaseModel):
+    target_date: str | None = None
+    note: str | None = None
+
+
+class PurchaseCandidateUpdate(BaseModel):
+    status: Literal["OPEN", "ORDERING", "ORDERED", "CANCELLED"] | None = None
+    note: str | None = None
+
+    @model_validator(mode="after")
+    def validate_non_empty_payload(self) -> "PurchaseCandidateUpdate":
+        if "status" not in self.__pydantic_fields_set__ and "note" not in self.__pydantic_fields_set__:
+            raise ValueError("at least one of status or note is required")
+        return self
 
 
 class TransactionUndoRequest(BaseModel):

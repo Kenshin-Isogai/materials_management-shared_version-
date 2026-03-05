@@ -16,12 +16,12 @@ Last updated: 2026-03-05 (JST)
 
 - `backend/`
   - `main.py`: CLI entrypoint and command routing
-  - `app/api.py`: HTTP API routes (74 endpoints)
+  - `app/api.py`: HTTP API routes (85 endpoints)
   - `app/service.py`: domain logic (single business logic layer)
-  - `app/db.py`: schema + indexes + migration logic (17 tables)
+  - `app/db.py`: schema + indexes + migration logic (18 tables)
   - `tests/`: integration/service/path tests
 - `frontend/`
-  - `src/pages/`: tab/page UI for dashboard, items, inventory, orders, reservations, assemblies, projects, BOM, locations, snapshot, history, master data
+  - `src/pages/`: tab/page UI for dashboard, items, inventory, orders, reservations, assemblies, projects, purchase candidates, BOM, locations, snapshot, history, master data
   - `src/lib/api.ts`: API client with fallback API base probing
 - `documents/`
   - `technical_documentation.md`
@@ -47,6 +47,7 @@ Last updated: 2026-03-05 (JST)
 - SQLite with normalized core entities:
   - items, inventory ledger, orders/quotations, reservations
   - assemblies/projects with requirements
+  - purchase candidate persistence for pre-PO shortages
   - supplier item aliases and category aliases
   - import jobs/effects for reversible item imports
   - transaction log with undo chain
@@ -79,11 +80,22 @@ Last updated: 2026-03-05 (JST)
 - Projects page requirement entry now supports bulk text parsing (`item_number,quantity` per line) with immediate warnings for unregistered item numbers and ambiguous duplicate item numbers across manufacturers.
 - Projects page `#id` free-text matching now validates the parsed id against loaded item/assembly options before marking a requirement row as matched.
 - Projects page now supports editing an existing project (load details into form, then save via project update API) including requirement composition/quantities.
+- BOM page now supports optional analysis date input and sends `target_date` to `POST /api/bom/analyze` for future-arrival-aware gap checks.
+- BOM page now supports `Save Shortages` to persist shortage/missing rows as purchase candidates before PO creation.
+- Purchase Candidates page provides persistent shortage tracking with status transitions (`OPEN`, `ORDERING`, `ORDERED`, `CANCELLED`) and project-gap candidate creation.
 - Orders page `Order List` supports client-side sorting by order id, supplier, item, quantity, expected arrival, and status.
 - Orders page `Order List` now supports inline editing of `expected_arrival` (ETA) for open orders, backed by `PUT /api/orders/{order_id}`.
 - ETA edit flow supports partial postponement using split quantity (e.g., postpone 30 of 50), which creates a second open-order row with the new ETA while preserving traceability-safe quantities.
 - Backend now persists split/merge/partial-arrival order lineage in `order_lineage_events`; API exposes `POST /api/orders/merge` and `GET /api/orders/{order_id}/lineage` for durable traceability and future scale-out reporting.
 - Snapshot page supports client-side quick search, location/category filtering, low-stock/shortage-only threshold filtering, description-substring filtering, and table-column sorting (item, location, quantity, category) to accelerate planning and purchase checks from projected inventory states.
+- BOM analysis endpoint now supports optional `target_date` projection (`current net available + open orders arriving by date`) while BOM reserve remains current-availability execution behavior.
+- Project gap analysis endpoint (`GET /api/projects/{id}/gap-analysis`) now supports optional `target_date` projection with the same future-date validation rule as BOM analysis.
+- Purchase candidate endpoints are now available:
+  - `GET /api/purchase-candidates`
+  - `GET /api/purchase-candidates/{id}`
+  - `POST /api/purchase-candidates/from-bom`
+  - `POST /api/purchase-candidates/from-project/{project_id}`
+  - `PUT /api/purchase-candidates/{id}`
 - Orders page now also shows an `Imported Quotations` table sourced from `GET /api/quotations` (ID, supplier, quotation number, issue date, pdf_link) with client-side sorting and filtering controls.
 - Imported Quotations includes dedicated quotation-number search plus a secondary text filter for supplier/issue-date/PDF-link fields.
 - Imported Quotations now includes an `Orders` count column so each quotation row shows how many order rows currently reference that quotation.

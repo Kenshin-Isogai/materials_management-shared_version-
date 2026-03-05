@@ -9,6 +9,7 @@ type BomRow = {
 
 type BomResult = {
   rows: Array<Record<string, unknown>>;
+  target_date?: string | null;
 };
 
 const blankRow = (): BomRow => ({
@@ -23,6 +24,8 @@ export function BomPage() {
   ]);
   const [result, setResult] = useState<BomResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [targetDate, setTargetDate] = useState("");
+  const [message, setMessage] = useState("");
 
   function updateRow(index: number, patch: Partial<BomRow>) {
     setRows((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
@@ -45,11 +48,15 @@ export function BomPage() {
   async function analyze() {
     const payloadRows = normalizedRows();
     if (!payloadRows.length) return;
+    setMessage("");
     setLoading(true);
     try {
       const data = await apiSend<BomResult>("/bom/analyze", {
         method: "POST",
-        body: JSON.stringify({ rows: payloadRows })
+        body: JSON.stringify({
+          rows: payloadRows,
+          target_date: targetDate.trim() || null
+        })
       });
       setResult(data);
     } finally {
@@ -60,6 +67,7 @@ export function BomPage() {
   async function reserve() {
     const payloadRows = normalizedRows();
     if (!payloadRows.length) return;
+    setMessage("");
     setLoading(true);
     try {
       const data = await apiSend<{ analysis: Array<Record<string, unknown>> }>(
@@ -73,6 +81,30 @@ export function BomPage() {
         }
       );
       setResult({ rows: data.analysis });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveShortages() {
+    const payloadRows = normalizedRows();
+    if (!payloadRows.length) return;
+    setMessage("");
+    setLoading(true);
+    try {
+      const data = await apiSend<{
+        target_date: string | null;
+        analysis: Array<Record<string, unknown>>;
+        created_count: number;
+      }>("/purchase-candidates/from-bom", {
+        method: "POST",
+        body: JSON.stringify({
+          rows: payloadRows,
+          target_date: targetDate.trim() || null
+        })
+      });
+      setResult({ rows: data.analysis, target_date: data.target_date });
+      setMessage(`Saved ${data.created_count} purchase candidate(s).`);
     } finally {
       setLoading(false);
     }
@@ -141,20 +173,34 @@ export function BomPage() {
           </table>
         </div>
         <div className="mt-3 flex gap-2">
+          <input
+            className="input"
+            type="date"
+            value={targetDate}
+            onChange={(e) => setTargetDate(e.target.value)}
+            title="BOM analysis target date"
+          />
           <button className="button" disabled={loading} onClick={analyze}>
             Analyze
           </button>
           <button className="button-subtle" disabled={loading} onClick={reserve}>
             Reserve Available
           </button>
+          <button className="button-subtle" disabled={loading} onClick={saveShortages}>
+            Save Shortages
+          </button>
         </div>
+        {!!message && <p className="mt-2 text-sm text-slate-700">{message}</p>}
       </section>
 
       <section className="panel p-4">
         <h2 className="mb-3 font-display text-lg font-semibold">Result</h2>
         {!result && <p className="text-sm text-slate-500">No analysis yet.</p>}
         {result && (
-          <div className="overflow-x-auto">
+          <div className="space-y-2 overflow-x-auto">
+            <p className="text-xs text-slate-500">
+              Analysis date: <strong>{result.target_date ?? "current availability"}</strong>
+            </p>
             <table className="min-w-full text-sm">
               <thead>
                 <tr className="border-b border-slate-200 text-left text-slate-500">

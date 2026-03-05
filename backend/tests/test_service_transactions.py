@@ -1571,3 +1571,201 @@ def test_import_reservations_from_rows_with_assembly(conn):
     assert len(created) == 1
     assert int(created[0]["quantity"]) == 12
     assert created[0]["status"] == "ACTIVE"
+
+
+def test_analyze_bom_rows_target_date_includes_pending_arrivals(conn):
+    item = _create_basic_item(conn, item_number="ITEM-BOM-DATE")
+    service.adjust_inventory(conn, item_id=item["item_id"], quantity_delta=2, location="STOCK")
+    service.import_orders_from_rows(
+        conn,
+        supplier_name="BOM-DATE-SUP",
+        rows=[
+            {
+                "item_number": item["item_number"],
+                "quantity": "5",
+                "quotation_number": "QBOM-DATE-001",
+                "issue_date": "2026-03-01",
+                "order_date": "2026-03-02",
+                "expected_arrival": "2026-03-20",
+                "pdf_link": "",
+            }
+        ],
+        source_name="bom_date.csv",
+    )
+
+    without_date = service.analyze_bom_rows(
+        conn,
+        rows=[
+            {
+                "supplier": "BOM-DATE-SUP",
+                "item_number": item["item_number"],
+                "required_quantity": 6,
+            }
+        ],
+    )
+    with_date = service.analyze_bom_rows(
+        conn,
+        rows=[
+            {
+                "supplier": "BOM-DATE-SUP",
+                "item_number": item["item_number"],
+                "required_quantity": 6,
+            }
+        ],
+        target_date="2026-03-25",
+    )
+
+    assert without_date["target_date"] is None
+    assert int(without_date["rows"][0]["available_stock"]) == 2
+    assert int(without_date["rows"][0]["shortage"]) == 4
+    assert with_date["target_date"] == "2026-03-25"
+    assert int(with_date["rows"][0]["available_stock"]) == 7
+    assert int(with_date["rows"][0]["shortage"]) == 0
+
+
+def test_analyze_bom_rows_rejects_past_target_date(conn):
+    item = _create_basic_item(conn, item_number="ITEM-BOM-PAST-DATE")
+
+    with pytest.raises(AppError) as exc_info:
+        service.analyze_bom_rows(
+            conn,
+            rows=[
+                {
+                    "supplier": "BOM-PAST-SUP",
+                    "item_number": item["item_number"],
+                    "required_quantity": 1,
+                }
+            ],
+            target_date="2000-01-01",
+        )
+
+    assert exc_info.value.code == "INVALID_TARGET_DATE"
+
+
+def test_project_gap_analysis_target_date_includes_pending_arrivals(conn):
+    item = _create_basic_item(conn, item_number="ITEM-PROJ-GAP-DATE")
+    service.adjust_inventory(conn, item_id=item["item_id"], quantity_delta=2, location="STOCK")
+    project = service.create_project(
+        conn,
+        {
+            "name": "PROJ-GAP-DATE-001",
+            "status": "PLANNING",
+            "requirements": [
+                {
+                    "item_id": item["item_id"],
+                    "assembly_id": None,
+                    "quantity": 6,
+                }
+            ],
+        },
+    )
+    service.import_orders_from_rows(
+        conn,
+        supplier_name="PROJ-GAP-SUP",
+        rows=[
+            {
+                "item_number": item["item_number"],
+                "quantity": "5",
+                "quotation_number": "QPROJ-GAP-001",
+                "issue_date": "2026-03-01",
+                "order_date": "2026-03-02",
+                "expected_arrival": "2026-03-20",
+                "pdf_link": "",
+            }
+        ],
+        source_name="project_gap.csv",
+    )
+
+    without_date = service.project_gap_analysis(conn, project["project_id"])
+    with_date = service.project_gap_analysis(
+        conn,
+        project["project_id"],
+        target_date="2026-03-25",
+    )
+
+    assert without_date["target_date"] is None
+    assert int(without_date["rows"][0]["available_stock"]) == 2
+    assert int(without_date["rows"][0]["shortage"]) == 4
+    assert with_date["target_date"] == "2026-03-25"
+    assert int(with_date["rows"][0]["available_stock"]) == 7
+    assert int(with_date["rows"][0]["shortage"]) == 0
+
+
+def test_project_gap_analysis_rejects_past_target_date(conn):
+    item = _create_basic_item(conn, item_number="ITEM-PROJ-GAP-PAST")
+    project = service.create_project(
+        conn,
+        {
+            "name": "PROJ-GAP-PAST-001",
+            "requirements": [
+                {
+                    "item_id": item["item_id"],
+                    "assembly_id": None,
+                    "quantity": 1,
+                }
+            ],
+        },
+    )
+
+    with pytest.raises(AppError) as exc_info:
+        service.project_gap_analysis(
+            conn,
+            project["project_id"],
+            target_date="2000-01-01",
+        )
+
+    assert exc_info.value.code == "INVALID_TARGET_DATE"
+
+
+def test_purchase_candidates_create_list_and_update(conn):
+    item = _create_basic_item(conn, item_number="ITEM-PURCHASE-CAND")
+    service.adjust_inventory(conn, item_id=item["item_id"], quantity_delta=2, location="STOCK")
+    project = service.create_project(
+        conn,
+        {
+            "name": "PROJ-PURCHASE-CAND-001",
+            "status": "PLANNING",
+            "requirements": [
+                {
+                    "item_id": item["item_id"],
+                    "assembly_id": None,
+                    "quantity": 6,
+                }
+            ],
+        },
+    )
+
+    from_project = service.create_purchase_candidates_from_project_gap(conn, project["project_id"])
+    assert from_project["created_count"] == 1
+    created_project_candidate = from_project["created"][0]
+    assert created_project_candidate["source_type"] == "PROJECT"
+    assert int(created_project_candidate["shortage_quantity"]) == 4
+    assert created_project_candidate["status"] == "OPEN"
+
+    from_bom = service.create_purchase_candidates_from_bom(
+        conn,
+        rows=[
+            {
+                "supplier": "PURCHASE-CAND-SUP",
+                "item_number": item["item_number"],
+                "required_quantity": 5,
+            },
+            {
+                "supplier": "PURCHASE-CAND-SUP",
+                "item_number": "UNKNOWN-CAND-001",
+                "required_quantity": 3,
+            },
+        ],
+    )
+    assert from_bom["created_count"] == 2
+
+    open_rows, _ = service.list_purchase_candidates(conn, status="OPEN", page=1, per_page=50)
+    assert len(open_rows) >= 3
+
+    updated = service.update_purchase_candidate(
+        conn,
+        int(created_project_candidate["candidate_id"]),
+        {"status": "ORDERING", "note": "RFQ in progress"},
+    )
+    assert updated["status"] == "ORDERING"
+    assert updated["note"] == "RFQ in progress"

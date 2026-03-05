@@ -315,6 +315,51 @@ def _get_total_available_inventory(conn: sqlite3.Connection, item_id: int) -> in
     return sum(qty for _, qty in _list_item_available_inventory(conn, item_id))
 
 
+def _get_pending_arrival_quantity_by_date(
+    conn: sqlite3.Connection,
+    item_id: int,
+    target_date: str,
+) -> int:
+    row = conn.execute(
+        """
+        SELECT COALESCE(SUM(order_amount), 0) AS qty
+        FROM orders
+        WHERE item_id = ?
+          AND status <> 'Arrived'
+          AND expected_arrival IS NOT NULL
+          AND date(expected_arrival) <= date(?)
+        """,
+        (item_id, target_date),
+    ).fetchone()
+    if row is None:
+        return 0
+    return int(row["qty"] or 0)
+
+
+def _get_projected_available_inventory(
+    conn: sqlite3.Connection,
+    item_id: int,
+    *,
+    target_date: str | None = None,
+) -> int:
+    available_now = _get_total_available_inventory(conn, item_id)
+    if target_date is None:
+        return available_now
+    pending_arrivals = _get_pending_arrival_quantity_by_date(conn, item_id, target_date)
+    return available_now + pending_arrivals
+
+
+def _normalize_future_target_date(target_date: str | None, *, field_name: str = "target_date") -> str | None:
+    normalized = normalize_optional_date(target_date, field_name)
+    if normalized is not None and normalized < today_jst():
+        raise AppError(
+            code="INVALID_TARGET_DATE",
+            message=f"{field_name} must be today or later",
+            status_code=422,
+        )
+    return normalized
+
+
 def _apply_inventory_delta(
     conn: sqlite3.Connection,
     item_id: int,
@@ -5069,7 +5114,10 @@ def _expand_requirement_to_items(conn: sqlite3.Connection, requirement: dict[str
     return [(int(row["item_id"]), int(row["quantity"]) * quantity) for row in components]
 
 
-def project_gap_analysis(conn: sqlite3.Connection, project_id: int) -> dict[str, Any]:
+def project_gap_analysis(
+    conn: sqlite3.Connection, project_id: int, *, target_date: str | None = None
+) -> dict[str, Any]:
+    normalized_target_date = _normalize_future_target_date(target_date, field_name="target_date")
     project = get_project(conn, project_id)
     required_by_item: dict[int, int] = {}
     for requirement in project["requirements"]:
@@ -5079,7 +5127,11 @@ def project_gap_analysis(conn: sqlite3.Connection, project_id: int) -> dict[str,
     rows: list[dict[str, Any]] = []
     for item_id, required_qty in sorted(required_by_item.items()):
         item = get_item(conn, item_id)
-        available = _get_total_available_inventory(conn, item_id)
+        available = _get_projected_available_inventory(
+            conn,
+            item_id,
+            target_date=normalized_target_date,
+        )
         shortage = max(0, required_qty - available)
         rows.append(
             {
@@ -5090,7 +5142,7 @@ def project_gap_analysis(conn: sqlite3.Connection, project_id: int) -> dict[str,
                 "shortage": shortage,
             }
         )
-    return {"project": project, "rows": rows}
+    return {"project": project, "target_date": normalized_target_date, "rows": rows}
 
 
 def reserve_project_requirements(conn: sqlite3.Connection, project_id: int) -> dict[str, Any]:
@@ -5116,7 +5168,16 @@ def reserve_project_requirements(conn: sqlite3.Connection, project_id: int) -> d
     return {"project_id": project_id, "created_reservations": created}
 
 
-def analyze_bom_rows(conn: sqlite3.Connection, rows: list[dict[str, Any]]) -> dict[str, Any]:
+def analyze_bom_rows(
+    conn: sqlite3.Connection,
+    rows: list[dict[str, Any]],
+    *,
+    target_date: str | None = None,
+) -> dict[str, Any]:
+    normalized_target_date = _normalize_future_target_date(
+        target_date,
+        field_name="target_date",
+    )
     results: list[dict[str, Any]] = []
     for row in rows:
         supplier_name = require_non_empty(row["supplier"], "supplier")
@@ -5141,7 +5202,11 @@ def analyze_bom_rows(conn: sqlite3.Connection, rows: list[dict[str, Any]]) -> di
             )
             continue
         canonical_required = required_quantity * units
-        available = _get_total_available_inventory(conn, item_id)
+        available = _get_projected_available_inventory(
+            conn,
+            item_id,
+            target_date=normalized_target_date,
+        )
         shortage = max(0, canonical_required - available)
         item = get_item(conn, item_id)
         results.append(
@@ -5156,7 +5221,7 @@ def analyze_bom_rows(conn: sqlite3.Connection, rows: list[dict[str, Any]]) -> di
                 "status": "ok",
             }
         )
-    return {"rows": results}
+    return {"rows": results, "target_date": normalized_target_date}
 
 
 def reserve_bom_rows(
@@ -5188,6 +5253,290 @@ def reserve_bom_rows(
             )
         )
     return {"analysis": analysis["rows"], "created_reservations": created}
+
+
+PURCHASE_CANDIDATE_STATUSES = {"OPEN", "ORDERING", "ORDERED", "CANCELLED"}
+PURCHASE_CANDIDATE_SOURCE_TYPES = {"BOM", "PROJECT"}
+
+
+def _validate_purchase_candidate_status(value: str) -> str:
+    normalized = require_non_empty(value, "status").upper()
+    if normalized not in PURCHASE_CANDIDATE_STATUSES:
+        raise AppError(
+            code="INVALID_PURCHASE_CANDIDATE_STATUS",
+            message=f"status must be one of: {', '.join(sorted(PURCHASE_CANDIDATE_STATUSES))}",
+            status_code=422,
+        )
+    return normalized
+
+
+def _validate_purchase_candidate_source_type(value: str) -> str:
+    normalized = require_non_empty(value, "source_type").upper()
+    if normalized not in PURCHASE_CANDIDATE_SOURCE_TYPES:
+        raise AppError(
+            code="INVALID_PURCHASE_CANDIDATE_SOURCE_TYPE",
+            message=f"source_type must be one of: {', '.join(sorted(PURCHASE_CANDIDATE_SOURCE_TYPES))}",
+            status_code=422,
+        )
+    return normalized
+
+
+def _purchase_candidate_row(conn: sqlite3.Connection, candidate_id: int) -> sqlite3.Row:
+    row = conn.execute(
+        """
+        SELECT
+            pc.*,
+            p.name AS project_name,
+            im.item_number AS item_number,
+            m.name AS manufacturer_name
+        FROM purchase_candidates pc
+        LEFT JOIN projects p ON p.project_id = pc.project_id
+        LEFT JOIN items_master im ON im.item_id = pc.item_id
+        LEFT JOIN manufacturers m ON m.manufacturer_id = im.manufacturer_id
+        WHERE pc.candidate_id = ?
+        """,
+        (candidate_id,),
+    ).fetchone()
+    if row is None:
+        raise AppError(
+            code="PURCHASE_CANDIDATE_NOT_FOUND",
+            message=f"Purchase candidate with id {candidate_id} not found",
+            status_code=404,
+        )
+    return row
+
+
+def get_purchase_candidate(conn: sqlite3.Connection, candidate_id: int) -> dict[str, Any]:
+    return dict(_purchase_candidate_row(conn, candidate_id))
+
+
+def list_purchase_candidates(
+    conn: sqlite3.Connection,
+    *,
+    status: str | None = None,
+    source_type: str | None = None,
+    target_date: str | None = None,
+    page: int = 1,
+    per_page: int = 50,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if status:
+        clauses.append("pc.status = ?")
+        params.append(_validate_purchase_candidate_status(status))
+    if source_type:
+        clauses.append("pc.source_type = ?")
+        params.append(_validate_purchase_candidate_source_type(source_type))
+    if target_date:
+        clauses.append("pc.target_date = ?")
+        params.append(normalize_optional_date(target_date, "target_date"))
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = f"""
+        SELECT
+            pc.*,
+            p.name AS project_name,
+            im.item_number AS item_number,
+            m.name AS manufacturer_name
+        FROM purchase_candidates pc
+        LEFT JOIN projects p ON p.project_id = pc.project_id
+        LEFT JOIN items_master im ON im.item_id = pc.item_id
+        LEFT JOIN manufacturers m ON m.manufacturer_id = im.manufacturer_id
+        {where}
+        ORDER BY
+            CASE pc.status
+                WHEN 'OPEN' THEN 0
+                WHEN 'ORDERING' THEN 1
+                WHEN 'ORDERED' THEN 2
+                ELSE 3
+            END,
+            COALESCE(pc.target_date, '9999-12-31') ASC,
+            pc.updated_at DESC,
+            pc.candidate_id DESC
+    """
+    return _paginate(conn, sql, tuple(params), page, per_page)
+
+
+def _insert_purchase_candidate(
+    conn: sqlite3.Connection,
+    *,
+    source_type: str,
+    project_id: int | None,
+    item_id: int | None,
+    supplier_name: str | None,
+    ordered_item_number: str | None,
+    canonical_item_number: str | None,
+    required_quantity: int,
+    available_stock: int,
+    shortage_quantity: int,
+    target_date: str | None,
+    note: str | None = None,
+) -> dict[str, Any]:
+    normalized_source_type = _validate_purchase_candidate_source_type(source_type)
+    normalized_target_date = _normalize_future_target_date(target_date, field_name="target_date")
+    if required_quantity < 0 or available_stock < 0 or shortage_quantity < 0:
+        raise AppError(
+            code="INVALID_QUANTITY",
+            message="required_quantity, available_stock, and shortage_quantity must be >= 0",
+            status_code=422,
+        )
+    now = now_jst_iso()
+    cur = conn.execute(
+        """
+        INSERT INTO purchase_candidates (
+            source_type,
+            project_id,
+            item_id,
+            supplier_name,
+            ordered_item_number,
+            canonical_item_number,
+            required_quantity,
+            available_stock,
+            shortage_quantity,
+            target_date,
+            status,
+            note,
+            created_at,
+            updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?)
+        """,
+        (
+            normalized_source_type,
+            project_id,
+            item_id,
+            supplier_name,
+            ordered_item_number,
+            canonical_item_number,
+            int(required_quantity),
+            int(available_stock),
+            int(shortage_quantity),
+            normalized_target_date,
+            note,
+            now,
+            now,
+        ),
+    )
+    return get_purchase_candidate(conn, int(cur.lastrowid))
+
+
+def create_purchase_candidates_from_bom(
+    conn: sqlite3.Connection,
+    *,
+    rows: list[dict[str, Any]],
+    target_date: str | None = None,
+    note: str | None = None,
+) -> dict[str, Any]:
+    analysis = analyze_bom_rows(conn, rows, target_date=target_date)
+    created: list[dict[str, Any]] = []
+    for row in analysis["rows"]:
+        status = str(row.get("status") or "")
+        if status == "ok":
+            shortage = int(row.get("shortage") or 0)
+            if shortage <= 0:
+                continue
+            created.append(
+                _insert_purchase_candidate(
+                    conn,
+                    source_type="BOM",
+                    project_id=None,
+                    item_id=int(row["item_id"]),
+                    supplier_name=str(row.get("supplier") or ""),
+                    ordered_item_number=str(row.get("ordered_item_number") or ""),
+                    canonical_item_number=str(row.get("canonical_item_number") or ""),
+                    required_quantity=int(row.get("required_quantity") or 0),
+                    available_stock=int(row.get("available_stock") or 0),
+                    shortage_quantity=shortage,
+                    target_date=analysis.get("target_date"),
+                    note=note or "BOM shortage before purchase order",
+                )
+            )
+            continue
+        if status == "missing_item":
+            required_quantity = int(row.get("required_quantity") or 0)
+            if required_quantity <= 0:
+                continue
+            created.append(
+                _insert_purchase_candidate(
+                    conn,
+                    source_type="BOM",
+                    project_id=None,
+                    item_id=None,
+                    supplier_name=str(row.get("supplier") or ""),
+                    ordered_item_number=str(row.get("item_number") or ""),
+                    canonical_item_number=None,
+                    required_quantity=required_quantity,
+                    available_stock=0,
+                    shortage_quantity=required_quantity,
+                    target_date=analysis.get("target_date"),
+                    note=note or "BOM missing item before purchase order",
+                )
+            )
+    return {
+        "target_date": analysis.get("target_date"),
+        "analysis": analysis["rows"],
+        "created_count": len(created),
+        "created": created,
+    }
+
+
+def create_purchase_candidates_from_project_gap(
+    conn: sqlite3.Connection,
+    project_id: int,
+    *,
+    target_date: str | None = None,
+    note: str | None = None,
+) -> dict[str, Any]:
+    analysis = project_gap_analysis(conn, project_id, target_date=target_date)
+    project = analysis["project"]
+    created: list[dict[str, Any]] = []
+    for row in analysis["rows"]:
+        shortage = int(row.get("shortage") or 0)
+        if shortage <= 0:
+            continue
+        created.append(
+            _insert_purchase_candidate(
+                conn,
+                source_type="PROJECT",
+                project_id=project_id,
+                item_id=int(row["item_id"]),
+                supplier_name=None,
+                ordered_item_number=str(row.get("item_number") or ""),
+                canonical_item_number=str(row.get("item_number") or ""),
+                required_quantity=int(row.get("required_quantity") or 0),
+                available_stock=int(row.get("available_stock") or 0),
+                shortage_quantity=shortage,
+                target_date=analysis.get("target_date"),
+                note=note or f"Project shortage before purchase order: {project['name']}",
+            )
+        )
+    return {
+        "project": project,
+        "target_date": analysis.get("target_date"),
+        "analysis": analysis["rows"],
+        "created_count": len(created),
+        "created": created,
+    }
+
+
+def update_purchase_candidate(
+    conn: sqlite3.Connection, candidate_id: int, payload: dict[str, Any]
+) -> dict[str, Any]:
+    _purchase_candidate_row(conn, candidate_id)
+    updates: list[str] = []
+    params: list[Any] = []
+    if "status" in payload and payload.get("status") is not None:
+        updates.append("status = ?")
+        params.append(_validate_purchase_candidate_status(str(payload["status"])))
+    if "note" in payload:
+        updates.append("note = ?")
+        params.append(payload.get("note"))
+    if updates:
+        updates.append("updated_at = ?")
+        params.append(now_jst_iso())
+        conn.execute(
+            f"UPDATE purchase_candidates SET {', '.join(updates)} WHERE candidate_id = ?",
+            (*params, candidate_id),
+        )
+    return get_purchase_candidate(conn, candidate_id)
 
 
 def list_transactions(
