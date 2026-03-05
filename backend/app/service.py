@@ -91,6 +91,7 @@ def _item_reference_queries() -> dict[str, str]:
         "reservations": "SELECT 1 FROM reservations WHERE item_id = ? LIMIT 1",
         "assembly_components": "SELECT 1 FROM assembly_components WHERE item_id = ? LIMIT 1",
         "project_requirements": "SELECT 1 FROM project_requirements WHERE item_id = ? LIMIT 1",
+        "purchase_candidates": "SELECT 1 FROM purchase_candidates WHERE item_id = ? LIMIT 1",
         "aliases": "SELECT 1 FROM supplier_item_aliases WHERE canonical_item_id = ? LIMIT 1",
     }
 

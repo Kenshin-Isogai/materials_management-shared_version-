@@ -36,12 +36,16 @@
 - Prevented misleading historical BOM projections by rejecting past `target_date` values for BOM analysis.
   - `target_date < today` now returns `422` with `INVALID_TARGET_DATE`.
 - Prevented misleading historical project-gap projections by rejecting past `target_date` values in project gap analysis (`422`, `INVALID_TARGET_DATE`).
+- Item deletion/update reference detection now includes `purchase_candidates`.
+  - Deleting an item referenced by a purchase candidate now returns controlled domain/API error handling (`ITEM_REFERENCED`) instead of bubbling raw SQLite FK errors.
 
 ### Tests
 
 - Added backend service regression tests for BOM date-aware analysis and past-date validation.
 - Added backend API integration tests for `/api/bom/analyze` with and without `target_date`.
 - Added backend service/API regression coverage for project-gap `target_date` projection and purchase-candidate create/list/update flows.
+- Replaced hardcoded near-future target dates in target-date tests with a deterministic far-future value to avoid time-dependent failures.
+- Added backend service regression coverage for item deletion blocked by `purchase_candidates` references.
 
 # Change Log
 

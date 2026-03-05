@@ -415,6 +415,7 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 - Status lifecycle for planning execution:
   - `OPEN` -> `ORDERING` -> `ORDERED`
   - `CANCELLED` for abandoned candidates
+- Item mutation/deletion safeguards treat `purchase_candidates` as item references, so item delete conflicts surface as controlled `ITEM_REFERENCED` errors instead of raw FK exceptions.
 - UI flow:
   - BOM page can persist shortages directly via `Save Shortages`.
   - Purchase Candidates page tracks status and can create candidates from project gap analysis with optional target date.

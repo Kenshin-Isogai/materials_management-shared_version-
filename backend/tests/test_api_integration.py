@@ -4,6 +4,8 @@ import csv
 from io import StringIO
 from pathlib import Path
 
+FUTURE_TARGET_DATE = "2999-12-31"
+
 def test_health_endpoint(client):
     response = client.get("/api/health")
     assert response.status_code == 200
@@ -1644,7 +1646,7 @@ def test_bom_analyze_endpoint_supports_target_date_projection(client):
     with_date = client.post(
         "/api/bom/analyze",
         json={
-            "target_date": "2026-03-25",
+            "target_date": FUTURE_TARGET_DATE,
             "rows": [
                 {
                     "supplier": "SupplierBomDate",
@@ -1656,7 +1658,7 @@ def test_bom_analyze_endpoint_supports_target_date_projection(client):
     )
     assert with_date.status_code == 200
     with_payload = with_date.json()["data"]
-    assert with_payload["target_date"] == "2026-03-25"
+    assert with_payload["target_date"] == FUTURE_TARGET_DATE
     with_rows = with_payload["rows"]
     assert int(with_rows[0]["available_stock"]) == 7
     assert int(with_rows[0]["shortage"]) == 0
@@ -1743,11 +1745,11 @@ def test_project_gap_analysis_endpoint_supports_target_date(client):
     assert int(without_rows[0]["shortage"]) == 4
 
     with_date = client.get(
-        f"/api/projects/{project['project_id']}/gap-analysis?target_date=2026-03-25"
+        f"/api/projects/{project['project_id']}/gap-analysis?target_date={FUTURE_TARGET_DATE}"
     )
     assert with_date.status_code == 200
     with_payload = with_date.json()["data"]
-    assert with_payload["target_date"] == "2026-03-25"
+    assert with_payload["target_date"] == FUTURE_TARGET_DATE
     with_rows = with_payload["rows"]
     assert int(with_rows[0]["available_stock"]) == 7
     assert int(with_rows[0]["shortage"]) == 0
@@ -1777,7 +1779,7 @@ def test_purchase_candidates_endpoints_flow(client):
 
     from_project = client.post(
         f"/api/purchase-candidates/from-project/{project['project_id']}",
-        json={"target_date": "2026-03-25"},
+        json={"target_date": FUTURE_TARGET_DATE},
     )
     assert from_project.status_code == 200
     from_project_payload = from_project.json()["data"]

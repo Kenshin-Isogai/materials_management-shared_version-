@@ -52,6 +52,7 @@ Last updated: 2026-03-05 (JST)
   - import jobs/effects for reversible item imports
   - transaction log with undo chain
 - Referential integrity and checks are enforced with foreign keys, constraints, indexes, and order validation triggers.
+- Item reference guards for identity mutation/deletion include `purchase_candidates`, returning controlled domain errors before raw FK failures.
 
 ### 3.3 Reservation Behavior
 

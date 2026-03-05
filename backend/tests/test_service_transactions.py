@@ -8,6 +8,8 @@ import pytest
 from app.errors import AppError
 from app import service
 
+FUTURE_TARGET_DATE = "2999-12-31"
+
 def _inventory_qty(conn, item_id: int, location: str) -> int:
     row = conn.execute(
         "SELECT quantity FROM inventory_ledger WHERE item_id = ? AND location = ?",
@@ -1612,13 +1614,13 @@ def test_analyze_bom_rows_target_date_includes_pending_arrivals(conn):
                 "required_quantity": 6,
             }
         ],
-        target_date="2026-03-25",
+        target_date=FUTURE_TARGET_DATE,
     )
 
     assert without_date["target_date"] is None
     assert int(without_date["rows"][0]["available_stock"]) == 2
     assert int(without_date["rows"][0]["shortage"]) == 4
-    assert with_date["target_date"] == "2026-03-25"
+    assert with_date["target_date"] == FUTURE_TARGET_DATE
     assert int(with_date["rows"][0]["available_stock"]) == 7
     assert int(with_date["rows"][0]["shortage"]) == 0
 
@@ -1680,13 +1682,13 @@ def test_project_gap_analysis_target_date_includes_pending_arrivals(conn):
     with_date = service.project_gap_analysis(
         conn,
         project["project_id"],
-        target_date="2026-03-25",
+        target_date=FUTURE_TARGET_DATE,
     )
 
     assert without_date["target_date"] is None
     assert int(without_date["rows"][0]["available_stock"]) == 2
     assert int(without_date["rows"][0]["shortage"]) == 4
-    assert with_date["target_date"] == "2026-03-25"
+    assert with_date["target_date"] == FUTURE_TARGET_DATE
     assert int(with_date["rows"][0]["available_stock"]) == 7
     assert int(with_date["rows"][0]["shortage"]) == 0
 
@@ -1769,3 +1771,38 @@ def test_purchase_candidates_create_list_and_update(conn):
     )
     assert updated["status"] == "ORDERING"
     assert updated["note"] == "RFQ in progress"
+
+
+def test_delete_item_blocked_when_referenced_by_purchase_candidate(conn):
+    item = _create_basic_item(conn, item_number="ITEM-PURCHASE-CAND-DELETE")
+    created = service.create_purchase_candidates_from_bom(
+        conn,
+        rows=[
+            {
+                "supplier": "PURCHASE-CAND-DELETE-SUP",
+                "item_number": item["item_number"],
+                "required_quantity": 1,
+            },
+            {
+                "supplier": "PURCHASE-CAND-DELETE-SUP",
+                "item_number": "MISSING-PURCHASE-CAND-DELETE",
+                "required_quantity": 1,
+            },
+        ],
+        target_date=FUTURE_TARGET_DATE,
+    )
+    purchase_row = next(
+        (
+            row
+            for row in created["created"]
+            if row.get("item_id") is not None and int(row["item_id"]) == int(item["item_id"])
+        ),
+        None,
+    )
+    assert purchase_row is not None
+
+    with pytest.raises(AppError) as exc_info:
+        service.delete_item(conn, item["item_id"])
+
+    assert exc_info.value.code == "ITEM_REFERENCED"
+    assert "purchase_candidates" in exc_info.value.message
