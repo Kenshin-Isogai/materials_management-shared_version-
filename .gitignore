@@ -11,9 +11,21 @@ backend/database/*.sqlite3
 # Quotation assets (PDF/CSV imports)
 quotations/
 
+<<<<<<< Updated upstream
 # Personal/local item list files and imported docs
 item_lists/
 imported_documents/
+=======
+<<<<<<< HEAD
+# Personal/local item 
+imported_documents/
+
+=======
+# Personal/local item list files and imported docs
+item_lists/
+imported_documents/
+>>>>>>> 05e3200adb1498363a99972446488064974adf24
+>>>>>>> Stashed changes
 
 # Exported/generated CSV outputs
 exports/
