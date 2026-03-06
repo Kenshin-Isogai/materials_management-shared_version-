@@ -487,7 +487,7 @@ export function ReservationsPage() {
             Single-item and multi-item reservations are both handled here.
           </p>
           <div className="overflow-x-auto">
-            <table className="min-w-full text-sm">
+            <table className="min-w-full text-sm no-sticky-header">
               <thead>
                 <tr className="border-b border-slate-200 text-left text-slate-500">
                   <th className="px-2 py-2">Item</th>
