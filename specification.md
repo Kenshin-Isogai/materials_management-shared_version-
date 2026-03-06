@@ -17,7 +17,7 @@ The Optical Component Inventory Management System provides comprehensive lifecyc
 | **Reservation** | Soft-reserve with purpose/deadline tracking |
 | **BOM Analysis** | Gap analysis, batch reservation |
 | **Assembly Management** | Define reusable component groups |
-| **Project Planning** | Future demand registration and projection |
+| **Project Planning** | Future demand registration, sequential project netting, project-dedicated RFQ workflow |
 | **Undo Operations** | Safe reversal with compensating transactions |
 
 ### **1.3 Non-Functional Requirements**
@@ -83,6 +83,8 @@ When statements conflict, interpret in this order:
 | `location_assembly_usage` | Assembly deployment by location | location, assembly_id, quantity |
 | `projects` | Project definitions | project_id, name, status |
 | `project_requirements` | Project component needs | requirement_id, project_id |
+| `rfq_batches` | Project shortage follow-up batches | rfq_id, project_id, status |
+| `rfq_lines` | Project-dedicated quote/order planning lines | line_id, rfq_id, item_id |
 | `purchase_candidates` | Persistent pre-PO shortage candidates | candidate_id, source_type, status |
 
 ### **2.3 ER Diagram (Mermaid)**
@@ -348,6 +350,7 @@ Tracks purchasing and delivery status.
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
 | order_id | INTEGER | PK, AUTOINCREMENT | Internal ID |
+| project_id | INTEGER | FK -> projects, Nullable | Dedicated project assignment for planning |
 | item_id | INTEGER | FK ↁEitems_master | Item reference |
 | quotation_id | INTEGER | FK ↁEquotations | Quotation reference |
 | order_amount | INTEGER | NOT NULL | Canonical-item quantity used for inventory math |
@@ -372,6 +375,8 @@ When an order is partially delivered:
 - Trigger validation enforces date fields in `YYYY-MM-DD` when present.
 - Trigger validation enforces `status` in `Ordered` / `Arrived`.
 - Trigger autofill ensures missing legacy `ordered_item_number` / `ordered_quantity` / `status` are repaired.
+- When `project_id` is set, the order is excluded from the generic future-arrival pool and treated as dedicated supply for that project in planning.
+- If an `ORDERED` RFQ line owns an order, manual `project_id` updates may only preserve that RFQ-owned project assignment; reassignment or clearing must happen from the RFQ line workflow.
 
 ### **3.7 transaction_log**
 
@@ -464,6 +469,12 @@ Stores project definitions with lifecycle status.
 
 **Valid Statuses:** PLANNING, CONFIRMED, ACTIVE, COMPLETED, CANCELLED
 
+**Planning Semantics:**
+- `PLANNING`: draft only; does not consume capacity of later projects
+- `CONFIRMED`: committed demand; does consume capacity of later projects
+- `ACTIVE`: committed/executing demand; still consumes planning capacity
+- `COMPLETED`, `CANCELLED`: excluded from future planning
+
 ### **3.13 project_requirements**
 
 Defines component requirements per project.
@@ -481,7 +492,46 @@ Defines component requirements per project.
 
 **Check Constraint:** Either assembly_id OR item_id must be set (not both, not neither).
 
-### **3.14 purchase_candidates**
+### **3.14 rfq_batches**
+
+Stores project-specific RFQ batches created from planning shortages.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| rfq_id | INTEGER | PK, AUTOINCREMENT | Internal RFQ batch ID |
+| project_id | INTEGER | FK -> projects, NOT NULL | Owning project |
+| title | TEXT | NOT NULL | Operator-facing batch title |
+| target_date | TEXT | Nullable | Planning date used when the batch was created |
+| status | TEXT | NOT NULL, DEFAULT `OPEN` | `OPEN`, `CLOSED`, `CANCELLED` |
+| note | TEXT | Nullable | Batch note |
+| created_at | TEXT | NOT NULL | Creation timestamp |
+| updated_at | TEXT | NOT NULL | Last update timestamp |
+
+### **3.15 rfq_lines**
+
+Stores project-dedicated quote / order-planning line items.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| line_id | INTEGER | PK, AUTOINCREMENT | Internal line ID |
+| rfq_id | INTEGER | FK -> rfq_batches, NOT NULL | Parent RFQ batch |
+| item_id | INTEGER | FK -> items_master, NOT NULL | Canonical item |
+| requested_quantity | INTEGER | NOT NULL, CHECK > 0 | Initial shortage quantity copied from planning |
+| finalized_quantity | INTEGER | NOT NULL, CHECK > 0 | Quantity after RFQ refinement |
+| supplier_name | TEXT | Nullable | Supplier label selected during RFQ |
+| lead_time_days | INTEGER | Nullable, CHECK >= 0 | Lead time captured during RFQ |
+| expected_arrival | TEXT | Nullable | Planned arrival date used by planning |
+| linked_order_id | INTEGER | FK -> orders, Nullable | Real order row linked after purchasing |
+| status | TEXT | NOT NULL, DEFAULT `DRAFT` | `DRAFT`, `SENT`, `QUOTED`, `ORDERED`, `CANCELLED` |
+| note | TEXT | Nullable | Operator note |
+| created_at | TEXT | NOT NULL | Creation timestamp |
+| updated_at | TEXT | NOT NULL | Last update timestamp |
+
+**Planning Rule:**
+- `QUOTED` lines with `expected_arrival` count as project-dedicated planned supply and must not retain a `linked_order_id`.
+- `ORDERED` lines must link to an actual order row; only the ordered link drives `orders.project_id`, and any reassignment or clearing of that dedicated ownership must happen by changing the RFQ line link/status.
+
+### **3.16 purchase_candidates**
 
 Stores persistent shortage candidates before purchase order creation.
 
@@ -503,7 +553,7 @@ Stores persistent shortage candidates before purchase order creation.
 | created_at | TEXT | NOT NULL | Creation timestamp |
 | updated_at | TEXT | NOT NULL | Last update timestamp |
 
-### **3.15 supplier_item_aliases**
+### **3.17 supplier_item_aliases**
 
 Maps supplier-facing order SKUs (for example pack SKUs) to canonical items in `items_master`.
 
@@ -518,7 +568,7 @@ Maps supplier-facing order SKUs (for example pack SKUs) to canonical items in `i
 
 **Unique Constraint:** `(supplier_id, ordered_item_number)`
 
-### **3.16 category_aliases**
+### **3.18 category_aliases**
 
 Maps raw category names to canonical category names for soft-merge behavior.
 
@@ -748,6 +798,8 @@ Projected Available =
 
 **Purpose:** View inventory state at any point in time (past or future).
 
+**Boundary:** Inventory snapshot is a physical-stock projection tool. It does not apply project planning commitments or RFQ-dedicated backlog netting; those belong to the Planning pipeline.
+
 **Service Functions:**
 
 | Function | Purpose |
@@ -785,8 +837,10 @@ All management pages handling CRUD operations (Items, Orders, Reservations, etc.
 | **Dashboard** | **Overview: overdue arrivals, expiring reservations, low stock alerts, recent activity** |
 | Search | Keyword search (multi-word support), filtering/sorting, inventory snapshot export |
 | Location | Location inspection, assembly view, disassemble |
-| Projects | CRUD projects, requirements, gap analysis |
-| Purchase Candidates | Persistent pre-PO shortage list, status tracking |
+| Projects | CRUD project definitions, requirements, lifecycle status |
+| Planning | Sequential project netting, start-date shortage analysis, convert uncovered rows into RFQ batches |
+| RFQ | Project-dedicated RFQ batches, quote refinement, order linking |
+| Purchase Candidates | Secondary persistent shortage list for BOM / ad-hoc pre-PO tracking |
 | Orders | Bulk import orders, register missing items, alias CSV import, **batch import+move from unregistered folders**, **orders/quotations management** |
 | Arrival | Process arrivals, partial deliveries (supports bulk resolution) |
 | Movements | Single/batch movements, all operation types, CSV import (`operation_type,item_id,quantity,from_location,to_location,location,note`) |
@@ -869,9 +923,9 @@ Base URL: `http://localhost:8000/api`
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/orders` | List orders (supports `?status=`, `?supplier=`) |
+| GET | `/orders` | List orders (supports `?status=`, `?supplier=`; includes optional `project_id`) |
 | GET | `/orders/{order_id}` | Get order details |
-| PUT | `/orders/{order_id}` | Update order ETA (or split partial ETA via `split_quantity`) |
+| PUT | `/orders/{order_id}` | Update order ETA, project assignment for non-RFQ-managed orders, or split partial ETA via `split_quantity` |
 | POST | `/orders/merge` | Merge two open compatible orders |
 | GET | `/orders/{order_id}/lineage` | List split/merge lineage events for the order |
 | POST | `/orders/import` | Import orders from CSV |
@@ -912,8 +966,20 @@ Base URL: `http://localhost:8000/api`
 | POST | `/projects` | Create project |
 | PUT | `/projects/{project_id}` | Update project |
 | DELETE | `/projects/{project_id}` | Delete project |
-| GET | `/projects/{project_id}/gap-analysis` | Analyze requirement gaps (optional `target_date`) |
+| GET | `/projects/{project_id}/gap-analysis` | Compatibility start-date gap view (optional `target_date`) |
+| GET | `/projects/{project_id}/planning-analysis` | Sequential planning analysis with earlier-project netting |
 | POST | `/projects/{project_id}/reserve` | Reserve project requirements |
+| POST | `/projects/{project_id}/rfq-batches` | Create an RFQ batch from uncovered planning rows |
+
+#### **Planning & RFQ**
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/planning/pipeline` | List committed projects in sequential planning order |
+| GET | `/rfq-batches` | List RFQ batches |
+| GET | `/rfq-batches/{rfq_id}` | Get RFQ batch with line items |
+| PUT | `/rfq-batches/{rfq_id}` | Update RFQ batch metadata/status |
+| PUT | `/rfq-lines/{line_id}` | Update RFQ line quantities, dates, status, or linked order (`linked_order_id` is cleared automatically unless the final status is `ORDERED`) |
 
 #### **BOM Analysis**
 
@@ -928,7 +994,20 @@ Base URL: `http://localhost:8000/api`
   `projected_available = current_net_available + open_orders(expected_arrival <= target_date)`.
 - `target_date` earlier than today returns `422` (`INVALID_TARGET_DATE`).
 
-`GET /projects/{project_id}/gap-analysis` supports optional query `target_date` (`YYYY-MM-DD`) with the same projected-availability behavior and validation.
+`GET /projects/{project_id}/planning-analysis` is the canonical future-planning view:
+- committed projects (`CONFIRMED`, `ACTIVE`) are processed in planned-start order
+- committed projects stay in the planning pipeline even after their stored `planned_start` passes; if a committed project has no persisted `planned_start`, planning treats it as `today_jst()` for sequencing
+- earlier shortages become backlog demand that consumes later generic arrivals before newer projects can use them
+- dedicated project supply comes from:
+  - `QUOTED` RFQ lines with `expected_arrival`
+  - orders whose `project_id` is set
+- generic supply comes from current net available stock plus open orders with `project_id IS NULL`
+
+`POST /projects/{project_id}/rfq-batches` accepts optional `target_date` (`YYYY-MM-DD`) so RFQ creation can reuse the planning date currently being reviewed. When this flow auto-promotes a `PLANNING` project, it persists that analysis date as `projects.planned_start`.
+
+`GET /projects/{project_id}/gap-analysis` remains as a compatibility view over the same planning engine and reports:
+- `available_stock`: total on-time supply visible at the project start date
+- `shortage`: uncovered quantity at the project start date
 
 #### **Purchase Candidates**
 

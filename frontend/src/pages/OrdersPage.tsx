@@ -144,7 +144,7 @@ export function OrdersPage() {
   const [editingQuotationId, setEditingQuotationId] = useState<number | null>(null);
   const [editingQuotationPdfLink, setEditingQuotationPdfLink] = useState("");
   const [editingQuotationIssueDate, setEditingQuotationIssueDate] = useState("");
-  const [sortKey, setSortKey] = useState<"order_id" | "supplier_name" | "canonical_item_number" | "order_amount" | "expected_arrival" | "status">("order_id");
+  const [sortKey, setSortKey] = useState<"order_id" | "supplier_name" | "project_name" | "canonical_item_number" | "order_amount" | "expected_arrival" | "status">("order_id");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [quotationSortKey, setQuotationSortKey] = useState<"quotation_id" | "supplier_name" | "quotation_number" | "issue_date" | "pdf_link">("quotation_id");
   const [quotationSortDirection, setQuotationSortDirection] = useState<"asc" | "desc">("desc");
@@ -935,6 +935,7 @@ export function OrdersPage() {
                     <tr className="border-b border-slate-200 text-left text-slate-500">
                       <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("order_id")}>Order {sortIndicator("order_id")}</button></th>
                       <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("supplier_name")}>Supplier {sortIndicator("supplier_name")}</button></th>
+                      <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("project_name")}>Project {sortIndicator("project_name")}</button></th>
                       <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("canonical_item_number")}>Item {sortIndicator("canonical_item_number")}</button></th>
                       <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("order_amount")}>Qty {sortIndicator("order_amount")}</button></th>
                       <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("expected_arrival")}>Expected {sortIndicator("expected_arrival")}</button></th>
@@ -947,6 +948,7 @@ export function OrdersPage() {
                       <tr key={row.order_id} className="border-b border-slate-100">
                         <td className="px-2 py-2">#{row.order_id}</td>
                         <td className="px-2 py-2">{row.supplier_name}</td>
+                        <td className="px-2 py-2">{row.project_name ?? "-"}</td>
                         <td className="px-2 py-2 font-semibold">{row.canonical_item_number}</td>
                         <td className="px-2 py-2">{row.order_amount}</td>
                         <td className="px-2 py-2">
@@ -1065,6 +1067,9 @@ export function OrdersPage() {
               </p>
               <p>
                 <strong>Expected arrival:</strong> {focusedOrder.expected_arrival ?? "-"}
+              </p>
+              <p>
+                <strong>Project:</strong> {focusedOrder.project_name ?? "-"}
               </p>
               <p>
                 <strong>Category:</strong> {focusedItem?.category ?? "-"} / <strong>Description:</strong>{" "}

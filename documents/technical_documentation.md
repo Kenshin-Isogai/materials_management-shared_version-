@@ -394,14 +394,48 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
   - `target_date` earlier than today is rejected with `422` / `INVALID_TARGET_DATE`.
 - `POST /api/bom/reserve` remains current-stock reservation behavior (execution-time allocation); it does not reserve future arrivals.
 
-### Project gap date-aware analysis
+### Sequential project planning pipeline
 
-- `GET /api/projects/{project_id}/gap-analysis` now accepts optional query `target_date` (`YYYY-MM-DD`).
-- Domain rule (`service.project_gap_analysis`) mirrors BOM projection logic:
-  - no `target_date`: current net available
-  - with `target_date`: current net available + open orders arriving by date
-- Validation:
-  - `target_date` earlier than today is rejected with `422` / `INVALID_TARGET_DATE`.
+- Planning is no longer modeled as an isolated per-project gap check.
+- Canonical planning endpoint: `GET /api/projects/{project_id}/planning-analysis`
+- Supporting summary endpoint: `GET /api/planning/pipeline`
+- Core domain rule (`service.project_planning_analysis` / `_build_project_planning_snapshot`):
+  - committed projects are those with status `CONFIRMED` or `ACTIVE`
+  - committed projects are processed in `planned_start` order
+  - committed projects remain in the pipeline after their `planned_start` passes; missing committed start dates are treated as `today_jst()` for sequencing until a date is persisted
+  - current stock starts from `inventory_ledger.on_hand - active_allocations`
+  - generic future supply comes only from open orders with `project_id IS NULL`
+  - project-dedicated supply comes from:
+    - `QUOTED` RFQ lines with `expected_arrival`
+    - open orders with `project_id = <project>`
+  - dedicated supply is consumed before generic supply at the project start date
+  - if a project is still short at its start date, that shortage becomes backlog demand
+  - later generic arrivals satisfy older backlog before they become available to later projects
+- Compatibility endpoint: `GET /api/projects/{project_id}/gap-analysis`
+  - still returns `available_stock` / `shortage`
+  - internally reads from the sequential planning engine instead of the old isolated projection rule
+
+### Project RFQ workflow
+
+- Added persistent RFQ tables:
+  - `rfq_batches`
+  - `rfq_lines`
+- RFQ creation flow:
+  - `POST /api/projects/{project_id}/rfq-batches`
+  - creates line items from current on-time shortage rows only
+  - accepts optional `target_date` so RFQ creation can reuse the planning date currently under review
+  - auto-promotes a `PLANNING` project to `CONFIRMED` so later projects will net against it
+  - when auto-promoted, the project persists the analysis `target_date` as `projects.planned_start`
+- RFQ maintenance endpoints:
+  - `GET /api/rfq-batches`
+  - `GET /api/rfq-batches/{rfq_id}`
+  - `PUT /api/rfq-batches/{rfq_id}`
+  - `PUT /api/rfq-lines/{line_id}`
+- RFQ line semantics:
+  - `QUOTED` + `expected_arrival` => dedicated planned supply
+  - `ORDERED` requires `linked_order_id`
+  - non-`ORDERED` RFQ states clear `linked_order_id`, so quoted supply stays in the planning-only path
+  - only `ORDERED` links set `orders.project_id`; removing or replacing the link clears/reassigns the dedicated order ownership to match the RFQ line state, and manual `/api/orders/{id}` project edits must not override that RFQ-owned assignment
 
 ### Purchase candidate persistence (pre-PO planning)
 
@@ -418,7 +452,7 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 - Item mutation/deletion safeguards treat `purchase_candidates` as item references, so item delete conflicts surface as controlled `ITEM_REFERENCED` errors instead of raw FK exceptions.
 - UI flow:
   - BOM page can persist shortages directly via `Save Shortages`.
-  - Purchase Candidates page tracks status and can create candidates from project gap analysis with optional target date.
+  - Purchase Candidates page remains available for BOM / ad-hoc pre-PO tracking, but the main multi-project workflow now runs through Planning + RFQ.
 
 ### Order/quotation correction operations (UI + consistency)
 

@@ -326,6 +326,7 @@ def _get_pending_arrival_quantity_by_date(
         SELECT COALESCE(SUM(order_amount), 0) AS qty
         FROM orders
         WHERE item_id = ?
+          AND project_id IS NULL
           AND status <> 'Arrived'
           AND expected_arrival IS NOT NULL
           AND date(expected_arrival) <= date(?)
@@ -2426,6 +2427,7 @@ def list_orders(
         SELECT
             o.*,
             im.item_number AS canonical_item_number,
+            p.name AS project_name,
             s.supplier_id,
             s.name AS supplier_name,
             q.quotation_number,
@@ -2435,6 +2437,7 @@ def list_orders(
         JOIN items_master im ON im.item_id = o.item_id
         JOIN quotations q ON q.quotation_id = o.quotation_id
         JOIN suppliers s ON s.supplier_id = q.supplier_id
+        LEFT JOIN projects p ON p.project_id = o.project_id
         {where}
         ORDER BY o.order_date DESC, o.order_id DESC
     """
@@ -2447,6 +2450,7 @@ def get_order(conn: sqlite3.Connection, order_id: int) -> dict[str, Any]:
         SELECT
             o.*,
             im.item_number AS canonical_item_number,
+            p.name AS project_name,
             q.quotation_number,
             q.issue_date,
             q.pdf_link,
@@ -2456,6 +2460,7 @@ def get_order(conn: sqlite3.Connection, order_id: int) -> dict[str, Any]:
         JOIN items_master im ON im.item_id = o.item_id
         JOIN quotations q ON q.quotation_id = o.quotation_id
         JOIN suppliers s ON s.supplier_id = q.supplier_id
+        LEFT JOIN projects p ON p.project_id = o.project_id
         WHERE o.order_id = ?
         """,
         (order_id,),
@@ -2532,7 +2537,11 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
             message="Arrived orders cannot be updated",
             status_code=409,
         )
-    expected_arrival = normalize_optional_date(payload.get("expected_arrival"), "expected_arrival")
+    expected_arrival = (
+        normalize_optional_date(payload.get("expected_arrival"), "expected_arrival")
+        if "expected_arrival" in payload
+        else current.get("expected_arrival")
+    )
     status = payload.get("status")
     if status and status != "Ordered":
         raise AppError(
@@ -2540,6 +2549,25 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
             message="update_order only supports status='Ordered' for open orders",
             status_code=422,
         )
+    project_id = payload.get("project_id") if "project_id" in payload else None
+    if project_id is not None:
+        project_id = int(project_id)
+        _get_entity_or_404(
+            conn,
+            "projects",
+            "project_id",
+            project_id,
+            "PROJECT_NOT_FOUND",
+            f"Project with id {project_id} not found",
+        )
+    if "project_id" in payload:
+        rfq_project_id = _ordered_rfq_project_for_order(conn, order_id)
+        if rfq_project_id is not None and project_id != rfq_project_id:
+            raise AppError(
+                code="ORDER_PROJECT_MANAGED_BY_RFQ",
+                message="project_id is managed by the ORDERED RFQ line linked to this order",
+                status_code=409,
+            )
 
     split_quantity_raw = payload.get("split_quantity")
     split_quantity: int | None
@@ -2559,13 +2587,15 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
     roots = build_roots()
 
     if split_quantity is None:
+        updates = ["expected_arrival = ?", "status = COALESCE(?, status)"]
+        params: list[Any] = [expected_arrival, status]
+        if "project_id" in payload:
+            updates.append("project_id = ?")
+            params.append(project_id)
+        params.append(order_id)
         conn.execute(
-            """
-            UPDATE orders
-            SET expected_arrival = ?, status = COALESCE(?, status)
-            WHERE order_id = ?
-            """,
-            (expected_arrival, status, order_id),
+            f"UPDATE orders SET {', '.join(updates)} WHERE order_id = ?",
+            tuple(params),
         )
         updated = get_order(conn, order_id)
         updated_expected_arrival = updated.get("expected_arrival")
@@ -2621,24 +2651,27 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
             status_code=409,
         )
 
+    split_updates = ["order_amount = ?", "ordered_quantity = ?", "status = COALESCE(?, status)"]
+    split_params: list[Any] = [remaining_order_amount, remaining_ordered, status]
+    if "project_id" in payload:
+        split_updates.append("project_id = ?")
+        split_params.append(project_id)
+    split_params.append(order_id)
     conn.execute(
-        """
-        UPDATE orders
-        SET order_amount = ?, ordered_quantity = ?, status = COALESCE(?, status)
-        WHERE order_id = ?
-        """,
-        (remaining_order_amount, remaining_ordered, status, order_id),
+        f"UPDATE orders SET {', '.join(split_updates)} WHERE order_id = ?",
+        tuple(split_params),
     )
     cur = conn.execute(
         """
         INSERT INTO orders (
-            item_id, quotation_id, order_amount, ordered_quantity, ordered_item_number,
+            item_id, quotation_id, project_id, order_amount, ordered_quantity, ordered_item_number,
             order_date, expected_arrival, arrival_date, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 'Ordered')
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, 'Ordered')
         """,
         (
             current["item_id"],
             current["quotation_id"],
+            project_id if "project_id" in payload else current.get("project_id"),
             split_quantity,
             split_ordered,
             current["ordered_item_number"],
@@ -2742,7 +2775,7 @@ def merge_open_orders(
             status_code=409,
         )
 
-    merge_keys = ("item_id", "quotation_id", "ordered_item_number")
+    merge_keys = ("item_id", "quotation_id", "ordered_item_number", "project_id")
     if any(source[key] != target[key] for key in merge_keys):
         raise AppError(
             code="ORDER_MERGE_SCOPE_MISMATCH",
@@ -5115,50 +5148,507 @@ def _expand_requirement_to_items(conn: sqlite3.Connection, requirement: dict[str
     return [(int(row["item_id"]), int(row["quantity"]) * quantity) for row in components]
 
 
-def project_gap_analysis(
-    conn: sqlite3.Connection, project_id: int, *, target_date: str | None = None
-) -> dict[str, Any]:
-    normalized_target_date = _normalize_future_target_date(target_date, field_name="target_date")
-    project = get_project(conn, project_id)
+PLANNING_COMMITTED_PROJECT_STATUSES = {"CONFIRMED", "ACTIVE"}
+RFQ_BATCH_STATUSES = {"OPEN", "CLOSED", "CANCELLED"}
+RFQ_LINE_STATUSES = {"DRAFT", "SENT", "QUOTED", "ORDERED", "CANCELLED"}
+RFQ_LINE_SUPPLY_STATUSES = {"QUOTED"}
+
+
+def _validate_rfq_batch_status(value: str) -> str:
+    normalized = require_non_empty(value, "status").upper()
+    if normalized not in RFQ_BATCH_STATUSES:
+        raise AppError(
+            code="INVALID_RFQ_BATCH_STATUS",
+            message=f"status must be one of: {', '.join(sorted(RFQ_BATCH_STATUSES))}",
+            status_code=422,
+        )
+    return normalized
+
+
+def _validate_rfq_line_status(value: str) -> str:
+    normalized = require_non_empty(value, "status").upper()
+    if normalized not in RFQ_LINE_STATUSES:
+        raise AppError(
+            code="INVALID_RFQ_LINE_STATUS",
+            message=f"status must be one of: {', '.join(sorted(RFQ_LINE_STATUSES))}",
+            status_code=422,
+        )
+    return normalized
+
+
+def _aggregate_project_required_by_item(
+    conn: sqlite3.Connection,
+    project: dict[str, Any],
+) -> dict[int, int]:
     required_by_item: dict[int, int] = {}
     for requirement in project["requirements"]:
         for item_id, quantity in _expand_requirement_to_items(conn, requirement):
             required_by_item[item_id] = required_by_item.get(item_id, 0) + quantity
+    return required_by_item
 
-    rows: list[dict[str, Any]] = []
-    for item_id, required_qty in sorted(required_by_item.items()):
-        item = get_item(conn, item_id)
-        available = _get_projected_available_inventory(
-            conn,
-            item_id,
-            target_date=normalized_target_date,
+
+def _normalize_project_planning_date(
+    project: dict[str, Any],
+    *,
+    target_date: str | None = None,
+) -> str:
+    if target_date is not None:
+        normalized_target = _normalize_future_target_date(target_date, field_name="target_date")
+        if normalized_target is None:
+            raise AppError(
+                code="PROJECT_PLANNING_DATE_REQUIRED",
+                message="target_date is required for project planning analysis",
+                status_code=422,
+            )
+        return normalized_target
+    normalized_start = normalize_optional_date(project.get("planned_start"), "planned_start")
+    if normalized_start is not None:
+        return normalized_start
+    return today_jst()
+
+
+def _load_item_planning_metadata(
+    conn: sqlite3.Connection, item_ids: list[int]
+) -> dict[int, dict[str, Any]]:
+    if not item_ids:
+        return {}
+    placeholders = ",".join("?" for _ in item_ids)
+    rows = conn.execute(
+        f"""
+        SELECT
+            im.item_id,
+            im.item_number,
+            m.name AS manufacturer_name
+        FROM items_master im
+        JOIN manufacturers m ON m.manufacturer_id = im.manufacturer_id
+        WHERE im.item_id IN ({placeholders})
+        """,
+        tuple(item_ids),
+    ).fetchall()
+    return {int(row["item_id"]): dict(row) for row in rows}
+
+
+def _build_project_planning_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    project_id: int | None = None,
+    target_date: str | None = None,
+) -> dict[str, Any]:
+    selected_project: dict[str, Any] | None = None
+    selected_target_date: str | None = None
+    if project_id is not None:
+        selected_project = get_project(conn, project_id)
+        if selected_project["status"] in {"COMPLETED", "CANCELLED"}:
+            raise AppError(
+                code="PROJECT_NOT_PLANNABLE",
+                message="Completed or cancelled projects are excluded from planning pipeline analysis",
+                status_code=409,
+            )
+        selected_target_date = _normalize_project_planning_date(
+            selected_project,
+            target_date=target_date,
         )
-        shortage = max(0, required_qty - available)
-        rows.append(
-            {
+
+    committed_rows = conn.execute(
+        """
+        SELECT project_id
+        FROM projects
+        WHERE status IN ('CONFIRMED', 'ACTIVE')
+          AND (? IS NULL OR project_id <> ?)
+        ORDER BY COALESCE(planned_start, ?) ASC, project_id ASC
+        """,
+        (project_id, project_id, today_jst()),
+    ).fetchall()
+
+    planning_projects: list[dict[str, Any]] = []
+    for row in committed_rows:
+        project = get_project(conn, int(row["project_id"]))
+        project["effective_planned_start"] = _normalize_project_planning_date(project)
+        planning_projects.append(project)
+
+    if selected_project is not None:
+        preview_project = dict(selected_project)
+        preview_project["effective_planned_start"] = selected_target_date
+        preview_project["is_planning_preview"] = (
+            preview_project["status"] not in PLANNING_COMMITTED_PROJECT_STATUSES
+        )
+        planning_projects.append(preview_project)
+
+    planning_projects.sort(
+        key=lambda row: (str(row["effective_planned_start"]), int(row["project_id"]))
+    )
+    project_sequence = [int(project["project_id"]) for project in planning_projects]
+    project_rank = {project_id: idx for idx, project_id in enumerate(project_sequence)}
+
+    required_by_project: dict[int, dict[int, int]] = {}
+    item_ids: set[int] = set()
+    for project in planning_projects:
+        project_required = _aggregate_project_required_by_item(conn, project)
+        required_by_project[int(project["project_id"])] = project_required
+        item_ids.update(project_required.keys())
+
+    item_ids_sorted = sorted(item_ids)
+    item_metadata = _load_item_planning_metadata(conn, item_ids_sorted)
+
+    generic_order_events: dict[int, list[dict[str, Any]]] = {item_id: [] for item_id in item_ids_sorted}
+    project_order_events: dict[int, list[dict[str, Any]]] = {item_id: [] for item_id in item_ids_sorted}
+    rfq_supply_events: dict[int, list[dict[str, Any]]] = {item_id: [] for item_id in item_ids_sorted}
+
+    if item_ids_sorted:
+        item_placeholders = ",".join("?" for _ in item_ids_sorted)
+
+        generic_rows = conn.execute(
+            f"""
+            SELECT order_id, item_id, order_amount AS quantity, expected_arrival
+            FROM orders
+            WHERE project_id IS NULL
+              AND status <> 'Arrived'
+              AND expected_arrival IS NOT NULL
+              AND item_id IN ({item_placeholders})
+            ORDER BY expected_arrival ASC, order_id ASC
+            """,
+            tuple(item_ids_sorted),
+        ).fetchall()
+        for row in generic_rows:
+            generic_order_events[int(row["item_id"])].append(
+                {
+                    "ref_id": int(row["order_id"]),
+                    "date": str(row["expected_arrival"]),
+                    "quantity": int(row["quantity"]),
+                }
+            )
+
+        if project_sequence:
+            project_placeholders = ",".join("?" for _ in project_sequence)
+            project_rows = conn.execute(
+                f"""
+                SELECT order_id, item_id, project_id, order_amount AS quantity, expected_arrival
+                FROM orders
+                WHERE project_id IN ({project_placeholders})
+                  AND status <> 'Arrived'
+                  AND expected_arrival IS NOT NULL
+                  AND item_id IN ({item_placeholders})
+                ORDER BY expected_arrival ASC, order_id ASC
+                """,
+                tuple(project_sequence) + tuple(item_ids_sorted),
+            ).fetchall()
+            for row in project_rows:
+                project_order_events[int(row["item_id"])].append(
+                    {
+                        "ref_id": int(row["order_id"]),
+                        "date": str(row["expected_arrival"]),
+                        "quantity": int(row["quantity"]),
+                        "project_id": int(row["project_id"]),
+                    }
+                )
+
+            rfq_rows = conn.execute(
+                f"""
+                SELECT
+                    rl.line_id,
+                    rl.item_id,
+                    rb.project_id,
+                    rl.finalized_quantity AS quantity,
+                    rl.expected_arrival
+                FROM rfq_lines rl
+                JOIN rfq_batches rb ON rb.rfq_id = rl.rfq_id
+                WHERE rb.project_id IN ({project_placeholders})
+                  AND rb.status <> 'CANCELLED'
+                  AND rl.status = 'QUOTED'
+                  AND rl.linked_order_id IS NULL
+                  AND rl.expected_arrival IS NOT NULL
+                  AND rl.item_id IN ({item_placeholders})
+                ORDER BY rl.expected_arrival ASC, rl.line_id ASC
+                """,
+                tuple(project_sequence) + tuple(item_ids_sorted),
+            ).fetchall()
+            for row in rfq_rows:
+                rfq_supply_events[int(row["item_id"])].append(
+                    {
+                        "ref_id": int(row["line_id"]),
+                        "date": str(row["expected_arrival"]),
+                        "quantity": int(row["quantity"]),
+                        "project_id": int(row["project_id"]),
+                    }
+                )
+
+    metrics: dict[int, dict[int, dict[str, Any]]] = {}
+    for project in planning_projects:
+        pid = int(project["project_id"])
+        metrics[pid] = {}
+        for item_id, required_qty in required_by_project.get(pid, {}).items():
+            metrics[pid][item_id] = {
+                "required_quantity": int(required_qty),
+                "dedicated_supply_by_start": 0,
+                "generic_available_at_start": 0,
+                "generic_allocated_quantity": 0,
+                "covered_on_time_quantity": 0,
+                "shortage_at_start": 0,
+                "future_generic_recovery_quantity": 0,
+                "future_dedicated_recovery_quantity": 0,
+                "recovered_after_start_quantity": 0,
+                "pending_backlog_quantity": 0,
+            }
+
+    for item_id in item_ids_sorted:
+        generic_pool = _get_total_available_inventory(conn, item_id)
+        dedicated_ready: dict[int, int] = {pid: 0 for pid in project_sequence}
+        events: list[dict[str, Any]] = []
+
+        for row in generic_order_events.get(item_id, []):
+            events.append(
+                {
+                    "kind": "generic_supply",
+                    "date": row["date"],
+                    "priority": 1,
+                    "quantity": row["quantity"],
+                    "ref_id": row["ref_id"],
+                    "project_rank": -1,
+                }
+            )
+        for row in project_order_events.get(item_id, []):
+            events.append(
+                {
+                    "kind": "dedicated_supply",
+                    "date": row["date"],
+                    "priority": 0,
+                    "quantity": row["quantity"],
+                    "project_id": row["project_id"],
+                    "ref_id": row["ref_id"],
+                    "project_rank": project_rank.get(int(row["project_id"]), 0),
+                }
+            )
+        for row in rfq_supply_events.get(item_id, []):
+            events.append(
+                {
+                    "kind": "dedicated_supply",
+                    "date": row["date"],
+                    "priority": 0,
+                    "quantity": row["quantity"],
+                    "project_id": row["project_id"],
+                    "ref_id": row["ref_id"],
+                    "project_rank": project_rank.get(int(row["project_id"]), 0),
+                }
+            )
+        for project in planning_projects:
+            pid = int(project["project_id"])
+            required_qty = required_by_project.get(pid, {}).get(item_id)
+            if not required_qty:
+                continue
+            events.append(
+                {
+                    "kind": "demand",
+                    "date": str(project["effective_planned_start"]),
+                    "priority": 2,
+                    "quantity": int(required_qty),
+                    "project_id": pid,
+                    "ref_id": pid,
+                    "project_rank": project_rank[pid],
+                }
+            )
+
+        events.sort(
+            key=lambda event: (
+                str(event["date"]),
+                int(event["priority"]),
+                int(event["project_rank"]),
+                int(event["ref_id"]),
+            )
+        )
+
+        for event in events:
+            if event["kind"] == "dedicated_supply":
+                project_metric = metrics[int(event["project_id"])][item_id]
+                remaining_qty = int(event["quantity"])
+                backlog_qty = int(project_metric["pending_backlog_quantity"])
+                if backlog_qty > 0:
+                    recovered_qty = min(remaining_qty, backlog_qty)
+                    project_metric["pending_backlog_quantity"] = backlog_qty - recovered_qty
+                    project_metric["recovered_after_start_quantity"] += recovered_qty
+                    project_metric["future_dedicated_recovery_quantity"] += recovered_qty
+                    remaining_qty -= recovered_qty
+                if remaining_qty > 0:
+                    dedicated_ready[int(event["project_id"])] = (
+                        dedicated_ready.get(int(event["project_id"]), 0) + remaining_qty
+                    )
+                continue
+
+            if event["kind"] == "generic_supply":
+                remaining_qty = int(event["quantity"])
+                for pid in project_sequence:
+                    project_metric = metrics.get(pid, {}).get(item_id)
+                    if project_metric is None:
+                        continue
+                    backlog_qty = int(project_metric["pending_backlog_quantity"])
+                    if backlog_qty <= 0:
+                        continue
+                    recovered_qty = min(remaining_qty, backlog_qty)
+                    project_metric["pending_backlog_quantity"] = backlog_qty - recovered_qty
+                    project_metric["recovered_after_start_quantity"] += recovered_qty
+                    project_metric["future_generic_recovery_quantity"] += recovered_qty
+                    remaining_qty -= recovered_qty
+                    if remaining_qty <= 0:
+                        break
+                if remaining_qty > 0:
+                    generic_pool += remaining_qty
+                continue
+
+            pid = int(event["project_id"])
+            project_metric = metrics[pid][item_id]
+            project_metric["generic_available_at_start"] = generic_pool
+            required_qty = int(project_metric["required_quantity"])
+            dedicated_qty = min(required_qty, dedicated_ready.get(pid, 0))
+            dedicated_ready[pid] = dedicated_ready.get(pid, 0) - dedicated_qty
+            remaining_qty = required_qty - dedicated_qty
+            generic_qty = min(remaining_qty, generic_pool)
+            generic_pool -= generic_qty
+            shortage_qty = remaining_qty - generic_qty
+            project_metric["dedicated_supply_by_start"] = dedicated_qty
+            project_metric["generic_allocated_quantity"] = generic_qty
+            project_metric["covered_on_time_quantity"] = dedicated_qty + generic_qty
+            project_metric["shortage_at_start"] = shortage_qty
+            project_metric["pending_backlog_quantity"] = shortage_qty
+
+    project_rows: dict[int, list[dict[str, Any]]] = {}
+    project_summaries: list[dict[str, Any]] = []
+    for project in planning_projects:
+        pid = int(project["project_id"])
+        rows: list[dict[str, Any]] = []
+        for item_id, project_metric in metrics.get(pid, {}).items():
+            item_meta = item_metadata.get(item_id)
+            pending_backlog = int(project_metric.pop("pending_backlog_quantity"))
+            row = {
                 "item_id": item_id,
-                "item_number": item["item_number"],
-                "required_quantity": required_qty,
-                "available_stock": available,
-                "shortage": shortage,
+                "item_number": item_meta.get("item_number") if item_meta else None,
+                "manufacturer_name": item_meta.get("manufacturer_name") if item_meta else None,
+                **project_metric,
+                "remaining_shortage_quantity": pending_backlog,
+            }
+            rows.append(row)
+        rows.sort(
+            key=lambda row: (
+                -int(row["shortage_at_start"]),
+                -int(row["remaining_shortage_quantity"]),
+                str(row["item_number"] or ""),
+            )
+        )
+        project_rows[pid] = rows
+        project_summaries.append(
+            {
+                "project_id": pid,
+                "name": project["name"],
+                "status": project["status"],
+                "planned_start": str(project["effective_planned_start"]),
+                "is_planning_preview": bool(project.get("is_planning_preview")),
+                "item_count": len(rows),
+                "required_total": sum(int(row["required_quantity"]) for row in rows),
+                "covered_on_time_total": sum(int(row["covered_on_time_quantity"]) for row in rows),
+                "shortage_at_start_total": sum(int(row["shortage_at_start"]) for row in rows),
+                "remaining_shortage_total": sum(
+                    int(row["remaining_shortage_quantity"]) for row in rows
+                ),
             }
         )
-    return {"project": project, "target_date": normalized_target_date, "rows": rows}
+
+    return {
+        "project_summaries": project_summaries,
+        "project_rows": project_rows,
+        "project_lookup": {int(project["project_id"]): project for project in planning_projects},
+        "selected_project_id": project_id,
+        "selected_target_date": selected_target_date,
+    }
+
+
+def list_planning_pipeline(
+    conn: sqlite3.Connection,
+    *,
+    preview_project_id: int | None = None,
+    target_date: str | None = None,
+) -> list[dict[str, Any]]:
+    snapshot = _build_project_planning_snapshot(
+        conn,
+        project_id=preview_project_id,
+        target_date=target_date,
+    )
+    return snapshot["project_summaries"]
+
+
+def project_planning_analysis(
+    conn: sqlite3.Connection,
+    project_id: int,
+    *,
+    target_date: str | None = None,
+) -> dict[str, Any]:
+    snapshot = _build_project_planning_snapshot(
+        conn,
+        project_id=project_id,
+        target_date=target_date,
+    )
+    project = get_project(conn, project_id)
+    target = snapshot["selected_target_date"]
+    if target is None:
+        target = _normalize_project_planning_date(project)
+    summary = next(
+        (row for row in snapshot["project_summaries"] if int(row["project_id"]) == project_id),
+        None,
+    )
+    if summary is None:
+        raise AppError(
+            code="PROJECT_NOT_IN_PLANNING_PIPELINE",
+            message="Project is not present in the planning pipeline",
+            status_code=404,
+        )
+    project = dict(project)
+    project["planned_start"] = target
+    return {
+        "project": project,
+        "target_date": target,
+        "summary": summary,
+        "rows": snapshot["project_rows"].get(project_id, []),
+        "pipeline": snapshot["project_summaries"],
+    }
+
+
+def project_gap_analysis(
+    conn: sqlite3.Connection, project_id: int, *, target_date: str | None = None
+) -> dict[str, Any]:
+    planning = project_planning_analysis(conn, project_id, target_date=target_date)
+    original_project = get_project(conn, project_id)
+    rows = [
+        {
+            "item_id": row["item_id"],
+            "item_number": row["item_number"],
+            "required_quantity": row["required_quantity"],
+            "available_stock": int(row["generic_available_at_start"])
+            + int(row["dedicated_supply_by_start"]),
+            "shortage": row["shortage_at_start"],
+            "dedicated_supply_by_start": row["dedicated_supply_by_start"],
+            "generic_allocated_quantity": row["generic_allocated_quantity"],
+            "remaining_shortage_quantity": row["remaining_shortage_quantity"],
+        }
+        for row in planning["rows"]
+    ]
+    return {
+        "project": planning["project"],
+        "target_date": target_date if target_date is not None else original_project.get("planned_start"),
+        "summary": planning["summary"],
+        "rows": rows,
+    }
 
 
 def reserve_project_requirements(conn: sqlite3.Connection, project_id: int) -> dict[str, Any]:
     project = get_project(conn, project_id)
-    analysis = project_gap_analysis(conn, project_id)
     created: list[dict[str, Any]] = []
-    for row in analysis["rows"]:
-        reserve_qty = min(int(row["required_quantity"]), int(row["available_stock"]))
+    required_by_item = _aggregate_project_required_by_item(conn, project)
+    for item_id, required_qty in sorted(required_by_item.items()):
+        reserve_qty = min(required_qty, _get_total_available_inventory(conn, item_id))
         if reserve_qty <= 0:
             continue
         created.append(
             create_reservation(
                 conn,
                 {
-                    "item_id": row["item_id"],
+                    "item_id": item_id,
                     "quantity": reserve_qty,
                     "purpose": f"Project:{project['name']}",
                     "note": "Project requirement reservation",
@@ -5167,6 +5657,380 @@ def reserve_project_requirements(conn: sqlite3.Connection, project_id: int) -> d
             )
         )
     return {"project_id": project_id, "created_reservations": created}
+
+
+def _rfq_batch_row(conn: sqlite3.Connection, rfq_id: int) -> sqlite3.Row:
+    row = conn.execute(
+        """
+        SELECT
+            rb.*,
+            p.name AS project_name,
+            COUNT(rl.line_id) AS line_count,
+            COALESCE(SUM(rl.finalized_quantity), 0) AS finalized_quantity_total,
+            COALESCE(SUM(CASE WHEN rl.status = 'QUOTED' THEN 1 ELSE 0 END), 0) AS quoted_line_count,
+            COALESCE(SUM(CASE WHEN rl.status = 'ORDERED' THEN 1 ELSE 0 END), 0) AS ordered_line_count
+        FROM rfq_batches rb
+        JOIN projects p ON p.project_id = rb.project_id
+        LEFT JOIN rfq_lines rl ON rl.rfq_id = rb.rfq_id
+        WHERE rb.rfq_id = ?
+        GROUP BY rb.rfq_id
+        """,
+        (rfq_id,),
+    ).fetchone()
+    if row is None:
+        raise AppError(
+            code="RFQ_BATCH_NOT_FOUND",
+            message=f"RFQ batch with id {rfq_id} not found",
+            status_code=404,
+        )
+    return row
+
+
+def _rfq_line_detail_rows(conn: sqlite3.Connection, rfq_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT
+            rl.*,
+            im.item_number,
+            m.name AS manufacturer_name,
+            o.project_id AS linked_order_project_id,
+            o.expected_arrival AS linked_order_expected_arrival,
+            q.quotation_number AS linked_quotation_number,
+            s.name AS linked_order_supplier_name
+        FROM rfq_lines rl
+        JOIN items_master im ON im.item_id = rl.item_id
+        JOIN manufacturers m ON m.manufacturer_id = im.manufacturer_id
+        LEFT JOIN orders o ON o.order_id = rl.linked_order_id
+        LEFT JOIN quotations q ON q.quotation_id = o.quotation_id
+        LEFT JOIN suppliers s ON s.supplier_id = q.supplier_id
+        WHERE rl.rfq_id = ?
+        ORDER BY rl.line_id ASC
+        """,
+        (rfq_id,),
+    ).fetchall()
+    return _rows_to_dict(rows)
+
+
+def get_rfq_batch(conn: sqlite3.Connection, rfq_id: int) -> dict[str, Any]:
+    data = dict(_rfq_batch_row(conn, rfq_id))
+    data["lines"] = _rfq_line_detail_rows(conn, rfq_id)
+    return data
+
+
+def list_rfq_batches(
+    conn: sqlite3.Connection,
+    *,
+    status: str | None = None,
+    project_id: int | None = None,
+    page: int = 1,
+    per_page: int = 50,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if status:
+        clauses.append("rb.status = ?")
+        params.append(_validate_rfq_batch_status(status))
+    if project_id is not None:
+        clauses.append("rb.project_id = ?")
+        params.append(project_id)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = f"""
+        SELECT
+            rb.*,
+            p.name AS project_name,
+            COUNT(rl.line_id) AS line_count,
+            COALESCE(SUM(rl.finalized_quantity), 0) AS finalized_quantity_total,
+            COALESCE(SUM(CASE WHEN rl.status = 'QUOTED' THEN 1 ELSE 0 END), 0) AS quoted_line_count,
+            COALESCE(SUM(CASE WHEN rl.status = 'ORDERED' THEN 1 ELSE 0 END), 0) AS ordered_line_count
+        FROM rfq_batches rb
+        JOIN projects p ON p.project_id = rb.project_id
+        LEFT JOIN rfq_lines rl ON rl.rfq_id = rb.rfq_id
+        {where}
+        GROUP BY rb.rfq_id
+        ORDER BY rb.updated_at DESC, rb.rfq_id DESC
+    """
+    return _paginate(conn, sql, tuple(params), page, per_page)
+
+
+def create_project_rfq_batch_from_analysis(
+    conn: sqlite3.Connection,
+    project_id: int,
+    *,
+    title: str | None = None,
+    note: str | None = None,
+    target_date: str | None = None,
+) -> dict[str, Any]:
+    analysis = project_planning_analysis(conn, project_id, target_date=target_date)
+    project = analysis["project"]
+    shortage_rows = [row for row in analysis["rows"] if int(row["shortage_at_start"]) > 0]
+    if not shortage_rows:
+        raise AppError(
+            code="RFQ_NOT_REQUIRED",
+            message="Project has no uncovered on-time shortage rows to convert into RFQ lines",
+            status_code=409,
+        )
+    now = now_jst_iso()
+    resolved_title = (title or "").strip() or f"{project['name']} RFQ ({analysis['target_date']})"
+    cur = conn.execute(
+        """
+        INSERT INTO rfq_batches (
+            project_id, title, target_date, status, note, created_at, updated_at
+        ) VALUES (?, ?, ?, 'OPEN', ?, ?, ?)
+        """,
+        (
+            project_id,
+            resolved_title,
+            analysis["target_date"],
+            note,
+            now,
+            now,
+        ),
+    )
+    rfq_id = int(cur.lastrowid)
+    for row in shortage_rows:
+        shortage_qty = int(row["shortage_at_start"])
+        conn.execute(
+            """
+            INSERT INTO rfq_lines (
+                rfq_id,
+                item_id,
+                requested_quantity,
+                finalized_quantity,
+                status,
+                note,
+                created_at,
+                updated_at
+            ) VALUES (?, ?, ?, ?, 'DRAFT', ?, ?, ?)
+            """,
+            (
+                rfq_id,
+                int(row["item_id"]),
+                shortage_qty,
+                shortage_qty,
+                f"Created from planning shortage at {analysis['target_date']}",
+                now,
+                now,
+            ),
+        )
+    if project["status"] == "PLANNING":
+        conn.execute(
+            """
+            UPDATE projects
+            SET status = 'CONFIRMED',
+                planned_start = ?,
+                updated_at = ?
+            WHERE project_id = ?
+            """,
+            (analysis["target_date"], now, project_id),
+        )
+    return get_rfq_batch(conn, rfq_id)
+
+
+def update_rfq_batch(
+    conn: sqlite3.Connection,
+    rfq_id: int,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    _rfq_batch_row(conn, rfq_id)
+    updates: list[str] = []
+    params: list[Any] = []
+    if "title" in payload:
+        updates.append("title = ?")
+        params.append(require_non_empty(str(payload.get("title") or ""), "title"))
+    if "status" in payload and payload.get("status") is not None:
+        updates.append("status = ?")
+        params.append(_validate_rfq_batch_status(str(payload["status"])))
+    if "note" in payload:
+        updates.append("note = ?")
+        params.append(payload.get("note"))
+    if updates:
+        updates.append("updated_at = ?")
+        params.append(now_jst_iso())
+        conn.execute(
+            f"UPDATE rfq_batches SET {', '.join(updates)} WHERE rfq_id = ?",
+            (*params, rfq_id),
+        )
+    return get_rfq_batch(conn, rfq_id)
+
+
+def _rfq_line_row(conn: sqlite3.Connection, line_id: int) -> sqlite3.Row:
+    row = conn.execute(
+        """
+        SELECT
+            rl.*,
+            rb.project_id,
+            rb.status AS batch_status
+        FROM rfq_lines rl
+        JOIN rfq_batches rb ON rb.rfq_id = rl.rfq_id
+        WHERE rl.line_id = ?
+        """,
+        (line_id,),
+    ).fetchone()
+    if row is None:
+        raise AppError(
+            code="RFQ_LINE_NOT_FOUND",
+            message=f"RFQ line with id {line_id} not found",
+            status_code=404,
+        )
+    return row
+
+
+def _ordered_rfq_project_for_order(conn: sqlite3.Connection, order_id: int) -> int | None:
+    rows = conn.execute(
+        """
+        SELECT DISTINCT rb.project_id
+        FROM rfq_lines rl
+        JOIN rfq_batches rb ON rb.rfq_id = rl.rfq_id
+        WHERE rl.linked_order_id = ?
+          AND rl.status = 'ORDERED'
+        """,
+        (order_id,),
+    ).fetchall()
+    if not rows:
+        return None
+    project_ids = {int(row["project_id"]) for row in rows}
+    if len(project_ids) > 1:
+        raise AppError(
+            code="RFQ_ORDER_PROJECT_CONFLICT",
+            message="Linked order is attached to multiple projects via ordered RFQ lines",
+            status_code=409,
+        )
+    return next(iter(project_ids))
+
+
+def _sync_order_project_assignment_from_rfq(conn: sqlite3.Connection, order_id: int) -> None:
+    project_id = _ordered_rfq_project_for_order(conn, order_id)
+    conn.execute(
+        "UPDATE orders SET project_id = ? WHERE order_id = ?",
+        (project_id, order_id),
+    )
+
+
+def update_rfq_line(
+    conn: sqlite3.Connection,
+    line_id: int,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    current = _rfq_line_row(conn, line_id)
+    batch_project_id = int(current["project_id"])
+    current_linked_order_id = (
+        int(current["linked_order_id"]) if current["linked_order_id"] is not None else None
+    )
+    updates: list[str] = []
+    params: list[Any] = []
+
+    if "requested_quantity" in payload and payload.get("requested_quantity") is not None:
+        updates.append("requested_quantity = ?")
+        params.append(require_positive_int(int(payload["requested_quantity"]), "requested_quantity"))
+    if "finalized_quantity" in payload and payload.get("finalized_quantity") is not None:
+        updates.append("finalized_quantity = ?")
+        params.append(require_positive_int(int(payload["finalized_quantity"]), "finalized_quantity"))
+    if "supplier_name" in payload:
+        supplier_name = payload.get("supplier_name")
+        updates.append("supplier_name = ?")
+        params.append(require_non_empty(str(supplier_name), "supplier_name") if supplier_name else None)
+    if "lead_time_days" in payload:
+        lead_time_days = payload.get("lead_time_days")
+        updates.append("lead_time_days = ?")
+        params.append(None if lead_time_days is None else int(lead_time_days))
+    normalized_expected_arrival = (
+        normalize_optional_date(payload.get("expected_arrival"), "expected_arrival")
+        if "expected_arrival" in payload
+        else current["expected_arrival"]
+    )
+    if "expected_arrival" in payload:
+        updates.append("expected_arrival = ?")
+        params.append(normalized_expected_arrival)
+
+    final_status = str(current["status"])
+    if "status" in payload:
+        final_status = _validate_rfq_line_status(str(payload["status"]))
+
+    final_linked_order_id = current_linked_order_id
+    if "linked_order_id" in payload:
+        final_linked_order_id = payload.get("linked_order_id")
+        final_linked_order_id = None if final_linked_order_id is None else int(final_linked_order_id)
+    if "linked_order_id" in payload and final_linked_order_id is not None and "status" not in payload:
+        final_status = "ORDERED"
+    if final_status != "ORDERED":
+        final_linked_order_id = None
+
+    if final_status == "QUOTED" and normalized_expected_arrival is None:
+        raise AppError(
+            code="RFQ_EXPECTED_ARRIVAL_REQUIRED",
+            message="expected_arrival is required before an RFQ line can be marked QUOTED",
+            status_code=422,
+        )
+    if final_status == "ORDERED" and final_linked_order_id is None:
+        raise AppError(
+            code="RFQ_LINKED_ORDER_REQUIRED",
+            message="linked_order_id is required before an RFQ line can be marked ORDERED",
+            status_code=422,
+        )
+    if final_status == "ORDERED":
+        order = get_order(conn, final_linked_order_id)
+        if int(order["item_id"]) != int(current["item_id"]):
+            raise AppError(
+                code="RFQ_ORDER_ITEM_MISMATCH",
+                message="Linked order item_id must match RFQ line item_id",
+                status_code=409,
+            )
+        existing_order_project_id = order.get("project_id")
+        if existing_order_project_id is not None and int(existing_order_project_id) != batch_project_id:
+            raise AppError(
+                code="RFQ_ORDER_PROJECT_CONFLICT",
+                message="Linked order already belongs to another project",
+                status_code=409,
+            )
+        linked_rfq_project_id = _ordered_rfq_project_for_order(conn, final_linked_order_id)
+        if linked_rfq_project_id is not None and linked_rfq_project_id != batch_project_id:
+            raise AppError(
+                code="RFQ_ORDER_PROJECT_CONFLICT",
+                message="Linked order already belongs to another project",
+                status_code=409,
+            )
+        if order.get("expected_arrival") is None:
+            raise AppError(
+                code="ORDER_EXPECTED_ARRIVAL_REQUIRED",
+                message="Linked order must have expected_arrival before it can drive project planning",
+                status_code=409,
+            )
+
+    if final_linked_order_id != current_linked_order_id:
+        updates.append("linked_order_id = ?")
+        params.append(final_linked_order_id)
+    if final_status != str(current["status"]):
+        updates.append("status = ?")
+        params.append(final_status)
+
+    should_sync_orders = (
+        final_linked_order_id != current_linked_order_id
+        or final_status != str(current["status"])
+    )
+    impacted_order_ids = {
+        order_id
+        for order_id in (current_linked_order_id, final_linked_order_id)
+        if order_id is not None
+    }
+
+    if updates:
+        updates.append("updated_at = ?")
+        params.append(now_jst_iso())
+        conn.execute(
+            f"UPDATE rfq_lines SET {', '.join(updates)} WHERE line_id = ?",
+            (*params, line_id),
+        )
+        if should_sync_orders:
+            for impacted_order_id in sorted(impacted_order_ids):
+                _sync_order_project_assignment_from_rfq(conn, impacted_order_id)
+
+    updated_row = _rfq_line_row(conn, line_id)
+    return {
+        "batch": dict(_rfq_batch_row(conn, int(updated_row["rfq_id"]))),
+        "line": next(
+            row for row in _rfq_line_detail_rows(conn, int(updated_row["rfq_id"])) if int(row["line_id"]) == line_id
+        ),
+    }
 
 
 def analyze_bom_rows(

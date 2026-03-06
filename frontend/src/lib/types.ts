@@ -58,6 +58,8 @@ export type Order = {
   order_id: number;
   item_id: number;
   quotation_id: number;
+  project_id: number | null;
+  project_name?: string | null;
   canonical_item_number: string;
   order_amount: number;
   ordered_quantity: number;

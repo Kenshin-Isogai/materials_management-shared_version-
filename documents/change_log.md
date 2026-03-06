@@ -1,3 +1,62 @@
+## 2026-03-06
+
+### Changed
+
+- Reworked the future-planning workflow around sequential project netting.
+  - Added a dedicated planning engine that processes committed projects in `planned_start` order.
+  - Earlier project shortages now become backlog demand, so later generic arrivals are consumed by older committed work before newer projects can use them.
+  - Added `GET /api/projects/{project_id}/planning-analysis` and `GET /api/planning/pipeline`.
+  - `GET /api/projects/{project_id}/gap-analysis` is now a compatibility view over the sequential planning engine.
+- Added project-dedicated RFQ persistence and UI workflow.
+  - Added DB tables `rfq_batches` and `rfq_lines`.
+  - Added `POST /api/projects/{project_id}/rfq-batches`, `GET /api/rfq-batches`, `GET /api/rfq-batches/{rfq_id}`, `PUT /api/rfq-batches/{rfq_id}`, and `PUT /api/rfq-lines/{line_id}`.
+  - Planning page can convert uncovered start-date shortages into RFQ batches.
+  - RFQ page now supports supplier / quantity / lead-time / expected-arrival refinement and order linking.
+- Added project-dedicated order assignment for planning.
+  - Orders now have optional `project_id`.
+  - Project-linked orders are excluded from the generic future-arrival pool and treated as dedicated supply for that project.
+  - Orders page now displays project assignment so dedicated supply is visible to the operator.
+
+### Fixed
+
+- Corrected planning pipeline handling for already-started committed projects.
+  - `CONFIRMED` / `ACTIVE` projects are no longer dropped when their `planned_start` is earlier than today.
+  - In-flight committed projects can now be analyzed through `GET /api/projects/{project_id}/planning-analysis` without a false `INVALID_TARGET_DATE`.
+  - Committed projects without a persisted start date are sequenced at `today_jst()` until a date is stored.
+- Corrected RFQ creation to persist and reuse the analysis planning date.
+  - `POST /api/projects/{project_id}/rfq-batches` now accepts optional `target_date`.
+  - Auto-confirming a `PLANNING` project now persists the analysis date into `projects.planned_start`, preventing the newly committed project from disappearing from later planning runs.
+- Corrected RFQ linked-order synchronization.
+  - `orders.project_id` is now driven only by `ORDERED` RFQ lines.
+  - Replacing or clearing a linked order now clears/reassigns the dedicated order ownership so generic supply is not stranded on the wrong project.
+- Prevented manual order project edits from overriding RFQ-owned dedicated supply.
+  - `PUT /api/orders/{order_id}` now rejects conflicting `project_id` changes when an `ORDERED` RFQ line already owns that order.
+  - Direct order edits can no longer move dedicated supply to the wrong project or back into the generic arrival pool while the RFQ still points elsewhere.
+- Corrected RFQ line downgrade behavior when a stale linked order is submitted.
+  - Non-`ORDERED` RFQ saves now clear `linked_order_id` automatically.
+  - Reverting an RFQ line from `ORDERED` to `QUOTED` no longer leaves dedicated supply invisible to planning because of a stale order link.
+
+### Docs
+
+- Updated `README.md` with the new `Projects -> Planning -> RFQ -> Orders / Reservations` workflow.
+- Updated `specification.md` with RFQ tables, project-linked order semantics, planning endpoint contracts, revised project planning behavior, and the RFQ-owned order assignment guardrails.
+- Updated `documents/technical_documentation.md` with the sequential planning pipeline, RFQ architecture, and RFQ/order ownership invariants.
+- Updated `documents/source_current_state.md` with the current Planning/RFQ behavior, including stale-link clearing and RFQ-owned order assignment rules.
+
+### Tests
+
+- Added backend regression coverage for:
+  - started committed projects remaining in the planning pipeline
+  - planning analysis for in-flight committed projects with past `planned_start`
+  - RFQ auto-confirm persisting a planning start date
+  - RFQ linked-order assignment/reassignment/clear behavior
+  - RFQ batch creation with an explicit planning `target_date`
+- Added backend regression coverage for:
+  - blocking manual order `project_id` reassignment when an `ORDERED` RFQ line owns the order
+  - clearing stale `linked_order_id` values when RFQ lines are saved back to non-`ORDERED` states
+- Backend suite executed: `uv run python -m pytest -q` -> `95 passed`.
+- Frontend production build executed: `npm.cmd run build`.
+
 ## 2026-03-05
 
 ### Changed

@@ -94,6 +94,7 @@ class OrderUpdateRequest(BaseModel):
     expected_arrival: str | None = None
     status: Literal["Ordered"] | None = None
     split_quantity: int | None = None
+    project_id: int | None = None
 
 
 class OrderMergeRequest(BaseModel):
@@ -265,6 +266,53 @@ class PurchaseCandidatesFromBomRequest(BaseModel):
 class PurchaseCandidatesFromProjectRequest(BaseModel):
     target_date: str | None = None
     note: str | None = None
+
+
+class ProjectRfqBatchCreateRequest(BaseModel):
+    title: str | None = None
+    note: str | None = None
+    target_date: str | None = None
+
+
+class RfqBatchUpdate(BaseModel):
+    title: str | None = None
+    status: Literal["OPEN", "CLOSED", "CANCELLED"] | None = None
+    note: str | None = None
+
+    @model_validator(mode="after")
+    def validate_non_empty_payload(self) -> "RfqBatchUpdate":
+        if not ({"title", "status", "note"} & set(self.__pydantic_fields_set__)):
+            raise ValueError("at least one RFQ batch field is required")
+        return self
+
+
+class RfqLineUpdate(BaseModel):
+    requested_quantity: int | None = Field(default=None, gt=0)
+    finalized_quantity: int | None = Field(default=None, gt=0)
+    supplier_name: str | None = None
+    lead_time_days: int | None = Field(default=None, ge=0)
+    expected_arrival: str | None = None
+    linked_order_id: int | None = None
+    status: Literal["DRAFT", "SENT", "QUOTED", "ORDERED", "CANCELLED"] | None = None
+    note: str | None = None
+
+    @model_validator(mode="after")
+    def validate_non_empty_payload(self) -> "RfqLineUpdate":
+        if not (
+            {
+                "requested_quantity",
+                "finalized_quantity",
+                "supplier_name",
+                "lead_time_days",
+                "expected_arrival",
+                "linked_order_id",
+                "status",
+                "note",
+            }
+            & set(self.__pydantic_fields_set__)
+        ):
+            raise ValueError("at least one RFQ line field is required")
+        return self
 
 
 class PurchaseCandidateUpdate(BaseModel):

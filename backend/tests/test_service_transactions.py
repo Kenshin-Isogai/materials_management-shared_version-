@@ -1220,6 +1220,73 @@ def test_update_order_can_split_partial_eta_with_csv_sync(conn, tmp_path: Path, 
     assert rows_after_update[1]["expected_arrival"] == "2026-04-25"
 
 
+def test_update_order_rejects_manual_project_reassignment_for_ordered_rfq_link(conn):
+    item = _create_basic_item(conn, item_number="ITEM-RFQ-ORDER-GUARD")
+    owner_project = service.create_project(
+        conn,
+        {
+            "name": "PROJ-RFQ-ORDER-GUARD-OWNER",
+            "status": "PLANNING",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [{"item_id": item["item_id"], "assembly_id": None, "quantity": 5}],
+        },
+    )
+    other_project = service.create_project(
+        conn,
+        {
+            "name": "PROJ-RFQ-ORDER-GUARD-OTHER",
+            "status": "PLANNING",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [{"item_id": item["item_id"], "assembly_id": None, "quantity": 1}],
+        },
+    )
+    rfq = service.create_project_rfq_batch_from_analysis(
+        conn,
+        owner_project["project_id"],
+        target_date=FUTURE_TARGET_DATE,
+    )
+    line_id = int(rfq["lines"][0]["line_id"])
+
+    imported = service.import_orders_from_rows(
+        conn,
+        supplier_name="RFQ-ORDER-GUARD-SUP",
+        rows=[
+            {
+                "item_number": item["item_number"],
+                "quantity": "5",
+                "quotation_number": "Q-RFQ-ORDER-GUARD-001",
+                "issue_date": "2026-03-01",
+                "order_date": "2026-03-02",
+                "expected_arrival": FUTURE_TARGET_DATE,
+                "pdf_link": "",
+            }
+        ],
+        source_name="rfq_order_guard.csv",
+    )
+    order_id = int(imported["order_ids"][0])
+
+    service.update_rfq_line(
+        conn,
+        line_id,
+        {
+            "linked_order_id": order_id,
+            "status": "ORDERED",
+        },
+    )
+
+    unchanged = service.update_order(conn, order_id, {"project_id": owner_project["project_id"]})
+    assert int(unchanged["project_id"]) == owner_project["project_id"]
+
+    with pytest.raises(AppError) as other_exc:
+        service.update_order(conn, order_id, {"project_id": other_project["project_id"]})
+    assert other_exc.value.code == "ORDER_PROJECT_MANAGED_BY_RFQ"
+
+    with pytest.raises(AppError) as clear_exc:
+        service.update_order(conn, order_id, {"project_id": None})
+    assert clear_exc.value.code == "ORDER_PROJECT_MANAGED_BY_RFQ"
+    assert int(service.get_order(conn, order_id)["project_id"]) == owner_project["project_id"]
+
+
 def test_merge_open_orders_records_lineage_and_syncs_csv(conn, tmp_path: Path, monkeypatch):
     item = _create_basic_item(conn, item_number="SYNC-MERGE-001")
     roots = service.build_roots(
@@ -1717,6 +1784,269 @@ def test_project_gap_analysis_rejects_past_target_date(conn):
         )
 
     assert exc_info.value.code == "INVALID_TARGET_DATE"
+
+
+def test_project_planning_analysis_keeps_started_committed_projects_in_pipeline(conn):
+    item = _create_basic_item(conn, item_number="ITEM-PLAN-STARTED-COMMITTED")
+    committed = service.create_project(
+        conn,
+        {
+            "name": "PROJ-STARTED-COMMITTED-001",
+            "status": "ACTIVE",
+            "planned_start": "2000-01-01",
+            "requirements": [
+                {
+                    "item_id": item["item_id"],
+                    "assembly_id": None,
+                    "quantity": 5,
+                }
+            ],
+        },
+    )
+    selected = service.create_project(
+        conn,
+        {
+            "name": "PROJ-STARTED-PREVIEW-001",
+            "status": "PLANNING",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [
+                {
+                    "item_id": item["item_id"],
+                    "assembly_id": None,
+                    "quantity": 5,
+                }
+            ],
+        },
+    )
+    service.import_orders_from_rows(
+        conn,
+        supplier_name="PLAN-STARTED-SUP",
+        rows=[
+            {
+                "item_number": item["item_number"],
+                "quantity": "5",
+                "quotation_number": "Q-PLAN-STARTED-001",
+                "issue_date": "2026-03-01",
+                "order_date": "2026-03-02",
+                "expected_arrival": FUTURE_TARGET_DATE,
+                "pdf_link": "",
+            }
+        ],
+        source_name="planning_started_orders.csv",
+    )
+
+    analysis = service.project_planning_analysis(conn, selected["project_id"])
+
+    assert [int(row["project_id"]) for row in analysis["pipeline"]] == [
+        committed["project_id"],
+        selected["project_id"],
+    ]
+    assert analysis["pipeline"][0]["planned_start"] == "2000-01-01"
+    assert int(analysis["rows"][0]["covered_on_time_quantity"]) == 0
+    assert int(analysis["rows"][0]["shortage_at_start"]) == 5
+
+
+def test_project_planning_analysis_allows_started_committed_project_dates(conn):
+    item = _create_basic_item(conn, item_number="ITEM-PLAN-INFLIGHT")
+    project = service.create_project(
+        conn,
+        {
+            "name": "PROJ-INFLIGHT-001",
+            "status": "CONFIRMED",
+            "planned_start": "2000-01-01",
+            "requirements": [
+                {
+                    "item_id": item["item_id"],
+                    "assembly_id": None,
+                    "quantity": 1,
+                }
+            ],
+        },
+    )
+
+    analysis = service.project_planning_analysis(conn, project["project_id"])
+
+    assert analysis["target_date"] == "2000-01-01"
+    assert analysis["summary"]["planned_start"] == "2000-01-01"
+    assert int(analysis["rows"][0]["shortage_at_start"]) == 1
+
+
+def test_create_project_rfq_batch_auto_confirms_and_persists_start_date(conn):
+    item = _create_basic_item(conn, item_number="ITEM-RFQ-AUTO-CONFIRM")
+    project = service.create_project(
+        conn,
+        {
+            "name": "PROJ-RFQ-AUTO-CONFIRM-001",
+            "requirements": [
+                {
+                    "item_id": item["item_id"],
+                    "assembly_id": None,
+                    "quantity": 3,
+                }
+            ],
+        },
+    )
+
+    rfq = service.create_project_rfq_batch_from_analysis(conn, project["project_id"])
+    updated_project = service.get_project(conn, project["project_id"])
+    pipeline = service.list_planning_pipeline(conn)
+
+    assert updated_project["status"] == "CONFIRMED"
+    assert updated_project["planned_start"] == service.today_jst()
+    assert rfq["target_date"] == service.today_jst()
+    assert any(int(row["project_id"]) == project["project_id"] for row in pipeline)
+
+
+def test_update_rfq_line_only_dedicates_ordered_links_and_clears_replaced_orders(conn):
+    item = _create_basic_item(conn, item_number="ITEM-RFQ-ORDER-SYNC")
+    project = service.create_project(
+        conn,
+        {
+            "name": "PROJ-RFQ-ORDER-SYNC-001",
+            "status": "PLANNING",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [
+                {
+                    "item_id": item["item_id"],
+                    "assembly_id": None,
+                    "quantity": 5,
+                }
+            ],
+        },
+    )
+    rfq = service.create_project_rfq_batch_from_analysis(
+        conn,
+        project["project_id"],
+        target_date=FUTURE_TARGET_DATE,
+    )
+    line_id = int(rfq["lines"][0]["line_id"])
+
+    service.import_orders_from_rows(
+        conn,
+        supplier_name="RFQ-ORDER-SYNC-SUP",
+        rows=[
+            {
+                "item_number": item["item_number"],
+                "quantity": "5",
+                "quotation_number": "Q-RFQ-ORDER-SYNC-001",
+                "issue_date": "2026-03-01",
+                "order_date": "2026-03-02",
+                "expected_arrival": FUTURE_TARGET_DATE,
+                "pdf_link": "",
+            },
+            {
+                "item_number": item["item_number"],
+                "quantity": "5",
+                "quotation_number": "Q-RFQ-ORDER-SYNC-002",
+                "issue_date": "2026-03-01",
+                "order_date": "2026-03-03",
+                "expected_arrival": FUTURE_TARGET_DATE,
+                "pdf_link": "",
+            },
+        ],
+        source_name="rfq_order_sync.csv",
+    )
+    order_rows = conn.execute(
+        "SELECT order_id FROM orders ORDER BY order_id ASC"
+    ).fetchall()
+    first_order_id = int(order_rows[0]["order_id"])
+    second_order_id = int(order_rows[1]["order_id"])
+
+    quoted = service.update_rfq_line(
+        conn,
+        line_id,
+        {
+            "expected_arrival": FUTURE_TARGET_DATE,
+            "status": "QUOTED",
+            "linked_order_id": first_order_id,
+        },
+    )
+    assert quoted["line"]["status"] == "QUOTED"
+    assert quoted["line"]["linked_order_id"] is None
+    assert service.get_order(conn, first_order_id)["project_id"] is None
+
+    ordered = service.update_rfq_line(
+        conn,
+        line_id,
+        {
+            "linked_order_id": first_order_id,
+            "status": "ORDERED",
+        },
+    )
+    assert ordered["line"]["status"] == "ORDERED"
+    assert int(ordered["line"]["linked_order_id"]) == first_order_id
+    assert int(service.get_order(conn, first_order_id)["project_id"]) == project["project_id"]
+
+    replaced = service.update_rfq_line(
+        conn,
+        line_id,
+        {
+            "linked_order_id": second_order_id,
+            "status": "ORDERED",
+        },
+    )
+    assert int(replaced["line"]["linked_order_id"]) == second_order_id
+    assert service.get_order(conn, first_order_id)["project_id"] is None
+    assert int(service.get_order(conn, second_order_id)["project_id"]) == project["project_id"]
+
+    cleared = service.update_rfq_line(
+        conn,
+        line_id,
+        {
+            "linked_order_id": second_order_id,
+            "status": "QUOTED",
+        },
+    )
+    assert cleared["line"]["status"] == "QUOTED"
+    assert cleared["line"]["linked_order_id"] is None
+    assert service.get_order(conn, second_order_id)["project_id"] is None
+
+
+def test_create_project_rfq_batch_uses_selected_target_date(conn):
+    item = _create_basic_item(conn, item_number="ITEM-RFQ-TARGET-DATE")
+    project = service.create_project(
+        conn,
+        {
+            "name": "PROJ-RFQ-TARGET-DATE-001",
+            "status": "PLANNING",
+            "planned_start": "2999-01-01",
+            "requirements": [
+                {
+                    "item_id": item["item_id"],
+                    "assembly_id": None,
+                    "quantity": 5,
+                }
+            ],
+        },
+    )
+    service.import_orders_from_rows(
+        conn,
+        supplier_name="RFQ-TARGET-DATE-SUP",
+        rows=[
+            {
+                "item_number": item["item_number"],
+                "quantity": "3",
+                "quotation_number": "Q-RFQ-TARGET-DATE-001",
+                "issue_date": "2026-03-01",
+                "order_date": "2026-03-02",
+                "expected_arrival": "2999-03-01",
+                "pdf_link": "",
+            }
+        ],
+        source_name="rfq_target_date.csv",
+    )
+
+    rfq = service.create_project_rfq_batch_from_analysis(
+        conn,
+        project["project_id"],
+        target_date="2999-06-01",
+    )
+    updated_project = service.get_project(conn, project["project_id"])
+
+    assert rfq["target_date"] == "2999-06-01"
+    assert int(rfq["lines"][0]["requested_quantity"]) == 2
+    assert updated_project["status"] == "CONFIRMED"
+    assert updated_project["planned_start"] == "2999-06-01"
 
 
 def test_purchase_candidates_create_list_and_update(conn):

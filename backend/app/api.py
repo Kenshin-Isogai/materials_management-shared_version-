@@ -36,7 +36,10 @@ from .schemas import (
     PurchaseCandidatesFromBomRequest,
     PurchaseCandidatesFromProjectRequest,
     ProjectCreate,
+    ProjectRfqBatchCreateRequest,
     ProjectUpdate,
+    RfqBatchUpdate,
+    RfqLineUpdate,
     ReservationActionRequest,
     ReservationBatchRequest,
     ReservationCreate,
@@ -621,9 +624,72 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def get_project_gap(project_id: int, target_date: str | None = None, conn= db):
         return ok(service.project_gap_analysis(conn, project_id, target_date=target_date))
 
+    @app.get("/api/projects/{project_id}/planning-analysis")
+    def get_project_planning_analysis(project_id: int, target_date: str | None = None, conn= db):
+        return ok(service.project_planning_analysis(conn, project_id, target_date=target_date))
+
     @app.post("/api/projects/{project_id}/reserve")
     def post_project_reserve(project_id: int, conn= db):
         result = service.reserve_project_requirements(conn, project_id)
+        conn.commit()
+        return ok(result)
+
+    @app.post("/api/projects/{project_id}/rfq-batches")
+    def post_project_rfq_batch(project_id: int, body: ProjectRfqBatchCreateRequest, conn= db):
+        result = service.create_project_rfq_batch_from_analysis(
+            conn,
+            project_id,
+            title=body.title,
+            note=body.note,
+            target_date=body.target_date,
+        )
+        conn.commit()
+        return ok(result)
+
+    @app.get("/api/planning/pipeline")
+    def get_planning_pipeline(
+        preview_project_id: int | None = None,
+        target_date: str | None = None,
+        conn= db,
+    ):
+        return ok(
+            service.list_planning_pipeline(
+                conn,
+                preview_project_id=preview_project_id,
+                target_date=target_date,
+            )
+        )
+
+    @app.get("/api/rfq-batches")
+    def get_rfq_batches(
+        status: str | None = None,
+        project_id: int | None = None,
+        page: int = 1,
+        per_page: int = 50,
+        conn= db,
+    ):
+        data, pagination = service.list_rfq_batches(
+            conn,
+            status=status,
+            project_id=project_id,
+            page=page,
+            per_page=per_page,
+        )
+        return ok(data, pagination)
+
+    @app.get("/api/rfq-batches/{rfq_id}")
+    def get_rfq_batch(rfq_id: int, conn= db):
+        return ok(service.get_rfq_batch(conn, rfq_id))
+
+    @app.put("/api/rfq-batches/{rfq_id}")
+    def put_rfq_batch(rfq_id: int, body: RfqBatchUpdate, conn= db):
+        result = service.update_rfq_batch(conn, rfq_id, body.model_dump(exclude_unset=True))
+        conn.commit()
+        return ok(result)
+
+    @app.put("/api/rfq-lines/{line_id}")
+    def put_rfq_line(line_id: int, body: RfqLineUpdate, conn= db):
+        result = service.update_rfq_line(conn, line_id, body.model_dump(exclude_unset=True))
         conn.commit()
         return ok(result)
 

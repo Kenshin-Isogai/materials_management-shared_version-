@@ -2,6 +2,12 @@
 
 Materials Management is a full-stack inventory system for optical components. It manages item master data, stock by location, supplier quotations and orders, reservations, assemblies, projects, and transaction history with undo support.
 
+The main future-planning workflow is now:
+
+`Projects` -> `Planning` -> `RFQ` -> `Orders` / `Reservations`
+
+`Planning` performs sequential project netting so earlier committed projects, including already-started work, consume future planning capacity before later projects are analyzed. `RFQ` stores project-dedicated shortage follow-up, reuses the planning date selected on the Planning page, and links real orders back to the project when purchasing starts.
+
 ## Tech Stack
 
 - Backend: Python, FastAPI, SQLite, `uv`

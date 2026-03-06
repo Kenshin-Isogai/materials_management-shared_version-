@@ -289,7 +289,7 @@ export function ProjectsPage() {
           Plan future demand and requirement structure before execution-time reservations.
         </p>
         <p className="mt-1 text-xs text-slate-500">
-          Use <span className="font-semibold">Reservations</span> to allocate concrete quantities when work is ready to run.
+          Use <span className="font-semibold">Planning</span> for sequential shortage/RFQ analysis, then <span className="font-semibold">Reservations</span> when work is ready to consume real stock.
         </p>
       </section>
 

@@ -1,6 +1,6 @@
 # Source Current State
 
-Last updated: 2026-03-05 (JST)
+Last updated: 2026-03-06 (JST)
 
 ## 1. System Snapshot
 
@@ -47,6 +47,8 @@ Last updated: 2026-03-05 (JST)
 - SQLite with normalized core entities:
   - items, inventory ledger, orders/quotations, reservations
   - assemblies/projects with requirements
+  - sequential planning pipeline summaries derived from project status + planned_start
+  - persistent `rfq_batches` / `rfq_lines` for project-dedicated shortage follow-up
   - purchase candidate persistence for pre-PO shortages
   - supplier item aliases and category aliases
   - import jobs/effects for reversible item imports
@@ -81,6 +83,14 @@ Last updated: 2026-03-05 (JST)
 - Projects page requirement entry now supports bulk text parsing (`item_number,quantity` per line) with immediate warnings for unregistered item numbers and ambiguous duplicate item numbers across manufacturers.
 - Projects page `#id` free-text matching now validates the parsed id against loaded item/assembly options before marking a requirement row as matched.
 - Projects page now supports editing an existing project (load details into form, then save via project update API) including requirement composition/quantities.
+- Planning page is now the primary future-demand workflow surface.
+  - Select a project and analyze it at its planned start (or an override date).
+  - Later projects are netted against earlier committed projects (`CONFIRMED` / `ACTIVE`) instead of being analyzed in isolation, including committed work whose start date is already in the past.
+  - On-time shortage rows can be converted directly into RFQ batches, and RFQ creation now reuses the planning date selected on the Planning page.
+- RFQ page is now the primary project-shortage follow-up surface.
+  - RFQ batches persist project-specific shortage rows.
+  - RFQ lines capture supplier, finalized quantity, lead time, expected arrival, status, and an order link that is only retained while the line is `ORDERED`.
+  - An `ORDERED` linked order is synchronized into `orders.project_id`; draft/quoted lines do not pull the order out of the generic planning pool, and manual order project reassignment is blocked while an `ORDERED` RFQ line owns that assignment.
 - BOM page now supports optional analysis date input and sends `target_date` to `POST /api/bom/analyze` for future-arrival-aware gap checks.
 - BOM page now supports `Save Shortages` to persist shortage/missing rows as purchase candidates before PO creation.
 - BOM page `Save Shortages` now surfaces API errors in-page (message area) instead of failing silently on rejected inputs such as past `target_date`.
@@ -91,7 +101,9 @@ Last updated: 2026-03-05 (JST)
 - Backend now persists split/merge/partial-arrival order lineage in `order_lineage_events`; API exposes `POST /api/orders/merge` and `GET /api/orders/{order_id}/lineage` for durable traceability and future scale-out reporting.
 - Snapshot page supports client-side quick search, location/category filtering, low-stock/shortage-only threshold filtering, description-substring filtering, and table-column sorting (item, location, quantity, category) to accelerate planning and purchase checks from projected inventory states.
 - BOM analysis endpoint now supports optional `target_date` projection (`current net available + open orders arriving by date`) while BOM reserve remains current-availability execution behavior.
-- Project gap analysis endpoint (`GET /api/projects/{id}/gap-analysis`) now supports optional `target_date` projection with the same future-date validation rule as BOM analysis.
+- Project planning now has two layers:
+  - `GET /api/projects/{id}/planning-analysis` for sequential multi-project netting with backlog carry-forward
+  - `GET /api/projects/{id}/gap-analysis` as a compatibility view over the same planning engine
 - Purchase candidate endpoints are now available:
   - `GET /api/purchase-candidates`
   - `GET /api/purchase-candidates/{id}`
@@ -141,8 +153,8 @@ Last updated: 2026-03-05 (JST)
 
 ## 6. Quality State
 
-- Backend tests: `52 passed` (latest run on 2026-03-02).
-- Frontend production build: success (latest run on 2026-03-02).
+- Backend tests: `95 passed` (latest run on 2026-03-06).
+- Frontend production build: success (latest run on 2026-03-06).
 
 ## 7. Known Directional Gaps (intentional for current phase)
 

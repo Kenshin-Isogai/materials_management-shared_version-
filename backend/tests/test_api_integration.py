@@ -1755,6 +1755,267 @@ def test_project_gap_analysis_endpoint_supports_target_date(client):
     assert int(with_rows[0]["shortage"]) == 0
 
 
+def test_project_planning_analysis_endpoint_allows_started_committed_projects(client):
+    client.post("/api/manufacturers", json={"name": "API-PLAN-INFLIGHT-MFG"})
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-PLAN-INFLIGHT-ITEM",
+            "manufacturer_name": "API-PLAN-INFLIGHT-MFG",
+            "category": "Lens",
+        },
+    ).json()["data"]
+    project = client.post(
+        "/api/projects",
+        json={
+            "name": "API-PLAN-INFLIGHT-001",
+            "status": "ACTIVE",
+            "planned_start": "2000-01-01",
+            "requirements": [{"item_id": item["item_id"], "quantity": 1}],
+        },
+    ).json()["data"]
+
+    response = client.get(f"/api/projects/{project['project_id']}/planning-analysis")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["target_date"] == "2000-01-01"
+    assert payload["summary"]["planned_start"] == "2000-01-01"
+    assert int(payload["rows"][0]["shortage_at_start"]) == 1
+
+
+def test_project_rfq_batch_endpoint_uses_requested_target_date(client):
+    client.post("/api/manufacturers", json={"name": "API-RFQ-TARGET-DATE-MFG"})
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-RFQ-TARGET-DATE-ITEM",
+            "manufacturer_name": "API-RFQ-TARGET-DATE-MFG",
+            "category": "Lens",
+        },
+    ).json()["data"]
+    project = client.post(
+        "/api/projects",
+        json={
+            "name": "API-RFQ-TARGET-DATE-001",
+            "planned_start": "2999-01-01",
+            "requirements": [{"item_id": item["item_id"], "quantity": 5}],
+        },
+    ).json()["data"]
+
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "item_number",
+            "quantity",
+            "quotation_number",
+            "issue_date",
+            "order_date",
+            "expected_arrival",
+            "pdf_link",
+        ],
+    )
+    writer.writeheader()
+    writer.writerow(
+        {
+            "item_number": "API-RFQ-TARGET-DATE-ITEM",
+            "quantity": "3",
+            "quotation_number": "Q-RFQ-TARGET-DATE-001",
+            "issue_date": "2026-03-01",
+            "order_date": "2026-03-02",
+            "expected_arrival": "2999-03-01",
+            "pdf_link": "",
+        }
+    )
+    imported = client.post(
+        "/api/orders/import",
+        files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
+        data={"supplier_name": "ApiRfqTargetDateSupplier"},
+    )
+    assert imported.status_code == 200
+
+    created = client.post(
+        f"/api/projects/{project['project_id']}/rfq-batches",
+        json={"target_date": "2999-06-01"},
+    )
+
+    assert created.status_code == 200
+    payload = created.json()["data"]
+    assert payload["target_date"] == "2999-06-01"
+    assert int(payload["lines"][0]["requested_quantity"]) == 2
+
+    refreshed_project = client.get(f"/api/projects/{project['project_id']}")
+    assert refreshed_project.status_code == 200
+    assert refreshed_project.json()["data"]["planned_start"] == "2999-06-01"
+
+
+def test_update_order_endpoint_rejects_manual_project_override_for_rfq_owned_order(client):
+    client.post("/api/manufacturers", json={"name": "API-RFQ-ORDER-GUARD-MFG"})
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-RFQ-ORDER-GUARD-ITEM",
+            "manufacturer_name": "API-RFQ-ORDER-GUARD-MFG",
+            "category": "Lens",
+        },
+    ).json()["data"]
+    owner_project = client.post(
+        "/api/projects",
+        json={
+            "name": "API-RFQ-ORDER-GUARD-OWNER",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [{"item_id": item["item_id"], "quantity": 5}],
+        },
+    ).json()["data"]
+    other_project = client.post(
+        "/api/projects",
+        json={
+            "name": "API-RFQ-ORDER-GUARD-OTHER",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [{"item_id": item["item_id"], "quantity": 1}],
+        },
+    ).json()["data"]
+    rfq = client.post(
+        f"/api/projects/{owner_project['project_id']}/rfq-batches",
+        json={"target_date": FUTURE_TARGET_DATE},
+    )
+    assert rfq.status_code == 200
+    line_id = rfq.json()["data"]["lines"][0]["line_id"]
+
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "item_number",
+            "quantity",
+            "quotation_number",
+            "issue_date",
+            "order_date",
+            "expected_arrival",
+            "pdf_link",
+        ],
+    )
+    writer.writeheader()
+    writer.writerow(
+        {
+            "item_number": "API-RFQ-ORDER-GUARD-ITEM",
+            "quantity": "5",
+            "quotation_number": "Q-API-RFQ-ORDER-GUARD-001",
+            "issue_date": "2026-03-01",
+            "order_date": "2026-03-02",
+            "expected_arrival": FUTURE_TARGET_DATE,
+            "pdf_link": "",
+        }
+    )
+    imported = client.post(
+        "/api/orders/import",
+        files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
+        data={"supplier_name": "ApiRfqOrderGuardSupplier"},
+    )
+    assert imported.status_code == 200
+    order_id = imported.json()["data"]["order_ids"][0]
+
+    linked = client.put(
+        f"/api/rfq-lines/{line_id}",
+        json={"linked_order_id": order_id, "status": "ORDERED"},
+    )
+    assert linked.status_code == 200
+
+    blocked = client.put(
+        f"/api/orders/{order_id}",
+        json={"project_id": other_project["project_id"]},
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["error"]["code"] == "ORDER_PROJECT_MANAGED_BY_RFQ"
+
+    refreshed_order = client.get(f"/api/orders/{order_id}")
+    assert refreshed_order.status_code == 200
+    assert refreshed_order.json()["data"]["project_id"] == owner_project["project_id"]
+
+
+def test_rfq_line_endpoint_clears_stale_link_when_reverted_to_quoted(client):
+    client.post("/api/manufacturers", json={"name": "API-RFQ-STALE-LINK-MFG"})
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-RFQ-STALE-LINK-ITEM",
+            "manufacturer_name": "API-RFQ-STALE-LINK-MFG",
+            "category": "Lens",
+        },
+    ).json()["data"]
+    project = client.post(
+        "/api/projects",
+        json={
+            "name": "API-RFQ-STALE-LINK-PROJECT",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [{"item_id": item["item_id"], "quantity": 5}],
+        },
+    ).json()["data"]
+    rfq = client.post(
+        f"/api/projects/{project['project_id']}/rfq-batches",
+        json={"target_date": FUTURE_TARGET_DATE},
+    )
+    assert rfq.status_code == 200
+    line_id = rfq.json()["data"]["lines"][0]["line_id"]
+
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "item_number",
+            "quantity",
+            "quotation_number",
+            "issue_date",
+            "order_date",
+            "expected_arrival",
+            "pdf_link",
+        ],
+    )
+    writer.writeheader()
+    writer.writerow(
+        {
+            "item_number": "API-RFQ-STALE-LINK-ITEM",
+            "quantity": "5",
+            "quotation_number": "Q-API-RFQ-STALE-LINK-001",
+            "issue_date": "2026-03-01",
+            "order_date": "2026-03-02",
+            "expected_arrival": FUTURE_TARGET_DATE,
+            "pdf_link": "",
+        }
+    )
+    imported = client.post(
+        "/api/orders/import",
+        files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
+        data={"supplier_name": "ApiRfqStaleLinkSupplier"},
+    )
+    assert imported.status_code == 200
+    order_id = imported.json()["data"]["order_ids"][0]
+
+    ordered = client.put(
+        f"/api/rfq-lines/{line_id}",
+        json={"linked_order_id": order_id, "status": "ORDERED"},
+    )
+    assert ordered.status_code == 200
+
+    quoted = client.put(
+        f"/api/rfq-lines/{line_id}",
+        json={
+            "expected_arrival": FUTURE_TARGET_DATE,
+            "linked_order_id": order_id,
+            "status": "QUOTED",
+        },
+    )
+    assert quoted.status_code == 200
+    line = quoted.json()["data"]["line"]
+    assert line["status"] == "QUOTED"
+    assert line["linked_order_id"] is None
+
+    refreshed_order = client.get(f"/api/orders/{order_id}")
+    assert refreshed_order.status_code == 200
+    assert refreshed_order.json()["data"]["project_id"] is None
+
+
 def test_purchase_candidates_endpoints_flow(client):
     client.post("/api/manufacturers", json={"name": "API-PURCHASE-CAND-MFG"})
     item = client.post(

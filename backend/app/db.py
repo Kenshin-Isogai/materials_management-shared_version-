@@ -60,6 +60,7 @@ SCHEMA_STATEMENTS = [
         order_id INTEGER PRIMARY KEY AUTOINCREMENT,
         item_id INTEGER NOT NULL,
         quotation_id INTEGER NOT NULL,
+        project_id INTEGER,
         order_amount INTEGER NOT NULL CHECK (order_amount > 0),
         ordered_quantity INTEGER CHECK (ordered_quantity IS NULL OR ordered_quantity > 0),
         ordered_item_number TEXT,
@@ -68,7 +69,8 @@ SCHEMA_STATEMENTS = [
         arrival_date TEXT,
         status TEXT NOT NULL DEFAULT 'Ordered' CHECK (status IN ('Ordered', 'Arrived')),
         FOREIGN KEY (item_id) REFERENCES items_master (item_id),
-        FOREIGN KEY (quotation_id) REFERENCES quotations (quotation_id)
+        FOREIGN KEY (quotation_id) REFERENCES quotations (quotation_id),
+        FOREIGN KEY (project_id) REFERENCES projects (project_id)
     )
     """,
     """
@@ -197,6 +199,41 @@ SCHEMA_STATEMENTS = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS rfq_batches (
+        rfq_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL,
+        title TEXT NOT NULL CHECK (trim(title) <> ''),
+        target_date TEXT,
+        status TEXT NOT NULL DEFAULT 'OPEN'
+            CHECK (status IN ('OPEN', 'CLOSED', 'CANCELLED')),
+        note TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (project_id) REFERENCES projects (project_id) ON DELETE CASCADE
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS rfq_lines (
+        line_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        rfq_id INTEGER NOT NULL,
+        item_id INTEGER NOT NULL,
+        requested_quantity INTEGER NOT NULL CHECK (requested_quantity > 0),
+        finalized_quantity INTEGER NOT NULL CHECK (finalized_quantity > 0),
+        supplier_name TEXT,
+        lead_time_days INTEGER CHECK (lead_time_days IS NULL OR lead_time_days >= 0),
+        expected_arrival TEXT,
+        linked_order_id INTEGER,
+        status TEXT NOT NULL DEFAULT 'DRAFT'
+            CHECK (status IN ('DRAFT', 'SENT', 'QUOTED', 'ORDERED', 'CANCELLED')),
+        note TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (rfq_id) REFERENCES rfq_batches (rfq_id) ON DELETE CASCADE,
+        FOREIGN KEY (item_id) REFERENCES items_master (item_id),
+        FOREIGN KEY (linked_order_id) REFERENCES orders (order_id) ON DELETE SET NULL
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS purchase_candidates (
         candidate_id INTEGER PRIMARY KEY AUTOINCREMENT,
         source_type TEXT NOT NULL CHECK (source_type IN ('BOM', 'PROJECT')),
@@ -306,10 +343,15 @@ INDEX_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_project_requirements_project_id ON project_requirements (project_id)",
     "CREATE INDEX IF NOT EXISTS idx_project_requirements_assembly_id ON project_requirements (assembly_id)",
     "CREATE INDEX IF NOT EXISTS idx_project_requirements_item_id ON project_requirements (item_id)",
+    "CREATE INDEX IF NOT EXISTS idx_rfq_batches_project_id_status ON rfq_batches (project_id, status, target_date)",
+    "CREATE INDEX IF NOT EXISTS idx_rfq_lines_rfq_id ON rfq_lines (rfq_id)",
+    "CREATE INDEX IF NOT EXISTS idx_rfq_lines_item_id_status ON rfq_lines (item_id, status, expected_arrival)",
+    "CREATE INDEX IF NOT EXISTS idx_rfq_lines_linked_order_id ON rfq_lines (linked_order_id)",
     "CREATE INDEX IF NOT EXISTS idx_purchase_candidates_status_target_date ON purchase_candidates (status, target_date)",
     "CREATE INDEX IF NOT EXISTS idx_purchase_candidates_source_type ON purchase_candidates (source_type)",
     "CREATE INDEX IF NOT EXISTS idx_purchase_candidates_project_id ON purchase_candidates (project_id)",
     "CREATE INDEX IF NOT EXISTS idx_purchase_candidates_item_id ON purchase_candidates (item_id)",
+    "CREATE INDEX IF NOT EXISTS idx_orders_project_id ON orders (project_id)",
     "CREATE INDEX IF NOT EXISTS idx_orders_ordered_item_number ON orders (ordered_item_number)",
     "CREATE INDEX IF NOT EXISTS idx_orders_status_expected_arrival ON orders (status, expected_arrival)",
     "CREATE INDEX IF NOT EXISTS idx_orders_item_status_expected_arrival ON orders (item_id, status, expected_arrival)",
@@ -486,6 +528,7 @@ def migrate_db(conn: sqlite3.Connection) -> None:
     for statement in INDEX_STATEMENTS:
         conn.execute(statement)
     for definition in (
+        "project_id INTEGER REFERENCES projects (project_id)",
         "ordered_quantity INTEGER",
         "ordered_item_number TEXT",
         "status TEXT",
@@ -520,6 +563,8 @@ def migrate_db(conn: sqlite3.Connection) -> None:
     _normalize_date_column(conn, "quotations", "issue_date")
     _normalize_date_column(conn, "projects", "planned_start")
     _normalize_date_column(conn, "reservations", "deadline")
+    _normalize_date_column(conn, "rfq_batches", "target_date")
+    _normalize_date_column(conn, "rfq_lines", "expected_arrival")
     _normalize_date_column(conn, "purchase_candidates", "target_date")
 
     conn.commit()
