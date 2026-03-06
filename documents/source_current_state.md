@@ -123,12 +123,14 @@ Last updated: 2026-03-06 (JST)
 - Reservations CSV import is now preview-first:
   - `POST /api/reservations/import-preview` validates item/assembly targets, previews assembly expansion, and flags inventory shortages before commit
   - preview confirmation can send per-row `item_id` / `assembly_id` overrides back through `POST /api/reservations/import-csv`
+  - explicit preview-confirmation target overrides win over stale raw CSV target fields during commit
 - Orders import supplier input now uses `CatalogPicker`, and Items/Orders/Movements/Reservations preview reconciliation rows use the same picker for manual item/assembly correction.
 - Snapshot page supports client-side quick search, location/category filtering, low-stock/shortage-only threshold filtering, description-substring filtering, and table-column sorting (item, location, quantity, category) to accelerate planning and purchase checks from projected inventory states.
 - BOM analysis endpoint now supports optional `target_date` projection (`current net available + open orders arriving by date`) while BOM reserve remains current-availability execution behavior.
 - Project planning now has two layers:
   - `GET /api/projects/{id}/planning-analysis` for sequential multi-project netting with backlog carry-forward
-  - `GET /api/projects/{id}/gap-analysis` as a compatibility view over the same planning engine
+  - `GET /api/projects/{id}/gap-analysis` as a compatibility view over the same planning engine, returning the effective planning `target_date` used for the analysis
+- Splitting an RFQ-owned open order now keeps the dedicated `project_id` only on the original RFQ-linked order; the new sibling order remains generic until an RFQ line explicitly links it.
 - Purchase candidate endpoints are now available:
   - `GET /api/purchase-candidates`
   - `GET /api/purchase-candidates/{id}`
@@ -183,7 +185,7 @@ Last updated: 2026-03-06 (JST)
 
 ## 6. Quality State
 
-- Backend tests: `114 passed` (latest run on 2026-03-06).
+- Backend tests: `117 passed` (latest run on 2026-03-06).
 - Frontend production build: success (latest run on 2026-03-06).
 
 ## 7. Known Directional Gaps (intentional for current phase)

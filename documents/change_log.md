@@ -67,6 +67,12 @@
 - Corrected RFQ line downgrade behavior when a stale linked order is submitted.
   - Non-`ORDERED` RFQ saves now clear `linked_order_id` automatically.
   - Reverting an RFQ line from `ORDERED` to `QUOTED` no longer leaves dedicated supply invisible to planning because of a stale order link.
+- Corrected reservation import commit precedence for preview-confirmation target fixes.
+  - `POST /api/reservations/import-csv` now honors an explicit `assembly_id` override even when the raw CSV row still contains stale `item_id` text.
+- Corrected RFQ-owned order splitting so dedicated supply is not cloned onto sibling rows.
+  - Splitting an RFQ-linked order now keeps `project_id` only on the original linked row; the new split order remains generic until an RFQ line explicitly owns it.
+- Corrected gap-analysis metadata to return the effective planning date.
+  - `GET /api/projects/{project_id}/gap-analysis` now reports the actual `target_date` used by the shared planning engine instead of echoing `NULL`/stale project metadata.
 
 ### Docs
 
@@ -78,6 +84,7 @@
 - Updated `README.md`, `specification.md`, `documents/technical_documentation.md`, and `documents/source_current_state.md` with preview-first item/movement/reservation CSV import behavior and endpoint contracts.
 - Updated `README.md`, `specification.md`, `documents/technical_documentation.md`, and `documents/source_current_state.md` with the new Projects quick-parser preview endpoint and workflow.
 - Updated `README.md`, `specification.md`, `documents/technical_documentation.md`, and `documents/source_current_state.md` with the new BOM preview endpoint and preview-first reconciliation workflow.
+- Updated `specification.md`, `documents/technical_documentation.md`, and `documents/source_current_state.md` with reservation override precedence, RFQ split-order ownership, and effective gap-analysis `target_date` behavior.
 
 ### Tests
 
@@ -106,7 +113,12 @@
 - Added backend integration coverage for:
   - BOM preview exact/review/unresolved classification
   - BOM analyze avoiding supplier creation side effects for direct canonical items
-- Backend suite executed: `uv run python -m pytest -q` -> `114 passed`.
+- Added backend regression coverage for:
+  - reservation import commit honoring an `assembly_id` override over stale raw `item_id` text
+  - RFQ-owned order splits keeping dedicated `project_id` only on the original linked row
+  - gap-analysis returning the effective planning `target_date` when callers omit one
+- Added backend API coverage for gap-analysis returning the effective planning `target_date`.
+- Backend suite executed: `uv run python -m pytest -q` -> `117 passed`.
 - Frontend production build executed: `npm.cmd run build`.
 
 ## 2026-03-05

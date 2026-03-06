@@ -1613,6 +1613,8 @@ def test_import_reservations_from_rows_rejects_non_numeric_fields(conn):
         )
     assert excinfo_asm_qty.value.status_code == 422
     assert excinfo_asm_qty.value.code == "INVALID_QUANTITY"
+
+
 def test_import_reservations_from_rows_with_assembly(conn):
     item = _create_basic_item(conn, item_number="ITEM-RES-CSV-A")
     service.adjust_inventory(conn, item_id=item["item_id"], quantity_delta=20, location="STOCK")
@@ -1640,6 +1642,37 @@ def test_import_reservations_from_rows_with_assembly(conn):
     assert len(created) == 1
     assert int(created[0]["quantity"]) == 12
     assert created[0]["status"] == "ACTIVE"
+
+
+def test_import_reservations_from_rows_assembly_override_wins_over_raw_item_id(conn):
+    item = _create_basic_item(conn, item_number="ITEM-RES-CSV-OVERRIDE")
+    service.adjust_inventory(conn, item_id=item["item_id"], quantity_delta=20, location="STOCK")
+    assembly = service.create_assembly(
+        conn,
+        {
+            "name": "RES-CSV-ASM-OVERRIDE",
+            "components": [{"item_id": item["item_id"], "quantity": 2}],
+        },
+    )
+
+    created = service.import_reservations_from_rows(
+        conn,
+        rows=[
+            {
+                "item_id": "999999",
+                "quantity": "3",
+                "assembly_quantity": "2",
+                "purpose": "override to assembly",
+            }
+        ],
+        row_overrides={"2": {"assembly_id": assembly["assembly_id"]}},
+    )
+    conn.commit()
+
+    assert len(created) == 1
+    assert created[0]["item_id"] == item["item_id"]
+    assert int(created[0]["quantity"]) == 12
+    assert created[0]["purpose"] == "override to assembly"
 
 
 def test_analyze_bom_rows_target_date_includes_pending_arrivals(conn):
@@ -1752,7 +1785,7 @@ def test_project_gap_analysis_target_date_includes_pending_arrivals(conn):
         target_date=FUTURE_TARGET_DATE,
     )
 
-    assert without_date["target_date"] is None
+    assert without_date["target_date"] == service.today_jst()
     assert int(without_date["rows"][0]["available_stock"]) == 2
     assert int(without_date["rows"][0]["shortage"]) == 4
     assert with_date["target_date"] == FUTURE_TARGET_DATE
@@ -1869,6 +1902,31 @@ def test_project_planning_analysis_allows_started_committed_project_dates(conn):
     assert analysis["target_date"] == "2000-01-01"
     assert analysis["summary"]["planned_start"] == "2000-01-01"
     assert int(analysis["rows"][0]["shortage_at_start"]) == 1
+
+
+def test_project_gap_analysis_returns_effective_planning_date_without_explicit_target(conn):
+    item = _create_basic_item(conn, item_number="ITEM-PROJ-GAP-EFFECTIVE-DATE")
+    project = service.create_project(
+        conn,
+        {
+            "name": "PROJ-GAP-EFFECTIVE-DATE-001",
+            "status": "CONFIRMED",
+            "requirements": [
+                {
+                    "item_id": item["item_id"],
+                    "assembly_id": None,
+                    "quantity": 1,
+                }
+            ],
+        },
+    )
+
+    analysis = service.project_gap_analysis(conn, project["project_id"])
+
+    assert analysis["target_date"] == service.today_jst()
+    assert analysis["project"]["planned_start"] == service.today_jst()
+    assert analysis["summary"]["planned_start"] == service.today_jst()
+    assert int(analysis["rows"][0]["shortage"]) == 1
 
 
 def test_create_project_rfq_batch_auto_confirms_and_persists_start_date(conn):
@@ -2000,6 +2058,92 @@ def test_update_rfq_line_only_dedicates_ordered_links_and_clears_replaced_orders
     assert cleared["line"]["status"] == "QUOTED"
     assert cleared["line"]["linked_order_id"] is None
     assert service.get_order(conn, second_order_id)["project_id"] is None
+
+
+def test_split_order_leaves_rfq_managed_project_assignment_on_original_order_only(
+    conn, tmp_path: Path, monkeypatch
+):
+    item = _create_basic_item(conn, item_number="ITEM-RFQ-SPLIT-ONLY-ORIGINAL")
+    project = service.create_project(
+        conn,
+        {
+            "name": "PROJ-RFQ-SPLIT-ONLY-ORIGINAL-001",
+            "status": "PLANNING",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [{"item_id": item["item_id"], "assembly_id": None, "quantity": 5}],
+        },
+    )
+    rfq = service.create_project_rfq_batch_from_analysis(
+        conn,
+        project["project_id"],
+        target_date=FUTURE_TARGET_DATE,
+    )
+    line_id = int(rfq["lines"][0]["line_id"])
+
+    roots = service.build_roots(
+        unregistered_root=tmp_path / "quotations" / "unregistered",
+        registered_root=tmp_path / "quotations" / "registered",
+    )
+    service.ensure_roots(roots)
+    monkeypatch.setattr(service, "build_roots", lambda **_: roots)
+
+    csv_path = roots.registered_csv_root / "SupplierRfqSplit" / "Q-RFQ-SPLIT-001.csv"
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    with csv_path.open("w", encoding="utf-8", newline="") as fp:
+        writer = csv.DictWriter(
+            fp,
+            fieldnames=[
+                "supplier",
+                "item_number",
+                "quantity",
+                "quotation_number",
+                "issue_date",
+                "order_date",
+                "expected_arrival",
+                "pdf_link",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "supplier": "SupplierRfqSplit",
+                "item_number": item["item_number"],
+                "quantity": "5",
+                "quotation_number": "Q-RFQ-SPLIT-001",
+                "issue_date": "2026-03-01",
+                "order_date": "2026-03-02",
+                "expected_arrival": FUTURE_TARGET_DATE,
+                "pdf_link": "",
+            }
+        )
+
+    imported = service.import_orders_from_csv_path(
+        conn,
+        supplier_name="SupplierRfqSplit",
+        csv_path=csv_path,
+    )
+    order_id = int(imported["order_ids"][0])
+    service.update_rfq_line(
+        conn,
+        line_id,
+        {
+            "linked_order_id": order_id,
+            "status": "ORDERED",
+        },
+    )
+
+    split = service.update_order(
+        conn,
+        order_id,
+        {
+            "expected_arrival": "2999-06-10",
+            "split_quantity": 2,
+        },
+    )
+
+    assert int(split["updated_order"]["project_id"]) == project["project_id"]
+    assert split["created_order"]["project_id"] is None
+    assert service.get_order(conn, int(split["split_order_id"]))["project_id"] is None
 
 
 def test_create_project_rfq_batch_uses_selected_target_date(conn):

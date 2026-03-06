@@ -5,6 +5,8 @@ import json
 from io import StringIO
 from pathlib import Path
 
+from app import service
+
 FUTURE_TARGET_DATE = "2999-12-31"
 
 
@@ -2727,7 +2729,9 @@ def test_project_gap_analysis_endpoint_supports_target_date(client):
 
     without_date = client.get(f"/api/projects/{project['project_id']}/gap-analysis")
     assert without_date.status_code == 200
-    without_rows = without_date.json()["data"]["rows"]
+    without_payload = without_date.json()["data"]
+    assert without_payload["target_date"] == service.today_jst()
+    without_rows = without_payload["rows"]
     assert int(without_rows[0]["available_stock"]) == 2
     assert int(without_rows[0]["shortage"]) == 4
 

@@ -377,6 +377,7 @@ When an order is partially delivered:
 - Trigger autofill ensures missing legacy `ordered_item_number` / `ordered_quantity` / `status` are repaired.
 - When `project_id` is set, the order is excluded from the generic future-arrival pool and treated as dedicated supply for that project in planning.
 - If an `ORDERED` RFQ line owns an order, manual `project_id` updates may only preserve that RFQ-owned project assignment; reassignment or clearing must happen from the RFQ line workflow.
+- Splitting an RFQ-owned open order must keep the existing `project_id` only on the original RFQ-linked row; the new sibling row starts with `project_id = NULL` until an RFQ line explicitly links to it.
 
 ### **3.7 transaction_log**
 
@@ -819,7 +820,7 @@ Projected Available =
 - Inventory movement CSV import supports `MOVE`, `CONSUME`, `ADJUST`, `ARRIVAL`, `RESERVE` operation rows and executes them via the existing batch transaction service.
 - Reservation preview:
   - `POST /reservations/import-preview` validates direct item or assembly targets, previews assembly expansion, and flags inventory shortages before commit
-  - preview confirmation may send optional per-row `row_overrides` (`item_id` or `assembly_id`) to `POST /reservations/import-csv`
+  - preview confirmation may send optional per-row `row_overrides` (`item_id` or `assembly_id`) to `POST /reservations/import-csv`; the override target is authoritative during commit, even if the raw CSV row still contains a stale item or assembly field
 - Reservation CSV import supports either direct `item_id` reservations or assembly-driven rows (`assembly` + optional `assembly_quantity`) that expand to component reservations using assembly definitions.
 - Assembly expansion is intentionally advisory/planning-oriented (no automatic inventory movement beyond reservation allocation), which aligns with current assembly policy and avoids unnecessary complexity.
 - Items, inventory, orders, and reservations CSV workflows each expose:
@@ -1063,6 +1064,7 @@ Base URL: `http://localhost:8000/api`
 `GET /projects/{project_id}/gap-analysis` remains as a compatibility view over the same planning engine and reports:
 - `available_stock`: total on-time supply visible at the project start date
 - `shortage`: uncovered quantity at the project start date
+- `target_date`: the effective planning date used by the shared engine (`target_date` override, stored `planned_start`, or `today_jst()` fallback)
 
 #### **Purchase Candidates**
 

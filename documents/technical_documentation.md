@@ -425,6 +425,7 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 - Compatibility endpoint: `GET /api/projects/{project_id}/gap-analysis`
   - still returns `available_stock` / `shortage`
   - internally reads from the sequential planning engine instead of the old isolated projection rule
+  - returns the effective `target_date` that the shared planning engine actually used
 
 ### Project RFQ workflow
 
@@ -447,6 +448,7 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
   - `ORDERED` requires `linked_order_id`
   - non-`ORDERED` RFQ states clear `linked_order_id`, so quoted supply stays in the planning-only path
   - only `ORDERED` links set `orders.project_id`; removing or replacing the link clears/reassigns the dedicated order ownership to match the RFQ line state, and manual `/api/orders/{id}` project edits must not override that RFQ-owned assignment
+  - splitting an RFQ-owned order must not clone that dedicated `project_id` onto the new sibling order, because RFQ ownership remains attached only to the original linked row
 
 ### Purchase candidate persistence (pre-PO planning)
 
@@ -501,7 +503,7 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
   - preview uses direct canonical item numbers, supplier-scoped aliases, normalized equality, and fuzzy ranking, but does not create a missing supplier during preview
   - `POST /api/orders/import` now accepts optional multipart JSON fields `row_overrides` and `alias_saves` so preview-confirmation can pin canonical items/units and persist supplier aliases after duplicate checks pass
   - `POST /api/reservations/import-preview` validates item/assembly target resolution, previews assembly expansion into generated component reservations, and flags inventory shortages before commit
-  - `POST /api/reservations/import-csv` accepts optional multipart JSON `row_overrides` so preview confirmation can choose `item_id` or `assembly_id` targets explicitly
+  - `POST /api/reservations/import-csv` accepts optional multipart JSON `row_overrides` so preview confirmation can choose `item_id` or `assembly_id` targets explicitly; that explicit override wins over stale raw CSV target text during commit
 
 ## Catalog search / picker foundation
 

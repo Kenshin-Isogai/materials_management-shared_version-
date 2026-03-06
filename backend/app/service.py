@@ -3853,12 +3853,18 @@ def import_reservations_from_rows(
         item_id_override = override.get("item_id")
         assembly_id_override = override.get("assembly_id")
 
-        item_id_raw = item_id_override if item_id_override is not None else row.get("item_id")
-        assembly_ref = (
-            ""
-            if item_id_override is not None
-            else str(row.get("assembly") or row.get("assembly_name") or "").strip()
-        )
+        assembly_id: int | None = None
+        if assembly_id_override is not None:
+            item_id_raw = None
+            assembly_id = int(assembly_id_override)
+            assembly_ref = str(assembly_id_override)
+        else:
+            item_id_raw = item_id_override if item_id_override is not None else row.get("item_id")
+            assembly_ref = (
+                ""
+                if item_id_override is not None
+                else str(row.get("assembly") or row.get("assembly_name") or "").strip()
+            )
         assembly_qty_raw = row.get("assembly_quantity")
 
         if item_id_raw not in (None, ""):
@@ -3877,9 +3883,7 @@ def import_reservations_from_rows(
             )
             continue
 
-        if assembly_id_override is not None:
-            assembly_id = int(assembly_id_override)
-        else:
+        if assembly_id is None:
             if not assembly_ref:
                 raise AppError(code="INVALID_ITEM", message=f"row {idx}: either item_id or assembly is required", status_code=422)
             assembly_id = assembly_map.get(assembly_ref.casefold())
@@ -4097,6 +4101,7 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
             "PROJECT_NOT_FOUND",
             f"Project with id {project_id} not found",
         )
+    rfq_project_id: int | None = None
     if "project_id" in payload:
         rfq_project_id = _ordered_rfq_project_for_order(conn, order_id)
         if rfq_project_id is not None and project_id != rfq_project_id:
@@ -4187,6 +4192,8 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
             message="Split would produce invalid quantities",
             status_code=409,
         )
+    if rfq_project_id is None:
+        rfq_project_id = _ordered_rfq_project_for_order(conn, order_id)
 
     split_updates = ["order_amount = ?", "ordered_quantity = ?", "status = COALESCE(?, status)"]
     split_params: list[Any] = [remaining_order_amount, remaining_ordered, status]
@@ -4198,6 +4205,13 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
         f"UPDATE orders SET {', '.join(split_updates)} WHERE order_id = ?",
         tuple(split_params),
     )
+    # RFQ ownership stays on the linked order only; the split sibling remains generic
+    # until an ORDERED RFQ line explicitly points at it.
+    split_child_project_id = (
+        None
+        if rfq_project_id is not None
+        else (project_id if "project_id" in payload else current.get("project_id"))
+    )
     cur = conn.execute(
         """
         INSERT INTO orders (
@@ -4208,7 +4222,7 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
         (
             current["item_id"],
             current["quotation_id"],
-            project_id if "project_id" in payload else current.get("project_id"),
+            split_child_project_id,
             split_quantity,
             split_ordered,
             current["ordered_item_number"],
@@ -7982,7 +7996,6 @@ def project_gap_analysis(
     conn: sqlite3.Connection, project_id: int, *, target_date: str | None = None
 ) -> dict[str, Any]:
     planning = project_planning_analysis(conn, project_id, target_date=target_date)
-    original_project = get_project(conn, project_id)
     rows = [
         {
             "item_id": row["item_id"],
@@ -7999,7 +8012,7 @@ def project_gap_analysis(
     ]
     return {
         "project": planning["project"],
-        "target_date": target_date if target_date is not None else original_project.get("planned_start"),
+        "target_date": planning["target_date"],
         "summary": planning["summary"],
         "rows": rows,
     }
