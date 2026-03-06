@@ -43,6 +43,11 @@
 - Added the next CR1 reconciliation slice for Projects quick-entry parsing.
   - Added `POST /api/projects/requirements/preview` for `item_number,quantity` bulk text parsing.
   - Projects page quick parser now previews exact/high-confidence/review/unresolved matches, uses `CatalogPicker` for manual correction, and then applies the result into editable project requirement rows.
+- Completed the remaining CR1 reconciliation slice for BOM spreadsheet entry.
+  - Added `POST /api/bom/preview` for supplier/item reconciliation before analyze, reserve, or shortage persistence.
+  - BOM preview returns ranked supplier and item candidates plus projected canonical quantity, available stock, and shortage for the suggested item match.
+  - BOM page is now preview-first and uses `CatalogPicker` for row-level supplier/item correction inside the preview.
+  - `POST /api/bom/analyze` no longer creates missing suppliers as a side effect when a row resolves by direct canonical item number.
 
 ### Fixed
 
@@ -72,6 +77,7 @@
 - Updated `README.md`, `specification.md`, `documents/technical_documentation.md`, and `documents/source_current_state.md` with the CSV template/reference download endpoints and sticky-table UI behavior.
 - Updated `README.md`, `specification.md`, `documents/technical_documentation.md`, and `documents/source_current_state.md` with preview-first item/movement/reservation CSV import behavior and endpoint contracts.
 - Updated `README.md`, `specification.md`, `documents/technical_documentation.md`, and `documents/source_current_state.md` with the new Projects quick-parser preview endpoint and workflow.
+- Updated `README.md`, `specification.md`, `documents/technical_documentation.md`, and `documents/source_current_state.md` with the new BOM preview endpoint and preview-first reconciliation workflow.
 
 ### Tests
 
@@ -97,7 +103,10 @@
   - inventory import preview and preview-confirmation item overrides
   - reservations import preview and preview-confirmation target overrides
 - Added backend integration coverage for project requirement quick-parser preview.
-- Backend suite executed: `uv run python -m pytest -q` -> `112 passed`.
+- Added backend integration coverage for:
+  - BOM preview exact/review/unresolved classification
+  - BOM analyze avoiding supplier creation side effects for direct canonical items
+- Backend suite executed: `uv run python -m pytest -q` -> `114 passed`.
 - Frontend production build executed: `npm.cmd run build`.
 
 ## 2026-03-05

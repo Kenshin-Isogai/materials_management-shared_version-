@@ -388,11 +388,19 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 
 ### BOM date-aware gap analysis
 
+- Preview-first reconciliation endpoint:
+  - `POST /api/bom/preview`
+  - classifies supplier and item resolution per row as `exact`, `high_confidence`, `needs_review`, or `unresolved`
+  - returns ranked supplier and item candidates plus projected canonical quantity / available stock / shortage for the suggested item match
+  - preview does not create missing suppliers; it reuses the same non-destructive matching stack as the import-preview flows
 - `POST /api/bom/analyze` now accepts optional `target_date` (`YYYY-MM-DD`).
 - Domain rule (`service.analyze_bom_rows`):
   - no `target_date`: use current net available (`inventory_ledger.on_hand - active_allocations`)
   - with `target_date` (today/future): use
     `current_net_available + sum(open order_amount where expected_arrival <= target_date)`
+- Supplier lookup during analyze is now non-creating:
+  - unknown supplier labels no longer insert supplier master rows as a side effect of BOM analysis
+  - direct canonical item numbers can still be analyzed without a registered supplier alias scope
 - Validation:
   - `target_date` earlier than today is rejected with `422` / `INVALID_TARGET_DATE`.
 - `POST /api/bom/reserve` remains current-stock reservation behavior (execution-time allocation); it does not reserve future arrivals.
@@ -514,6 +522,7 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
   - Projects quick bulk-parser preview also uses `CatalogPicker` for manual item correction before rows are applied
   - Assemblies page component selector now uses `CatalogPicker` for item lookup
   - BOM spreadsheet entry now uses `CatalogPicker` in type-or-search mode for supplier and item cells
+  - BOM preview reconciliation also uses `CatalogPicker` for supplier and item overrides before analyze/reserve/save
   - Reservations entry now uses `CatalogPicker` for item selection
   - Items, Orders, Movements, and Reservations import preview rows now use the same catalog-search payload for reconciliation corrections
   - Orders import supplier selection also uses the same picker/search contract

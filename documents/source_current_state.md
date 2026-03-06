@@ -16,7 +16,7 @@ Last updated: 2026-03-06 (JST)
 
 - `backend/`
   - `main.py`: CLI entrypoint and command routing
-  - `app/api.py`: HTTP API routes (106 endpoints)
+  - `app/api.py`: HTTP API routes (107 endpoints)
   - `app/service.py`: domain logic (single business logic layer)
   - `app/db.py`: schema + indexes + migration logic (18 tables)
   - `tests/`: integration/service/path tests
@@ -87,6 +87,10 @@ Last updated: 2026-03-06 (JST)
 - Projects page bulk-parser unresolved rows keep their raw typed query visible until the user remaps them through the picker.
 - Assemblies page component rows now use the same `CatalogPicker` item selector, with keyboard search and recent selections stored in `localStorage`.
 - BOM spreadsheet entry now uses `CatalogPicker` in type-or-search mode for supplier and item columns while still allowing raw text entry.
+- BOM page is now preview-first:
+  - `POST /api/bom/preview` classifies supplier/item matches as `exact`, `high_confidence`, `needs_review`, or `unresolved`
+  - preview rows return ranked supplier/item candidates and projected canonical quantity / available stock / shortage
+  - BOM analyze, reserve, and shortage-save actions now run from the corrected preview set instead of directly from the raw grid
 - Reservations `Reservation Entry` rows now use `CatalogPicker` for item selection instead of a long static `<select>`.
 - Items manual CSV import is now preview-first:
   - `POST /api/items/import-preview` classifies duplicate item rows, alias create/update rows, and unresolved canonical alias rows before commit
@@ -106,6 +110,7 @@ Last updated: 2026-03-06 (JST)
 - BOM page now supports optional analysis date input and sends `target_date` to `POST /api/bom/analyze` for future-arrival-aware gap checks.
 - BOM page now supports `Save Shortages` to persist shortage/missing rows as purchase candidates before PO creation.
 - BOM page `Save Shortages` now surfaces API errors in-page (message area) instead of failing silently on rejected inputs such as past `target_date`.
+- BOM analysis no longer creates missing suppliers as a side effect when a row references a direct canonical item number.
 - Purchase Candidates page provides persistent shortage tracking with status transitions (`OPEN`, `ORDERING`, `ORDERED`, `CANCELLED`) and project-gap candidate creation.
 - Orders page `Order List` supports client-side sorting by order id, supplier, item, quantity, expected arrival, and status.
 - Orders page `Order List` now supports inline editing of `expected_arrival` (ETA) for open orders, backed by `PUT /api/orders/{order_id}`.
@@ -178,7 +183,7 @@ Last updated: 2026-03-06 (JST)
 
 ## 6. Quality State
 
-- Backend tests: `112 passed` (latest run on 2026-03-06).
+- Backend tests: `114 passed` (latest run on 2026-03-06).
 - Frontend production build: success (latest run on 2026-03-06).
 
 ## 7. Known Directional Gaps (intentional for current phase)

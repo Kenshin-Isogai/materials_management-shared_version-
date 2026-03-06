@@ -131,6 +131,10 @@ uv run python -m pytest
 - Projects quick requirement parsing:
   - `POST /api/projects/requirements/preview`
   - parses `item_number,quantity` lines, classifies exact/review/unresolved matches, and lets the UI apply corrected rows into project requirements
+- BOM spreadsheet reconciliation:
+  - `POST /api/bom/preview`
+  - classifies supplier/item matches as `exact`, `high_confidence`, `needs_review`, or `unresolved`
+  - returns ranked supplier and item candidates plus projected shortage data before the UI runs `POST /api/bom/analyze`, `POST /api/bom/reserve`, or `POST /api/purchase-candidates/from-bom`
 - Live reference CSV downloads:
   - `GET /api/items/import-reference`
   - `GET /api/inventory/import-reference`
@@ -144,4 +148,4 @@ uv run python -m pytest
 ### Catalog search shortcut
 
 - Typed selector search for write flows: `GET /api/catalog/search?q=...&types=item,assembly,supplier,project`
-- `CatalogPicker` now powers Projects requirements, Assemblies components, BOM spreadsheet entry, Reservations entry, and Items/Orders/Movements/Reservations import reconciliation
+- `CatalogPicker` now powers Projects requirements, Assemblies components, BOM spreadsheet entry and BOM preview reconciliation, Reservations entry, and Items/Orders/Movements/Reservations import reconciliation

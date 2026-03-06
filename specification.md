@@ -806,6 +806,10 @@ Projected Available =
 - Projects quick requirement parsing is also preview-first before rows are applied into project requirements.
   - `POST /projects/requirements/preview` parses `item_number,quantity` text lines, classifies item matches as `exact`, `high_confidence`, `needs_review`, or `unresolved`, and returns ranked item candidates for correction
   - preview-confirmed project rows are applied client-side into the editable requirements grid; project create/update contracts remain unchanged
+- BOM spreadsheet entry is also preview-first before analysis, reservation, or shortage persistence.
+  - `POST /bom/preview` classifies supplier and item matches as `exact`, `high_confidence`, `needs_review`, or `unresolved`
+  - preview rows return ranked supplier/item candidates plus projected canonical quantity, available stock, and shortage for the suggested item match
+  - preview-confirmed BOM rows are then sent through the existing `POST /bom/analyze`, `POST /bom/reserve`, or `POST /purchase-candidates/from-bom` contracts; no separate BOM commit payload is required
 - Items preview:
   - `POST /items/import-preview` classifies item rows as create-vs-duplicate and alias rows as create/update/review/unresolved
   - preview confirmation may send optional per-row `row_overrides` (`canonical_item_number`, `units_per_order`) to `POST /items/import`
@@ -873,7 +877,7 @@ All management pages handling CRUD operations (Items, Orders, Reservations, etc.
 | Arrival | Process arrivals, partial deliveries (supports bulk resolution) |
 | Movements | Single/batch movements, all operation types, CSV import (`operation_type,item_id,quantity,from_location,to_location,location,note`) |
 | Reserve | Reservation management, BOM batch reservation, CSV import (`item_id` or `assembly`, `quantity`, optional `assembly_quantity/purpose/deadline/note/project_id`) |
-| BOM | Gap analysis, reserve available, optional date-aware projection |
+| BOM | Preview-first reconciliation, gap analysis, reserve available, optional date-aware projection |
 | Assemblies | Define assemblies, location usage, requirements |
 | Items | Bulk edit item attributes; soft-merge categories via alias mapping |
 | History | Transaction log, undo operations |
@@ -1035,6 +1039,7 @@ Base URL: `http://localhost:8000/api`
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
+| POST | `/bom/preview` | Preview BOM supplier/item reconciliation and projected shortage before execution |
 | POST | `/bom/analyze` | Analyze BOM gaps (accepts CSV or JSON; optional `target_date`) |
 | POST | `/bom/reserve` | Reserve BOM items |
 
