@@ -8,6 +8,7 @@ const nav = [
   { to: "/reservations", label: "Reservations" },
   { to: "/assemblies", label: "Assemblies" },
   { to: "/projects", label: "Projects" },
+  { to: "/workspace", label: "Workspace" },
   { to: "/purchase-candidates", label: "Purchase Candidates" },
   { to: "/planning", label: "Planning" },
   { to: "/rfq", label: "RFQ" },

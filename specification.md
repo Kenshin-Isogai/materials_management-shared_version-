@@ -873,6 +873,7 @@ All management pages handling CRUD operations (Items, Orders, Reservations, etc.
 | Tab | Functions |
 |-----|-----------|
 | **Dashboard** | **Overview: overdue arrivals, expiring reservations, low stock alerts, recent activity** |
+| **Workspace** | **Summary-first future-demand route: project dashboard, committed pipeline view, planning board, and contextual drawers for Project/Item/RFQ follow-up** |
 | Search | Keyword search (multi-word support), filtering/sorting, inventory snapshot export |
 | Location | Location inspection, assembly view, disassemble |
 | Projects | CRUD project definitions, requirements, lifecycle status |
@@ -934,6 +935,13 @@ Base URL: `http://localhost:8000/api`
 |--------|----------|-------------|
 | GET | `/auth/capabilities` | Return runtime auth mode and planned RBAC roles metadata |
 
+#### **Workspace**
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/workspace/summary` | Return aggregate project dashboard data for `/workspace`, including committed-vs-draft semantics, RFQ summary counts, and committed pipeline rows without per-project planning-analysis fan-out |
+| GET | `/workspace/planning-export` | Download CSV export for the selected project planning view (`project_id`, optional `target_date`) including pipeline summary, selected-project totals, item rows, and RFQ counts |
+
 #### **Catalog Search**
 
 | Method | Endpoint | Description |
@@ -955,6 +963,7 @@ Base URL: `http://localhost:8000/api`
 | DELETE | `/items/{item_id}` | Delete item (blocked if referenced) |
 | GET | `/items/{item_id}/history` | Get item transaction history |
 | GET | `/items/{item_id}/flow` | Get item-centric increase/decrease timeline (transactions + expected arrivals + reservation demand) |
+| GET | `/items/{item_id}/planning-context` | Return cross-project planning demand/allocation context for the item, optionally including a preview project/date |
 
 #### **Inventory**
 
@@ -975,7 +984,7 @@ Base URL: `http://localhost:8000/api`
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/orders` | List orders (supports `?status=`, `?supplier=`; includes optional `project_id`) |
+| GET | `/orders` | List orders (supports `?status=`, `?supplier=`, `?item_id=`, `?project_id=`) |
 | GET | `/orders/import-template` | Download header-only order import template CSV (UTF-8 with BOM) |
 | GET | `/orders/import-reference` | Download live order reference CSV; supports optional `?supplier_name=` to scope alias rows |
 | POST | `/orders/import-preview` | Preview order CSV reconciliation, classify rows, and surface duplicate quotation conflicts before commit |
@@ -1035,7 +1044,7 @@ Base URL: `http://localhost:8000/api`
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/planning/pipeline` | List committed projects in sequential planning order |
+| GET | `/planning/pipeline` | List committed projects in sequential planning order; rows include `generic_committed_total` and `cumulative_generic_consumed_before_total` |
 | GET | `/rfq-batches` | List RFQ batches |
 | GET | `/rfq-batches/{rfq_id}` | Get RFQ batch with line items |
 | PUT | `/rfq-batches/{rfq_id}` | Update RFQ batch metadata/status |
@@ -1063,6 +1072,29 @@ Base URL: `http://localhost:8000/api`
   - `QUOTED` RFQ lines with `expected_arrival`
   - orders whose `project_id` is set
 - generic supply comes from current net available stock plus open orders with `project_id IS NULL`
+- planning rows include:
+  - `supply_sources_by_start`: explicit source objects (`stock`, `generic_order`, `dedicated_order`, `quoted_rfq`) used to cover the row by the selected start date
+  - `recovery_sources_after_start`: explicit source objects that only recover backlog after the start date
+
+`GET /api/workspace/summary` is the summary-first workspace contract:
+- committed project rows expose authoritative planning totals from the canonical pipeline snapshot
+- `PLANNING` project rows expose `summary_mode = preview_required` unless the backend later adds a separate draft-preview metric
+- each project row also includes RFQ batch/line counts so the default workspace dashboard stays aggregate and avoids N+1 planning-analysis requests
+
+`GET /api/items/{item_id}/planning-context` returns the item-side planning drill-in used by the workspace drawer:
+- current item identity plus the effective preview context (`preview_project_id`, `target_date`)
+- one row per committed project, plus the selected preview project when applicable
+- row metrics reuse canonical planning semantics (`required_quantity`, `covered_on_time_quantity`, `shortage_at_start`, `recovered_after_start_quantity`, `remaining_shortage_quantity`)
+- each row also exposes `supply_sources_by_start` and `recovery_sources_after_start` so the item drawer can explain allocation without browser-side reconstruction
+
+`GET /api/workspace/planning-export` returns a CSV attachment for the currently selected planning view:
+- includes pipeline rows for committed-project sequencing
+- includes selected-project summary totals and RFQ counts
+- includes selected-project item rows with coverage/recovery source labels
+
+`GET /planning/pipeline` rows also expose:
+- `generic_committed_total`: generic supply consumed by that project (on-time allocation plus later generic recovery)
+- `cumulative_generic_consumed_before_total`: generic supply already absorbed by earlier committed projects before the current row
 
 `POST /projects/{project_id}/rfq-batches` accepts optional `target_date` (`YYYY-MM-DD`) so RFQ creation can reuse the planning date currently being reviewed. When this flow auto-promotes a `PLANNING` project, it persists that analysis date as `projects.planned_start`.
 

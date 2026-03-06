@@ -323,6 +323,22 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def get_item_flow(item_id: int, conn= db):
         return ok(service.get_item_flow_timeline(conn, item_id))
 
+    @app.get("/api/items/{item_id}/planning-context")
+    def get_item_planning_context(
+        item_id: int,
+        preview_project_id: int | None = None,
+        target_date: str | None = None,
+        conn= db,
+    ):
+        return ok(
+            service.get_item_planning_context(
+                conn,
+                item_id,
+                preview_project_id=preview_project_id,
+                target_date=target_date,
+            )
+        )
+
     @app.get("/api/inventory")
     def get_inventory(
         item_id: int | None = None,
@@ -423,6 +439,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def get_orders(
         status: str | None = None,
         supplier: str | None = None,
+        item_id: int | None = None,
+        project_id: int | None = None,
         include_arrived: bool = True,
         page: int = 1,
         per_page: int = 50,
@@ -432,6 +450,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
             conn,
             status=status,
             supplier=supplier,
+            item_id=item_id,
+            project_id=project_id,
             include_arrived=include_arrived,
             page=page,
             per_page=per_page,
@@ -753,6 +773,23 @@ def create_app(db_path: str | None = None) -> FastAPI:
     def get_projects(page: int = 1, per_page: int = 50, conn= db):
         data, pagination = service.list_projects(conn, page=page, per_page=per_page)
         return ok(data, pagination)
+
+    @app.get("/api/workspace/summary")
+    def get_workspace_summary(conn= db):
+        return ok(service.get_workspace_summary(conn))
+
+    @app.get("/api/workspace/planning-export")
+    def get_workspace_planning_export(
+        project_id: int,
+        target_date: str | None = None,
+        conn= db,
+    ):
+        filename, content = service.export_workspace_planning_csv(
+            conn,
+            project_id=project_id,
+            target_date=target_date,
+        )
+        return csv_attachment(filename, content)
 
     @app.get("/api/projects/{project_id}")
     def get_project(project_id: int, conn= db):

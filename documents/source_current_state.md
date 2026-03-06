@@ -1,6 +1,6 @@
 # Source Current State
 
-Last updated: 2026-03-06 (JST)
+Last updated: 2026-03-07 (JST)
 
 ## 1. System Snapshot
 
@@ -77,6 +77,19 @@ Last updated: 2026-03-06 (JST)
 
 - SPA navigation is implemented with React Router via `AppShell`.
 - Data fetching is SWR-based with typed API client wrappers.
+- Added `/workspace` as the summary-first future-demand route.
+  - default view: project summary dashboard with committed-vs-draft semantics
+  - pipeline view: committed projects with `generic_committed_total` and `cumulative_generic_consumed_before_total`
+  - board view: selected-project timeline plus shortage grid with `supply_sources_by_start` and `recovery_sources_after_start`
+  - right-side drawer uses local breadcrumb navigation for project, item, and RFQ context while keeping the board visible
+  - project drawer now uses the same editor logic as `/projects`, including bulk requirement preview/apply
+  - item drawer now shows incoming orders plus cross-project item planning allocation context from `/api/items/{item_id}/planning-context`
+  - RFQ drawer now uses the same batch/line editor logic as `/rfq`
+  - board date state now mirrors the effective planning `target_date` after same-project refreshes when there is no pending local preview edit
+  - drawer close, breadcrumb back, route-leave, and stack-truncation flows now protect unsaved project/RFQ drafts
+  - item-scoped RFQ drawers keep the whole batch available and move the focused item rows to the top
+  - RFQ save refreshes now rehydrate saved rows from server detail so normalized values such as cleared stale `linked_order_id` fields appear immediately
+  - legacy `/projects`, `/planning`, and `/rfq` remain available for heavier edit flows
 - Movements page now uses a single expanded `Movement Entry` table for both one-off and multi-row moves (the separate `Single Move` form was removed).
 - Adding a new row in `Movement Entry` now inherits the latest completed `from/to` locations so repeated transfers do not require retyping the same pair each time.
 - Reservations page supports partial release/consume via quantity prompt.
@@ -104,11 +117,11 @@ Last updated: 2026-03-06 (JST)
   - `POST /api/inventory/import-preview` validates operation/location rules, simulates inventory effects row-by-row, and flags unresolved item ids or stock shortages before commit
   - preview confirmation can send per-row `item_id` overrides back through `POST /api/inventory/import-csv`
 - Projects page now supports editing an existing project (load details into form, then save via project update API) including requirement composition/quantities.
-- Planning page is now the primary future-demand workflow surface.
+- Planning page remains available as the detailed fallback future-demand screen.
   - Select a project and analyze it at its planned start (or an override date).
   - Later projects are netted against earlier committed projects (`CONFIRMED` / `ACTIVE`) instead of being analyzed in isolation, including committed work whose start date is already in the past.
-  - On-time shortage rows can be converted directly into RFQ batches, and RFQ creation now reuses the planning date selected on the Planning page.
-- RFQ page is now the primary project-shortage follow-up surface.
+  - On-time shortage rows can still be converted directly into RFQ batches, and RFQ creation reuses the planning date currently under review.
+- RFQ page remains the detailed project-shortage follow-up surface when the workspace drawer is not sufficient.
   - RFQ batches persist project-specific shortage rows.
   - RFQ lines capture supplier, finalized quantity, lead time, expected arrival, status, and an order link that is only retained while the line is `ORDERED`.
   - An `ORDERED` linked order is synchronized into `orders.project_id`; draft/quoted lines do not pull the order out of the generic planning pool, and manual order project reassignment is blocked while an `ORDERED` RFQ line owns that assignment.
@@ -138,6 +151,17 @@ Last updated: 2026-03-06 (JST)
 - Project planning now has two layers:
   - `GET /api/projects/{id}/planning-analysis` for sequential multi-project netting with backlog carry-forward
   - `GET /api/projects/{id}/gap-analysis` as a compatibility view over the same planning engine, returning the effective planning `target_date` used for the analysis
+- The planning engine now also returns source-level explainability for workspace consumers.
+  - planning rows expose `supply_sources_by_start` and `recovery_sources_after_start`
+  - pipeline rows expose `generic_committed_total` and `cumulative_generic_consumed_before_total`
+- Added aggregate workspace endpoint `GET /api/workspace/summary`.
+  - committed rows include authoritative planning totals and RFQ counts
+  - `PLANNING` rows intentionally return `preview_required` semantics instead of draft shortage numbers inferred in the frontend
+- Added item planning drill-in endpoint `GET /api/items/{item_id}/planning-context`.
+  - returns committed-project allocation rows plus optional preview-project context for the active workspace board date
+- Added workspace CSV export endpoint `GET /api/workspace/planning-export`.
+  - export includes committed pipeline rows, selected-project summary, selected-project item rows, and RFQ counts
+- `GET /api/orders` now supports `item_id` and `project_id` filters in addition to status/supplier filters.
 - Splitting an RFQ-owned open order now keeps the dedicated `project_id` only on the original RFQ-linked order; the new sibling order remains generic until an RFQ line explicitly links it.
 - Purchase candidate endpoints are now available:
   - `GET /api/purchase-candidates`

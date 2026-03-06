@@ -4134,6 +4134,8 @@ def list_orders(
     *,
     status: str | None = None,
     supplier: str | None = None,
+    item_id: int | None = None,
+    project_id: int | None = None,
     include_arrived: bool = True,
     page: int = 1,
     per_page: int = 50,
@@ -4146,6 +4148,12 @@ def list_orders(
     if supplier:
         clauses.append("s.name = ?")
         params.append(supplier)
+    if item_id is not None:
+        clauses.append("o.item_id = ?")
+        params.append(int(item_id))
+    if project_id is not None:
+        clauses.append("o.project_id = ?")
+        params.append(int(project_id))
     if not include_arrived:
         clauses.append("o.status <> 'Arrived'")
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
@@ -7870,6 +7878,80 @@ def _load_item_planning_metadata(
     return {int(row["item_id"]): dict(row) for row in rows}
 
 
+def _planning_source_signature(source: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        source.get("source_type"),
+        source.get("ref_id"),
+        source.get("project_id"),
+        source.get("date"),
+        source.get("status"),
+        source.get("label"),
+    )
+
+
+def _append_planning_source(target: list[dict[str, Any]], source: dict[str, Any]) -> None:
+    quantity = int(source.get("quantity") or 0)
+    if quantity <= 0:
+        return
+    signature = _planning_source_signature(source)
+    for existing in target:
+        if _planning_source_signature(existing) == signature:
+            existing["quantity"] = int(existing.get("quantity") or 0) + quantity
+            return
+    normalized = dict(source)
+    normalized["quantity"] = quantity
+    target.append(normalized)
+
+
+def _consume_planning_sources(
+    sources: list[dict[str, Any]],
+    quantity: int,
+) -> list[dict[str, Any]]:
+    remaining = int(quantity)
+    consumed: list[dict[str, Any]] = []
+    index = 0
+    while remaining > 0 and index < len(sources):
+        available = int(sources[index].get("quantity") or 0)
+        if available <= 0:
+            index += 1
+            continue
+        used = min(available, remaining)
+        consumed_source = dict(sources[index])
+        consumed_source["quantity"] = used
+        _append_planning_source(consumed, consumed_source)
+        sources[index]["quantity"] = available - used
+        remaining -= used
+        if int(sources[index].get("quantity") or 0) <= 0:
+            index += 1
+    sources[:] = [source for source in sources if int(source.get("quantity") or 0) > 0]
+    return consumed
+
+
+def _sum_planning_sources(sources: list[dict[str, Any]]) -> int:
+    return sum(int(source.get("quantity") or 0) for source in sources)
+
+
+def _build_planning_source(
+    source_type: str,
+    *,
+    quantity: int,
+    label: str,
+    ref_id: int | None = None,
+    project_id: int | None = None,
+    date: str | None = None,
+    status: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "source_type": source_type,
+        "quantity": int(quantity),
+        "label": label,
+        "ref_id": ref_id,
+        "project_id": project_id,
+        "date": date,
+        "status": status,
+    }
+
+
 def _build_project_planning_snapshot(
     conn: sqlite3.Connection,
     *,
@@ -8030,11 +8112,24 @@ def _build_project_planning_snapshot(
                 "future_dedicated_recovery_quantity": 0,
                 "recovered_after_start_quantity": 0,
                 "pending_backlog_quantity": 0,
+                "supply_sources_by_start": [],
+                "recovery_sources_after_start": [],
             }
 
     for item_id in item_ids_sorted:
-        generic_pool = _get_total_available_inventory(conn, item_id)
-        dedicated_ready: dict[int, int] = {pid: 0 for pid in project_sequence}
+        generic_pool_sources: list[dict[str, Any]] = []
+        current_stock = _get_total_available_inventory(conn, item_id)
+        if current_stock > 0:
+            generic_pool_sources.append(
+                _build_planning_source(
+                    "stock",
+                    quantity=current_stock,
+                    label="Current stock",
+                )
+            )
+        dedicated_ready_sources: dict[int, list[dict[str, Any]]] = {
+            pid: [] for pid in project_sequence
+        }
         events: list[dict[str, Any]] = []
 
         for row in generic_order_events.get(item_id, []):
@@ -8043,7 +8138,13 @@ def _build_project_planning_snapshot(
                     "kind": "generic_supply",
                     "date": row["date"],
                     "priority": 1,
-                    "quantity": row["quantity"],
+                    "source": _build_planning_source(
+                        "generic_order",
+                        quantity=int(row["quantity"]),
+                        label=f"Order #{int(row['ref_id'])}",
+                        ref_id=int(row["ref_id"]),
+                        date=str(row["date"]),
+                    ),
                     "ref_id": row["ref_id"],
                     "project_rank": -1,
                 }
@@ -8054,7 +8155,14 @@ def _build_project_planning_snapshot(
                     "kind": "dedicated_supply",
                     "date": row["date"],
                     "priority": 0,
-                    "quantity": row["quantity"],
+                    "source": _build_planning_source(
+                        "dedicated_order",
+                        quantity=int(row["quantity"]),
+                        label=f"Order #{int(row['ref_id'])}",
+                        ref_id=int(row["ref_id"]),
+                        project_id=int(row["project_id"]),
+                        date=str(row["date"]),
+                    ),
                     "project_id": row["project_id"],
                     "ref_id": row["ref_id"],
                     "project_rank": project_rank.get(int(row["project_id"]), 0),
@@ -8066,7 +8174,15 @@ def _build_project_planning_snapshot(
                     "kind": "dedicated_supply",
                     "date": row["date"],
                     "priority": 0,
-                    "quantity": row["quantity"],
+                    "source": _build_planning_source(
+                        "quoted_rfq",
+                        quantity=int(row["quantity"]),
+                        label=f"RFQ Line #{int(row['ref_id'])} [QUOTED]",
+                        ref_id=int(row["ref_id"]),
+                        project_id=int(row["project_id"]),
+                        date=str(row["date"]),
+                        status="QUOTED",
+                    ),
                     "project_id": row["project_id"],
                     "ref_id": row["ref_id"],
                     "project_rank": project_rank.get(int(row["project_id"]), 0),
@@ -8101,22 +8217,31 @@ def _build_project_planning_snapshot(
         for event in events:
             if event["kind"] == "dedicated_supply":
                 project_metric = metrics[int(event["project_id"])][item_id]
-                remaining_qty = int(event["quantity"])
+                remaining_sources = [dict(event["source"])]
                 backlog_qty = int(project_metric["pending_backlog_quantity"])
                 if backlog_qty > 0:
-                    recovered_qty = min(remaining_qty, backlog_qty)
+                    recovered_sources = _consume_planning_sources(
+                        remaining_sources,
+                        backlog_qty,
+                    )
+                    recovered_qty = _sum_planning_sources(recovered_sources)
                     project_metric["pending_backlog_quantity"] = backlog_qty - recovered_qty
                     project_metric["recovered_after_start_quantity"] += recovered_qty
                     project_metric["future_dedicated_recovery_quantity"] += recovered_qty
-                    remaining_qty -= recovered_qty
-                if remaining_qty > 0:
-                    dedicated_ready[int(event["project_id"])] = (
-                        dedicated_ready.get(int(event["project_id"]), 0) + remaining_qty
+                    for source in recovered_sources:
+                        _append_planning_source(
+                            project_metric["recovery_sources_after_start"],
+                            source,
+                        )
+                for source in remaining_sources:
+                    _append_planning_source(
+                        dedicated_ready_sources[int(event["project_id"])],
+                        source,
                     )
                 continue
 
             if event["kind"] == "generic_supply":
-                remaining_qty = int(event["quantity"])
+                remaining_sources = [dict(event["source"])]
                 for pid in project_sequence:
                     project_metric = metrics.get(pid, {}).get(item_id)
                     if project_metric is None:
@@ -8124,35 +8249,49 @@ def _build_project_planning_snapshot(
                     backlog_qty = int(project_metric["pending_backlog_quantity"])
                     if backlog_qty <= 0:
                         continue
-                    recovered_qty = min(remaining_qty, backlog_qty)
+                    recovered_sources = _consume_planning_sources(
+                        remaining_sources,
+                        backlog_qty,
+                    )
+                    recovered_qty = _sum_planning_sources(recovered_sources)
                     project_metric["pending_backlog_quantity"] = backlog_qty - recovered_qty
                     project_metric["recovered_after_start_quantity"] += recovered_qty
                     project_metric["future_generic_recovery_quantity"] += recovered_qty
-                    remaining_qty -= recovered_qty
-                    if remaining_qty <= 0:
+                    for source in recovered_sources:
+                        _append_planning_source(
+                            project_metric["recovery_sources_after_start"],
+                            source,
+                        )
+                    if _sum_planning_sources(remaining_sources) <= 0:
                         break
-                if remaining_qty > 0:
-                    generic_pool += remaining_qty
+                for source in remaining_sources:
+                    _append_planning_source(generic_pool_sources, source)
                 continue
 
             pid = int(event["project_id"])
             project_metric = metrics[pid][item_id]
-            project_metric["generic_available_at_start"] = generic_pool
+            project_metric["generic_available_at_start"] = _sum_planning_sources(generic_pool_sources)
             required_qty = int(project_metric["required_quantity"])
-            dedicated_qty = min(required_qty, dedicated_ready.get(pid, 0))
-            dedicated_ready[pid] = dedicated_ready.get(pid, 0) - dedicated_qty
+            dedicated_sources = _consume_planning_sources(
+                dedicated_ready_sources.get(pid, []),
+                required_qty,
+            )
+            dedicated_qty = _sum_planning_sources(dedicated_sources)
             remaining_qty = required_qty - dedicated_qty
-            generic_qty = min(remaining_qty, generic_pool)
-            generic_pool -= generic_qty
+            generic_sources = _consume_planning_sources(generic_pool_sources, remaining_qty)
+            generic_qty = _sum_planning_sources(generic_sources)
             shortage_qty = remaining_qty - generic_qty
             project_metric["dedicated_supply_by_start"] = dedicated_qty
             project_metric["generic_allocated_quantity"] = generic_qty
             project_metric["covered_on_time_quantity"] = dedicated_qty + generic_qty
             project_metric["shortage_at_start"] = shortage_qty
             project_metric["pending_backlog_quantity"] = shortage_qty
+            for source in dedicated_sources + generic_sources:
+                _append_planning_source(project_metric["supply_sources_by_start"], source)
 
     project_rows: dict[int, list[dict[str, Any]]] = {}
     project_summaries: list[dict[str, Any]] = []
+    cumulative_generic_consumed = 0
     for project in planning_projects:
         pid = int(project["project_id"])
         rows: list[dict[str, Any]] = []
@@ -8175,6 +8314,10 @@ def _build_project_planning_snapshot(
             )
         )
         project_rows[pid] = rows
+        generic_committed_total = sum(
+            int(row["generic_allocated_quantity"]) + int(row["future_generic_recovery_quantity"])
+            for row in rows
+        )
         project_summaries.append(
             {
                 "project_id": pid,
@@ -8189,8 +8332,11 @@ def _build_project_planning_snapshot(
                 "remaining_shortage_total": sum(
                     int(row["remaining_shortage_quantity"]) for row in rows
                 ),
+                "generic_committed_total": generic_committed_total,
+                "cumulative_generic_consumed_before_total": cumulative_generic_consumed,
             }
         )
+        cumulative_generic_consumed += generic_committed_total
 
     return {
         "project_summaries": project_summaries,
@@ -8199,6 +8345,328 @@ def _build_project_planning_snapshot(
         "selected_project_id": project_id,
         "selected_target_date": selected_target_date,
     }
+
+
+def _load_project_rfq_summary(conn: sqlite3.Connection) -> dict[int, dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT
+            p.project_id,
+            COUNT(DISTINCT rb.rfq_id) AS total_batches,
+            COUNT(DISTINCT CASE WHEN rb.status = 'OPEN' THEN rb.rfq_id END) AS open_batch_count,
+            COUNT(DISTINCT CASE WHEN rb.status = 'CLOSED' THEN rb.rfq_id END) AS closed_batch_count,
+            COUNT(DISTINCT CASE WHEN rb.status = 'CANCELLED' THEN rb.rfq_id END) AS cancelled_batch_count,
+            COALESCE(SUM(CASE WHEN rl.status = 'DRAFT' THEN 1 ELSE 0 END), 0) AS draft_line_count,
+            COALESCE(SUM(CASE WHEN rl.status = 'SENT' THEN 1 ELSE 0 END), 0) AS sent_line_count,
+            COALESCE(SUM(CASE WHEN rl.status = 'QUOTED' THEN 1 ELSE 0 END), 0) AS quoted_line_count,
+            COALESCE(SUM(CASE WHEN rl.status = 'ORDERED' THEN 1 ELSE 0 END), 0) AS ordered_line_count,
+            MAX(rb.target_date) AS latest_target_date
+        FROM projects p
+        LEFT JOIN rfq_batches rb ON rb.project_id = p.project_id
+        LEFT JOIN rfq_lines rl ON rl.rfq_id = rb.rfq_id
+        GROUP BY p.project_id
+        """
+    ).fetchall()
+    return {
+        int(row["project_id"]): {
+            "total_batches": int(row["total_batches"] or 0),
+            "open_batch_count": int(row["open_batch_count"] or 0),
+            "closed_batch_count": int(row["closed_batch_count"] or 0),
+            "cancelled_batch_count": int(row["cancelled_batch_count"] or 0),
+            "draft_line_count": int(row["draft_line_count"] or 0),
+            "sent_line_count": int(row["sent_line_count"] or 0),
+            "quoted_line_count": int(row["quoted_line_count"] or 0),
+            "ordered_line_count": int(row["ordered_line_count"] or 0),
+            "latest_target_date": row["latest_target_date"],
+        }
+        for row in rows
+    }
+
+
+def get_workspace_summary(conn: sqlite3.Connection) -> dict[str, Any]:
+    project_rows = conn.execute(
+        """
+        SELECT
+            p.project_id,
+            p.name,
+            p.description,
+            p.status,
+            p.planned_start,
+            p.created_at,
+            p.updated_at,
+            COUNT(pr.requirement_id) AS requirement_count
+        FROM projects p
+        LEFT JOIN project_requirements pr ON pr.project_id = p.project_id
+        GROUP BY p.project_id
+        ORDER BY
+            CASE p.status
+                WHEN 'ACTIVE' THEN 0
+                WHEN 'CONFIRMED' THEN 1
+                WHEN 'PLANNING' THEN 2
+                WHEN 'COMPLETED' THEN 3
+                ELSE 4
+            END,
+            COALESCE(p.planned_start, '9999-12-31') ASC,
+            p.project_id DESC
+        """
+    ).fetchall()
+    pipeline = list_planning_pipeline(conn)
+    pipeline_lookup = {int(row["project_id"]): row for row in pipeline}
+    rfq_lookup = _load_project_rfq_summary(conn)
+
+    projects: list[dict[str, Any]] = []
+    for row in project_rows:
+        project_id_value = int(row["project_id"])
+        planning_summary = pipeline_lookup.get(project_id_value)
+        status = str(row["status"])
+        if status in PLANNING_COMMITTED_PROJECT_STATUSES:
+            summary_mode = "authoritative"
+            summary_message = "Committed pipeline metrics are live."
+        elif status == "PLANNING":
+            summary_mode = "preview_required"
+            summary_message = "Draft project does not consume pipeline capacity until previewed or confirmed."
+        else:
+            summary_mode = "not_plannable"
+            summary_message = "Completed and cancelled projects are excluded from planning analysis."
+        projects.append(
+            {
+                "project_id": project_id_value,
+                "name": row["name"],
+                "description": row["description"],
+                "status": status,
+                "planned_start": row["planned_start"],
+                "requirement_count": int(row["requirement_count"] or 0),
+                "summary_mode": summary_mode,
+                "summary_message": summary_message,
+                "planning_summary": planning_summary,
+                "rfq_summary": rfq_lookup.get(
+                    project_id_value,
+                    {
+                        "total_batches": 0,
+                        "open_batch_count": 0,
+                        "closed_batch_count": 0,
+                        "cancelled_batch_count": 0,
+                        "draft_line_count": 0,
+                        "sent_line_count": 0,
+                        "quoted_line_count": 0,
+                        "ordered_line_count": 0,
+                        "latest_target_date": None,
+                    },
+                ),
+            }
+        )
+
+    return {
+        "generated_at": now_jst_iso(),
+        "projects": projects,
+        "pipeline": pipeline,
+    }
+
+
+def get_item_planning_context(
+    conn: sqlite3.Connection,
+    item_id: int,
+    *,
+    preview_project_id: int | None = None,
+    target_date: str | None = None,
+) -> dict[str, Any]:
+    item = get_item(conn, item_id)
+    snapshot = _build_project_planning_snapshot(
+        conn,
+        project_id=preview_project_id,
+        target_date=target_date,
+    )
+    project_rows: list[dict[str, Any]] = []
+    for summary in snapshot["project_summaries"]:
+        project_id_value = int(summary["project_id"])
+        row = next(
+            (
+                candidate
+                for candidate in snapshot["project_rows"].get(project_id_value, [])
+                if int(candidate["item_id"]) == item_id
+            ),
+            None,
+        )
+        if row is None:
+            continue
+        project_rows.append(
+            {
+                "project_id": project_id_value,
+                "project_name": summary["name"],
+                "project_status": summary["status"],
+                "planned_start": summary["planned_start"],
+                "is_planning_preview": bool(summary["is_planning_preview"]),
+                "required_quantity": int(row["required_quantity"]),
+                "dedicated_supply_by_start": int(row["dedicated_supply_by_start"]),
+                "generic_available_at_start": int(row["generic_available_at_start"]),
+                "generic_allocated_quantity": int(row["generic_allocated_quantity"]),
+                "covered_on_time_quantity": int(row["covered_on_time_quantity"]),
+                "shortage_at_start": int(row["shortage_at_start"]),
+                "future_generic_recovery_quantity": int(row["future_generic_recovery_quantity"]),
+                "future_dedicated_recovery_quantity": int(row["future_dedicated_recovery_quantity"]),
+                "recovered_after_start_quantity": int(row["recovered_after_start_quantity"]),
+                "remaining_shortage_quantity": int(row["remaining_shortage_quantity"]),
+                "supply_sources_by_start": list(row.get("supply_sources_by_start") or []),
+                "recovery_sources_after_start": list(row.get("recovery_sources_after_start") or []),
+            }
+        )
+
+    return {
+        "item_id": int(item["item_id"]),
+        "item_number": item["item_number"],
+        "manufacturer_name": item["manufacturer_name"],
+        "preview_project_id": preview_project_id,
+        "target_date": snapshot["selected_target_date"],
+        "projects": project_rows,
+    }
+
+
+def _format_planning_source_list(sources: list[dict[str, Any]]) -> str:
+    return " | ".join(
+        f"{int(source.get('quantity') or 0)} {str(source.get('label') or '').strip()}".strip()
+        for source in sources
+        if int(source.get("quantity") or 0) > 0
+    )
+
+
+def export_workspace_planning_csv(
+    conn: sqlite3.Connection,
+    *,
+    project_id: int,
+    target_date: str | None = None,
+) -> tuple[str, bytes]:
+    analysis = project_planning_analysis(conn, project_id, target_date=target_date)
+    rfq_lookup = _load_project_rfq_summary(conn)
+    fieldnames = [
+        "section",
+        "project_id",
+        "project_name",
+        "project_status",
+        "planned_start",
+        "target_date",
+        "rfq_open_batches",
+        "rfq_quoted_lines",
+        "rfq_ordered_lines",
+        "item_id",
+        "item_number",
+        "manufacturer_name",
+        "required_quantity",
+        "covered_on_time_quantity",
+        "shortage_at_start",
+        "recovered_after_start_quantity",
+        "remaining_shortage_quantity",
+        "dedicated_supply_by_start",
+        "generic_allocated_quantity",
+        "generic_committed_total",
+        "cumulative_generic_consumed_before_total",
+        "coverage_sources",
+        "recovery_sources",
+    ]
+    rows: list[dict[str, Any]] = []
+
+    selected_rfq = rfq_lookup.get(int(analysis["project"]["project_id"]), {})
+    selected_recovered_total = sum(
+        int(row["recovered_after_start_quantity"]) for row in analysis["rows"]
+    )
+    rows.append(
+        {
+            "section": "selected_project_summary",
+            "project_id": int(analysis["project"]["project_id"]),
+            "project_name": analysis["project"]["name"],
+            "project_status": analysis["project"]["status"],
+            "planned_start": analysis["project"]["planned_start"],
+            "target_date": analysis["target_date"],
+            "rfq_open_batches": int(selected_rfq.get("open_batch_count") or 0),
+            "rfq_quoted_lines": int(selected_rfq.get("quoted_line_count") or 0),
+            "rfq_ordered_lines": int(selected_rfq.get("ordered_line_count") or 0),
+            "item_id": "",
+            "item_number": "",
+            "manufacturer_name": "",
+            "required_quantity": int(analysis["summary"]["required_total"]),
+            "covered_on_time_quantity": int(analysis["summary"]["covered_on_time_total"]),
+            "shortage_at_start": int(analysis["summary"]["shortage_at_start_total"]),
+            "recovered_after_start_quantity": selected_recovered_total,
+            "remaining_shortage_quantity": int(analysis["summary"]["remaining_shortage_total"]),
+            "dedicated_supply_by_start": "",
+            "generic_allocated_quantity": "",
+            "generic_committed_total": int(analysis["summary"]["generic_committed_total"]),
+            "cumulative_generic_consumed_before_total": int(
+                analysis["summary"]["cumulative_generic_consumed_before_total"]
+            ),
+            "coverage_sources": "",
+            "recovery_sources": "",
+        }
+    )
+
+    for summary in analysis["pipeline"]:
+        rfq_summary = rfq_lookup.get(int(summary["project_id"]), {})
+        rows.append(
+            {
+                "section": "pipeline",
+                "project_id": int(summary["project_id"]),
+                "project_name": summary["name"],
+                "project_status": summary["status"],
+                "planned_start": summary["planned_start"],
+                "target_date": analysis["target_date"],
+                "rfq_open_batches": int(rfq_summary.get("open_batch_count") or 0),
+                "rfq_quoted_lines": int(rfq_summary.get("quoted_line_count") or 0),
+                "rfq_ordered_lines": int(rfq_summary.get("ordered_line_count") or 0),
+                "item_id": "",
+                "item_number": "",
+                "manufacturer_name": "",
+                "required_quantity": int(summary["required_total"]),
+                "covered_on_time_quantity": int(summary["covered_on_time_total"]),
+                "shortage_at_start": int(summary["shortage_at_start_total"]),
+                "recovered_after_start_quantity": "",
+                "remaining_shortage_quantity": int(summary["remaining_shortage_total"]),
+                "dedicated_supply_by_start": "",
+                "generic_allocated_quantity": "",
+                "generic_committed_total": int(summary["generic_committed_total"]),
+                "cumulative_generic_consumed_before_total": int(
+                    summary["cumulative_generic_consumed_before_total"]
+                ),
+                "coverage_sources": "",
+                "recovery_sources": "",
+            }
+        )
+
+    for row in analysis["rows"]:
+        rows.append(
+            {
+                "section": "selected_project_item",
+                "project_id": int(analysis["project"]["project_id"]),
+                "project_name": analysis["project"]["name"],
+                "project_status": analysis["project"]["status"],
+                "planned_start": analysis["project"]["planned_start"],
+                "target_date": analysis["target_date"],
+                "rfq_open_batches": int(selected_rfq.get("open_batch_count") or 0),
+                "rfq_quoted_lines": int(selected_rfq.get("quoted_line_count") or 0),
+                "rfq_ordered_lines": int(selected_rfq.get("ordered_line_count") or 0),
+                "item_id": int(row["item_id"]),
+                "item_number": row["item_number"],
+                "manufacturer_name": row["manufacturer_name"],
+                "required_quantity": int(row["required_quantity"]),
+                "covered_on_time_quantity": int(row["covered_on_time_quantity"]),
+                "shortage_at_start": int(row["shortage_at_start"]),
+                "recovered_after_start_quantity": int(row["recovered_after_start_quantity"]),
+                "remaining_shortage_quantity": int(row["remaining_shortage_quantity"]),
+                "dedicated_supply_by_start": int(row["dedicated_supply_by_start"]),
+                "generic_allocated_quantity": int(row["generic_allocated_quantity"]),
+                "generic_committed_total": "",
+                "cumulative_generic_consumed_before_total": "",
+                "coverage_sources": _format_planning_source_list(
+                    list(row.get("supply_sources_by_start") or [])
+                ),
+                "recovery_sources": _format_planning_source_list(
+                    list(row.get("recovery_sources_after_start") or [])
+                ),
+            }
+        )
+
+    filename = (
+        f"workspace_planning_project_{int(analysis['project']['project_id'])}_{analysis['target_date']}.csv"
+    )
+    return filename, _csv_bytes(fieldnames, rows)
 
 
 def list_planning_pipeline(

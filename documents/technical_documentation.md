@@ -16,6 +16,19 @@ This document explains the implemented architecture of the Materials Management 
 
 ### Projects planning UX notes (frontend)
 
+- Added `/workspace` as the primary future-demand route.
+  - default view: project summary dashboard with committed-vs-draft semantics
+  - secondary view: committed pipeline table with cumulative generic-consumption metrics
+  - deep-dive view: planning board with server-driven shortage rows and supply-source breakdowns
+  - right-side drawer infrastructure provides local breadcrumb navigation for project, item, and RFQ context without leaving the board
+  - project drawer now mounts the shared project editor, including preview-first bulk requirement entry
+  - item drawer now combines inventory, incoming orders, item flow, and cross-project planning allocation context
+  - RFQ drawer now mounts the shared RFQ batch/line editor instead of a read-only summary
+  - board date state re-syncs to the effective planning `target_date` when the same project refreshes and no local preview edit is pending
+  - drawer close, breadcrumb back, route leave, and drawer-stack truncation flows now guard unsaved project/RFQ drafts
+  - item-scoped RFQ drawers keep the full batch visible while surfacing the focused item rows first
+  - RFQ save flows selectively rehydrate the saved rows from refreshed server detail so backend-normalized values replace stale local drafts without discarding other unsaved rows
+  - legacy `/projects`, `/planning`, and `/rfq` routes remain available for heavy edits and operational fallback
 - The Projects page supports requirement target lookup via searchable item input (`datalist`) so users can select from large item registries faster than scrolling long select lists.
 - Requirement entry includes a preview-first bulk text parser (`item_number,quantity` per line).
   - `POST /api/projects/requirements/preview` classifies each line as `exact`, `high_confidence`, `needs_review`, or `unresolved`
@@ -412,6 +425,9 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 - Planning is no longer modeled as an isolated per-project gap check.
 - Canonical planning endpoint: `GET /api/projects/{project_id}/planning-analysis`
 - Supporting summary endpoint: `GET /api/planning/pipeline`
+- Workspace summary endpoint: `GET /api/workspace/summary`
+- Workspace planning export endpoint: `GET /api/workspace/planning-export`
+- Item-side planning context endpoint: `GET /api/items/{item_id}/planning-context`
 - Core domain rule (`service.project_planning_analysis` / `_build_project_planning_snapshot`):
   - committed projects are those with status `CONFIRMED` or `ACTIVE`
   - committed projects are processed in `planned_start` order
@@ -424,10 +440,25 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
   - dedicated supply is consumed before generic supply at the project start date
   - if a project is still short at its start date, that shortage becomes backlog demand
   - later generic arrivals satisfy older backlog before they become available to later projects
+- Planning rows now include explicit `supply_sources_by_start` and `recovery_sources_after_start` arrays so the frontend can explain why one row is covered or short without reconstructing source usage in the browser.
+- Pipeline summary rows now include:
+  - `generic_committed_total`: generic supply consumed by that project across on-time allocation plus later generic recovery
+  - `cumulative_generic_consumed_before_total`: generic supply already absorbed by earlier committed projects before the current project row
 - Compatibility endpoint: `GET /api/projects/{project_id}/gap-analysis`
   - still returns `available_stock` / `shortage`
   - internally reads from the sequential planning engine instead of the old isolated projection rule
   - returns the effective `target_date` that the shared planning engine actually used
+- `GET /api/workspace/summary` is intentionally aggregate-only:
+  - committed rows include authoritative planning totals reused from the canonical pipeline snapshot
+  - `PLANNING` rows return explicit `preview_required` semantics instead of unreliable inferred shortage numbers
+  - project rows also include RFQ batch/line counts so the default workspace view does not issue per-project fan-out requests
+- `GET /api/items/{item_id}/planning-context` is the drawer-side item drill-in contract:
+  - returns one row per committed project, plus the selected preview project when applicable
+  - reuses canonical planning metrics and source arrays so the frontend does not recalculate allocation behavior
+  - supports workspace what-if review by accepting optional `preview_project_id` and `target_date`
+- `GET /api/workspace/planning-export` serializes the selected planning view into CSV:
+  - includes committed pipeline rows, selected-project totals, selected-project item rows, and RFQ summary counts
+  - reuses canonical planning analysis output instead of duplicating export-only planning logic
 
 ### Project RFQ workflow
 

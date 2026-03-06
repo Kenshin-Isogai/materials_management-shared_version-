@@ -2,11 +2,20 @@
 
 Materials Management is a full-stack inventory system for optical components. It manages item master data, stock by location, supplier quotations and orders, reservations, assemblies, projects, and transaction history with undo support.
 
-The main future-planning workflow is now:
+The recommended future-planning workflow is now:
 
-`Projects` -> `Planning` -> `RFQ` -> `Orders` / `Reservations`
+`Workspace` -> `Projects` / `Planning` / `RFQ` -> `Orders` / `Reservations`
 
-`Planning` performs sequential project netting so earlier committed projects, including already-started work, consume future planning capacity before later projects are analyzed. `RFQ` stores project-dedicated shortage follow-up, reuses the planning date selected on the Planning page, and links real orders back to the project when purchasing starts.
+`Workspace` is the default summary-first route for future demand. It opens with a project dashboard, provides a committed pipeline view, and offers a planning board that previews project impact with server-owned sequential netting data and supply-source breakdowns. The dedicated `Projects`, `Planning`, and `RFQ` pages remain available for heavier editing and operational fallback.
+
+The workspace drawers now complete the main planning loop in place:
+
+- Project drawer: inline project requirement editing plus preview-first bulk item entry
+- Item drawer: inventory, incoming orders, and cross-project planning allocation context for the selected item
+- RFQ drawer: inline RFQ batch and line editing, including supplier, ETA, status, and linked-order updates
+- Planning board: CSV export for the currently selected project/preview date
+
+`Planning` still performs sequential project netting so earlier committed projects, including already-started work, consume future planning capacity before later projects are analyzed. `RFQ` stores project-dedicated shortage follow-up, reuses the planning date selected on the planning board, and links real orders back to the project when purchasing starts.
 
 ## Tech Stack
 

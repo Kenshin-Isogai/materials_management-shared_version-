@@ -15,6 +15,7 @@ import { PurchaseCandidatesPage } from "./pages/PurchaseCandidatesPage";
 import { RfqPage } from "./pages/RfqPage";
 import { ReservationsPage } from "./pages/ReservationsPage";
 import { SnapshotPage } from "./pages/SnapshotPage";
+import { WorkspacePage } from "./pages/WorkspacePage";
 
 export default function App() {
   return (
@@ -27,6 +28,7 @@ export default function App() {
         <Route path="/reservations" element={<ReservationsPage />} />
         <Route path="/assemblies" element={<AssembliesPage />} />
         <Route path="/projects" element={<ProjectsPage />} />
+        <Route path="/workspace" element={<WorkspacePage />} />
         <Route path="/planning" element={<PlanningPage />} />
         <Route path="/rfq" element={<RfqPage />} />
         <Route path="/purchase-candidates" element={<PurchaseCandidatesPage />} />

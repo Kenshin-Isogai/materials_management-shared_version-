@@ -1929,6 +1929,158 @@ def test_project_gap_analysis_returns_effective_planning_date_without_explicit_t
     assert int(analysis["rows"][0]["shortage"]) == 1
 
 
+def test_project_planning_analysis_includes_source_breakdown_and_cumulative_generic_metrics(conn):
+    item = _create_basic_item(conn, item_number="ITEM-PLAN-SOURCES")
+    service.adjust_inventory(conn, item_id=item["item_id"], quantity_delta=2, location="STOCK")
+    service.create_project(
+        conn,
+        {
+            "name": "PROJ-PLAN-SOURCES-EARLIER",
+            "status": "CONFIRMED",
+            "planned_start": "2999-05-01",
+            "requirements": [
+                {
+                    "item_id": item["item_id"],
+                    "assembly_id": None,
+                    "quantity": 1,
+                }
+            ],
+        },
+    )
+    project = service.create_project(
+        conn,
+        {
+            "name": "PROJ-PLAN-SOURCES-SELECTED",
+            "status": "PLANNING",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [
+                {
+                    "item_id": item["item_id"],
+                    "assembly_id": None,
+                    "quantity": 6,
+                }
+            ],
+        },
+    )
+    service.import_orders_from_rows(
+        conn,
+        supplier_name="PLAN-SOURCES-SUP",
+        rows=[
+            {
+                "item_number": item["item_number"],
+                "quantity": "2",
+                "quotation_number": "Q-PLAN-SOURCES-001",
+                "issue_date": "2026-03-01",
+                "order_date": "2026-03-02",
+                "expected_arrival": FUTURE_TARGET_DATE,
+                "pdf_link": "",
+            },
+            {
+                "item_number": item["item_number"],
+                "quantity": "1",
+                "quotation_number": "Q-PLAN-SOURCES-002",
+                "issue_date": "2026-03-01",
+                "order_date": "2026-03-03",
+                "expected_arrival": "3000-01-15",
+                "pdf_link": "",
+            },
+        ],
+        source_name="planning_sources.csv",
+    )
+    rfq = service.create_project_rfq_batch_from_analysis(
+        conn,
+        project["project_id"],
+        target_date=FUTURE_TARGET_DATE,
+    )
+    line_id = int(rfq["lines"][0]["line_id"])
+    service.update_rfq_line(
+        conn,
+        line_id,
+        {
+            "finalized_quantity": 1,
+            "expected_arrival": FUTURE_TARGET_DATE,
+            "status": "QUOTED",
+        },
+    )
+
+    analysis = service.project_planning_analysis(
+        conn,
+        project["project_id"],
+        target_date=FUTURE_TARGET_DATE,
+    )
+
+    row = analysis["rows"][0]
+    source_types = {str(source["source_type"]) for source in row["supply_sources_by_start"]}
+
+    assert int(analysis["summary"]["cumulative_generic_consumed_before_total"]) == 1
+    assert int(analysis["summary"]["generic_committed_total"]) == 4
+    assert int(row["covered_on_time_quantity"]) == 4
+    assert int(row["shortage_at_start"]) == 2
+    assert int(row["recovered_after_start_quantity"]) == 1
+    assert int(row["remaining_shortage_quantity"]) == 1
+    assert source_types == {"stock", "generic_order", "quoted_rfq"}
+    assert sum(int(source["quantity"]) for source in row["supply_sources_by_start"]) == 4
+    assert [str(source["source_type"]) for source in row["recovery_sources_after_start"]] == [
+        "generic_order"
+    ]
+
+
+def test_get_item_planning_context_includes_committed_and_preview_project_rows(conn):
+    item = _create_basic_item(conn, item_number="ITEM-PLAN-CONTEXT")
+    service.adjust_inventory(conn, item_id=item["item_id"], quantity_delta=3, location="STOCK")
+    committed = service.create_project(
+        conn,
+        {
+            "name": "PROJ-PLAN-CONTEXT-COMMITTED",
+            "status": "CONFIRMED",
+            "planned_start": "2999-05-01",
+            "requirements": [{"item_id": item["item_id"], "assembly_id": None, "quantity": 2}],
+        },
+    )
+    preview = service.create_project(
+        conn,
+        {
+            "name": "PROJ-PLAN-CONTEXT-PREVIEW",
+            "status": "PLANNING",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [{"item_id": item["item_id"], "assembly_id": None, "quantity": 4}],
+        },
+    )
+    service.import_orders_from_rows(
+        conn,
+        supplier_name="PLAN-CONTEXT-SUP",
+        rows=[
+            {
+                "item_number": item["item_number"],
+                "quantity": "1",
+                "quotation_number": "Q-PLAN-CONTEXT-001",
+                "issue_date": "2026-03-01",
+                "order_date": "2026-03-02",
+                "expected_arrival": FUTURE_TARGET_DATE,
+                "pdf_link": "",
+            }
+        ],
+        source_name="planning_context.csv",
+    )
+
+    context = service.get_item_planning_context(
+        conn,
+        item["item_id"],
+        preview_project_id=preview["project_id"],
+        target_date=FUTURE_TARGET_DATE,
+    )
+
+    assert context["item_number"] == item["item_number"]
+    assert context["target_date"] == FUTURE_TARGET_DATE
+    assert [int(row["project_id"]) for row in context["projects"]] == [
+        committed["project_id"],
+        preview["project_id"],
+    ]
+    assert context["projects"][1]["is_planning_preview"] is True
+    assert int(context["projects"][1]["required_quantity"]) == 4
+    assert isinstance(context["projects"][1]["supply_sources_by_start"], list)
+
+
 def test_create_project_rfq_batch_auto_confirms_and_persists_start_date(conn):
     item = _create_basic_item(conn, item_number="ITEM-RFQ-AUTO-CONFIRM")
     project = service.create_project(

@@ -1,3 +1,50 @@
+## 2026-03-07
+
+### Changed
+
+- Added a new `/workspace` frontend route as the summary-first future-demand surface.
+  - default view: project summary dashboard with committed-vs-draft semantics
+  - pipeline view: committed projects with cumulative generic-consumption visibility
+  - planning board: selected-project deep dive with server-driven shortage rows and supply-source breakdown chips
+  - contextual right-side drawer: local breadcrumb navigation across Project, Item, and RFQ context without leaving the board
+  - project drawer now supports full inline project editing, including preview-first bulk requirement entry
+  - item drawer now shows incoming orders and cross-project planning allocation context for the selected item
+  - RFQ drawer now supports inline RFQ batch and line editing from the planning loop
+  - drawer close/breadcrumb/back behavior now protects unsaved project and RFQ drafts
+  - planning board now supports CSV export for the selected project/date
+- Added backend workspace summary endpoint `GET /api/workspace/summary`.
+  - returns aggregate project dashboard rows without per-project planning-analysis fan-out
+  - committed rows include authoritative planning totals
+  - `PLANNING` rows return explicit preview-required semantics plus RFQ counts
+- Added backend item planning/context and export support.
+  - added `GET /api/items/{item_id}/planning-context` for cross-project item allocation drill-in
+  - added `GET /api/workspace/planning-export` for CSV export of the selected planning view
+  - extended `GET /api/orders` with optional `item_id` / `project_id` filters for drawer-side order context
+- Enriched the canonical planning engine payload.
+  - planning rows now expose `supply_sources_by_start` and `recovery_sources_after_start`
+  - pipeline rows now expose `generic_committed_total` and `cumulative_generic_consumed_before_total`
+- Corrected workspace/RFQ drawer state handling regressions.
+  - workspace board date now re-syncs to the effective planning `target_date` when the same project refreshes without local preview edits, so exports and RFQ actions no longer run against a hidden/stale date
+  - reopening an earlier drawer stack entry now confirms before truncating dirty project/RFQ drawers, including non-breadcrumb navigation paths
+  - RFQ batch detail refresh now rehydrates saved line drafts from the server response even when `rfq_id` is unchanged, so backend-normalized fields such as cleared non-`ORDERED` `linked_order_id` values are reflected immediately
+  - item-scoped RFQ drawers now keep the full batch visible and move the focused item rows to the top instead of hiding the rest of the batch
+
+### Docs
+
+- Updated `README.md` with the new workspace-first future-planning workflow and fallback-page posture.
+- Updated `specification.md` with the workspace editor/export/item-context endpoints and order-filter additions.
+- Updated `documents/technical_documentation.md` and `documents/source_current_state.md` with the drawer editing, dirty-state guard, item planning context, and export behavior.
+- Updated `documents/technical_documentation.md` and `documents/source_current_state.md` with the workspace/RFQ state-resynchronization and drawer-stack guard fixes.
+
+### Tests
+
+- Added backend regression coverage for planning source breakdowns and cumulative generic-consumption metrics.
+- Added backend API coverage for `GET /api/workspace/summary` committed-vs-draft semantics and RFQ summary fields.
+- Added backend API coverage for `GET /api/orders?item_id=...` filtering.
+- Added frontend Vitest coverage for shared editor draft helpers and workspace drawer active-panel/back behavior.
+- Added frontend Vitest coverage for the workspace and RFQ state helper regressions around effective dates, drawer-stack truncation, and RFQ line rehydration.
+- Frontend production build executed: `npm run build`.
+
 ## 2026-03-06
 
 ### Changed

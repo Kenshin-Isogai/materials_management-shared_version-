@@ -817,6 +817,75 @@ def test_orders_import_rejects_non_array_alias_saves(client):
     assert error["message"] == "Order import alias_saves must be a JSON array"
 
 
+def test_orders_endpoint_filters_by_item_id(client):
+    client.post("/api/manufacturers", json={"name": "API-ORDER-FILTER-MFG"})
+    item_a = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-ORDER-FILTER-A",
+            "manufacturer_name": "API-ORDER-FILTER-MFG",
+            "category": "Lens",
+        },
+    ).json()["data"]
+    item_b = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-ORDER-FILTER-B",
+            "manufacturer_name": "API-ORDER-FILTER-MFG",
+            "category": "Mirror",
+        },
+    ).json()["data"]
+
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "item_number",
+            "quantity",
+            "quotation_number",
+            "issue_date",
+            "order_date",
+            "expected_arrival",
+            "pdf_link",
+        ],
+    )
+    writer.writeheader()
+    writer.writerow(
+        {
+            "item_number": item_a["item_number"],
+            "quantity": "2",
+            "quotation_number": "Q-API-ORDER-FILTER-001",
+            "issue_date": "2026-03-01",
+            "order_date": "2026-03-02",
+            "expected_arrival": FUTURE_TARGET_DATE,
+            "pdf_link": "",
+        }
+    )
+    writer.writerow(
+        {
+            "item_number": item_b["item_number"],
+            "quantity": "3",
+            "quotation_number": "Q-API-ORDER-FILTER-002",
+            "issue_date": "2026-03-01",
+            "order_date": "2026-03-02",
+            "expected_arrival": FUTURE_TARGET_DATE,
+            "pdf_link": "",
+        }
+    )
+    imported = client.post(
+        "/api/orders/import",
+        files={"file": ("order-filter.csv", output.getvalue().encode("utf-8"), "text/csv")},
+        data={"supplier_name": "ApiOrderFilterSupplier"},
+    )
+    assert imported.status_code == 200
+
+    response = client.get("/api/orders", params={"item_id": item_a["item_id"], "per_page": 50})
+    assert response.status_code == 200
+    rows = response.json()["data"]
+    assert len(rows) == 1
+    assert rows[0]["item_id"] == item_a["item_id"]
+
+
 def test_order_import_accepts_slash_date_format(client):
     client.post("/api/manufacturers", json={"name": "API-SLASH-DATE-MFG"})
     client.post(
@@ -3066,6 +3135,162 @@ def test_project_planning_analysis_endpoint_allows_started_committed_projects(cl
     assert payload["target_date"] == "2000-01-01"
     assert payload["summary"]["planned_start"] == "2000-01-01"
     assert int(payload["rows"][0]["shortage_at_start"]) == 1
+
+
+def test_workspace_summary_endpoint_returns_committed_and_draft_semantics(client):
+    client.post("/api/manufacturers", json={"name": "API-WORKSPACE-SUMMARY-MFG"})
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-WORKSPACE-SUMMARY-ITEM",
+            "manufacturer_name": "API-WORKSPACE-SUMMARY-MFG",
+            "category": "Lens",
+        },
+    ).json()["data"]
+    committed = client.post(
+        "/api/projects",
+        json={
+            "name": "API-WORKSPACE-SUMMARY-COMMITTED",
+            "status": "CONFIRMED",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [{"item_id": item["item_id"], "quantity": 2}],
+        },
+    ).json()["data"]
+    draft = client.post(
+        "/api/projects",
+        json={
+            "name": "API-WORKSPACE-SUMMARY-DRAFT",
+            "status": "PLANNING",
+            "planned_start": "2999-07-01",
+            "requirements": [{"item_id": item["item_id"], "quantity": 1}],
+        },
+    ).json()["data"]
+
+    created = client.post(
+        f"/api/projects/{committed['project_id']}/rfq-batches",
+        json={"target_date": FUTURE_TARGET_DATE},
+    )
+    assert created.status_code == 200
+
+    response = client.get("/api/workspace/summary")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    committed_row = next(
+        row for row in payload["projects"] if int(row["project_id"]) == committed["project_id"]
+    )
+    draft_row = next(
+        row for row in payload["projects"] if int(row["project_id"]) == draft["project_id"]
+    )
+
+    assert payload["generated_at"]
+    assert committed_row["summary_mode"] == "authoritative"
+    assert int(committed_row["planning_summary"]["shortage_at_start_total"]) == 2
+    assert int(committed_row["rfq_summary"]["open_batch_count"]) == 1
+    assert draft_row["summary_mode"] == "preview_required"
+    assert draft_row["planning_summary"] is None
+    assert any(
+        int(row["project_id"]) == committed["project_id"]
+        and "cumulative_generic_consumed_before_total" in row
+        for row in payload["pipeline"]
+    )
+
+
+def test_item_planning_context_endpoint_and_workspace_export(client):
+    client.post("/api/manufacturers", json={"name": "API-WORKSPACE-CONTEXT-MFG"})
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-WORKSPACE-CONTEXT-ITEM",
+            "manufacturer_name": "API-WORKSPACE-CONTEXT-MFG",
+            "category": "Lens",
+        },
+    ).json()["data"]
+    client.post(
+        "/api/inventory/adjust",
+        json={
+            "item_id": item["item_id"],
+            "quantity_delta": 2,
+            "location": "STOCK",
+            "note": "workspace context seed",
+        },
+    )
+    committed = client.post(
+        "/api/projects",
+        json={
+            "name": "API-WORKSPACE-CONTEXT-COMMITTED",
+            "status": "CONFIRMED",
+            "planned_start": "2999-05-01",
+            "requirements": [{"item_id": item["item_id"], "quantity": 1}],
+        },
+    ).json()["data"]
+    preview = client.post(
+        "/api/projects",
+        json={
+            "name": "API-WORKSPACE-CONTEXT-PREVIEW",
+            "status": "PLANNING",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [{"item_id": item["item_id"], "quantity": 3}],
+        },
+    ).json()["data"]
+
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "item_number",
+            "quantity",
+            "quotation_number",
+            "issue_date",
+            "order_date",
+            "expected_arrival",
+            "pdf_link",
+        ],
+    )
+    writer.writeheader()
+    writer.writerow(
+        {
+            "item_number": item["item_number"],
+            "quantity": "1",
+            "quotation_number": "Q-API-WORKSPACE-CONTEXT-001",
+            "issue_date": "2026-03-01",
+            "order_date": "2026-03-02",
+            "expected_arrival": FUTURE_TARGET_DATE,
+            "pdf_link": "",
+        }
+    )
+    imported = client.post(
+        "/api/orders/import",
+        files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
+        data={"supplier_name": "ApiWorkspaceContextSupplier"},
+    )
+    assert imported.status_code == 200
+
+    planning_context = client.get(
+        f"/api/items/{item['item_id']}/planning-context",
+        params={
+            "preview_project_id": preview["project_id"],
+            "target_date": FUTURE_TARGET_DATE,
+        },
+    )
+    assert planning_context.status_code == 200
+    context_payload = planning_context.json()["data"]
+    assert [int(row["project_id"]) for row in context_payload["projects"]] == [
+        committed["project_id"],
+        preview["project_id"],
+    ]
+    assert context_payload["projects"][1]["is_planning_preview"] is True
+
+    export_response = client.get(
+        "/api/workspace/planning-export",
+        params={"project_id": preview["project_id"], "target_date": FUTURE_TARGET_DATE},
+    )
+    assert export_response.status_code == 200
+    assert "text/csv" in export_response.headers["content-type"]
+    export_text = export_response.content.decode("utf-8-sig")
+    assert "section,project_id,project_name" in export_text
+    assert "selected_project_item" in export_text
+    assert "pipeline" in export_text
 
 
 def test_project_rfq_batch_endpoint_uses_requested_target_date(client):
