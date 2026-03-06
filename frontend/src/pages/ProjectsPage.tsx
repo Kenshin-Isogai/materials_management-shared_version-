@@ -573,7 +573,7 @@ export function ProjectsPage() {
               </button>
             </div>
             <div className="overflow-x-auto">
-              <table className="min-w-[980px] text-sm">
+              <table className="min-w-[980px] text-sm no-sticky-header">
                 <thead>
                   <tr className="border-b border-slate-200 text-left text-slate-500">
                     <th className="px-2 py-2">Target Type</th>
