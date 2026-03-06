@@ -54,6 +54,9 @@
 - Fixed Projects page requirements table header overlap.
   - Global sticky table header styling was pinning the requirements header over editable input rows, making fields look partially hidden while scrolling.
   - Added a per-table opt-out class and applied it to the Projects requirements entry table so inline form rows remain fully visible.
+- Fixed sticky-header overlap on multi-row entry grids across core write workflows.
+  - Applied the existing `no-sticky-header` table opt-out to Bulk Item Entry, Bulk Move Entry, Reservation Entry, Create Assembly components, and BOM spreadsheet entry tables.
+  - This keeps typed input rows readable while horizontally scrolling and prevents headers from covering row fields on narrow or zoomed layouts.
 
 - Backfilled legacy `orders.project_id_manual` values during DB migration.
   - Existing orders with `project_id` and no ORDERED RFQ ownership are now marked manual (`project_id_manual=1`) so RFQ unlink sync does not clear historical manual project assignment.

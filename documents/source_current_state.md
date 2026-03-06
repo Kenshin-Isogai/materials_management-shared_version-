@@ -92,6 +92,7 @@ Last updated: 2026-03-06 (JST)
   - `POST /api/bom/preview` classifies supplier/item matches as `exact`, `high_confidence`, `needs_review`, or `unresolved`
   - preview rows return ranked supplier/item candidates and projected canonical quantity / available stock / shortage
   - BOM analyze, reserve, and shortage-save actions now run from the corrected preview set instead of directly from the raw grid
+- Sticky table headers are globally enabled for browse tables, with `no-sticky-header` opt-outs applied on write-heavy multi-row entry grids (Bulk Item Entry, Bulk Move Entry, Reservation Entry, Assembly components, and BOM spreadsheet entry) to prevent header/field overlap while editing.
 - Reservations `Reservation Entry` rows now use `CatalogPicker` for item selection instead of a long static `<select>`.
 - Items manual CSV import is now preview-first:
   - `POST /api/items/import-preview` classifies duplicate item rows, alias create/update rows, and unresolved canonical alias rows before commit

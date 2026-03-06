@@ -1367,7 +1367,7 @@ export function ItemsPage() {
             </button>
           </div>
           <div className="overflow-x-auto">
-            <table className="min-w-[1280px] text-sm">
+            <table className="min-w-[1280px] text-sm no-sticky-header">
               <thead>
                 <tr className="border-b border-slate-200 text-left text-slate-500">
                   <th className="min-w-[110px] px-2 py-2">Type</th>
