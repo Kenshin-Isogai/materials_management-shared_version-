@@ -51,6 +51,8 @@
 
 ### Fixed
 
+- Backfilled legacy `orders.project_id_manual` values during DB migration.
+  - Existing orders with `project_id` and no ORDERED RFQ ownership are now marked manual (`project_id_manual=1`) so RFQ unlink sync does not clear historical manual project assignment.
 - Cleaned `.gitignore` merge artifacts and duplicate local-ignore sections so the ignore rules are intentional again.
 - Hardened preview-confirmation multipart JSON validation for item, movement, order, and reservation imports.
   - malformed JSON now returns `422 INVALID_REQUEST`

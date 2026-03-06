@@ -58,9 +58,11 @@ flowchart LR
    Orders are imported from CSV/PDF folders, then moved to canonical registered paths to preserve auditability.
 4. Reversible bulk imports.
    Item imports store job and row-level effects (`import_jobs`, `import_job_effects`) so undo/redo can be state-checked and safe.
-5. Alias-based normalization strategy.
+5. Migration-safe manual project assignment retention.
+   DB migration backfills `orders.project_id_manual` for legacy rows that have `project_id` but no ORDERED RFQ ownership, preventing RFQ unlink synchronization from clearing historical manual assignments.
+6. Alias-based normalization strategy.
    `supplier_item_aliases` maps supplier-specific ordered numbers to canonical items; `category_aliases` merges categories without destructive rewrites.
-6. Local PoC with growth path.
+7. Local PoC with growth path.
    The current stack is intentionally simple (SQLite + single service layer) while preserving extension points for future RBAC and multi-user deployment.
 
 ### Inventory and Undo Flow (Mermaid)

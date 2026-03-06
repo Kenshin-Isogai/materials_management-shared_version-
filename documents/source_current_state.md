@@ -54,6 +54,7 @@ Last updated: 2026-03-06 (JST)
   - import jobs/effects for reversible item imports
   - transaction log with undo chain
 - Referential integrity and checks are enforced with foreign keys, constraints, indexes, and order validation triggers.
+- DB migration now backfills legacy `orders.project_id_manual` for rows with `project_id` and no ORDERED RFQ ownership, preserving historical manual project linkage during RFQ unlink sync.
 - Item reference guards for identity mutation/deletion include `purchase_candidates`, returning controlled domain errors before raw FK failures.
 
 ### 3.3 Reservation Behavior

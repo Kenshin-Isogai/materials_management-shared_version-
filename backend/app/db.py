@@ -539,6 +539,24 @@ def migrate_db(conn: sqlite3.Connection) -> None:
     ):
         _ensure_column(conn, "orders", definition)
 
+    # Backfill legacy rows (created before project_id_manual existed):
+    # if an order still has project linkage but has no ORDERED RFQ ownership,
+    # treat it as manual so RFQ unlink sync does not clear the assignment.
+    conn.execute(
+        """
+        UPDATE orders
+        SET project_id_manual = 1
+        WHERE project_id IS NOT NULL
+          AND COALESCE(project_id_manual, 0) = 0
+          AND NOT EXISTS (
+              SELECT 1
+              FROM rfq_lines rl
+              WHERE rl.linked_order_id = orders.order_id
+                AND rl.status = 'ORDERED'
+          )
+        """
+    )
+
     conn.execute(
         """
         UPDATE orders
