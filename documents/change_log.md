@@ -28,6 +28,14 @@
   - reopening an earlier drawer stack entry now confirms before truncating dirty project/RFQ drawers, including non-breadcrumb navigation paths
   - RFQ batch detail refresh now rehydrates saved line drafts from the server response even when `rfq_id` is unchanged, so backend-normalized fields such as cleared non-`ORDERED` `linked_order_id` values are reflected immediately
   - item-scoped RFQ drawers now keep the full batch visible and move the focused item rows to the top instead of hiding the rest of the batch
+- Refined workspace drawer/editor follow-up issues from review.
+  - nested picker Escape handling now stops at the picker so dismissing `CatalogPicker` results does not also close the workspace drawer
+  - workspace summary refresh now repairs stale `selectedProjectId` values before rebuilding the planning board request
+  - project drawer RFQ metrics now reuse authoritative `workspace/summary` aggregates instead of reducing a paginated `rfq-batches` slice
+  - shared project requirement rows now preserve existing item/assembly selections even when the stored id is outside the preloaded first page
+  - shared RFQ line order linking now loads per-item options across all pages and backfills already linked orders so current selections stay visible
+  - hidden drawer panels now suspend their SWR fetches and heavy preload queries while they remain in the breadcrumb stack
+  - backend planning snapshot construction now batches project/requirement, assembly-component, and inventory lookups, and item planning context narrows snapshot expansion to the requested item
 
 ### Docs
 
@@ -43,6 +51,7 @@
 - Added backend API coverage for `GET /api/orders?item_id=...` filtering.
 - Added frontend Vitest coverage for shared editor draft helpers and workspace drawer active-panel/back behavior.
 - Added frontend Vitest coverage for the workspace and RFQ state helper regressions around effective dates, drawer-stack truncation, and RFQ line rehydration.
+- Added frontend Vitest coverage for `CatalogPicker` Escape handling so picker dismissal does not bubble into workspace drawer close handlers.
 - Frontend production build executed: `npm run build`.
 
 ## 2026-03-06

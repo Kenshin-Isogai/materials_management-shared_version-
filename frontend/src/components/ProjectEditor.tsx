@@ -79,7 +79,9 @@ function buildRequirementsFromProject(project: ProjectDetail | null | undefined)
     quantity: String(requirement.quantity),
     requirement_type: requirement.requirement_type,
     note: requirement.note ?? "",
-    target_query: "",
+    target_query: requirement.item_id
+      ? [requirement.item_number, `#${requirement.item_id}`].filter(Boolean).join(" ")
+      : [requirement.assembly_name, `#${requirement.assembly_id}`].filter(Boolean).join(" "),
     match_status: "matched",
   }));
 }
@@ -124,6 +126,7 @@ type ProjectEditorProps = {
   onSaved?: (projectId: number) => Promise<void> | void;
   onDirtyChange?: (isDirty: boolean) => void;
   onOpenItem?: (itemId: number, label: string) => void;
+  active?: boolean;
 };
 
 export function ProjectEditor({
@@ -136,16 +139,17 @@ export function ProjectEditor({
   onSaved,
   onDirtyChange,
   onOpenItem,
+  active = true,
 }: ProjectEditorProps) {
   const isEditing = projectId != null;
   const { data: projectData, error: projectError, isLoading: projectLoading, mutate: mutateProject } = useSWR(
-    isEditing ? `/projects/${projectId}` : null,
+    active && isEditing ? `/projects/${projectId}` : null,
     () => apiGet<ProjectDetail>(`/projects/${projectId}`),
   );
-  const { data: itemsResp } = useSWR("/items-options-project-editor", () =>
+  const { data: itemsResp } = useSWR(active ? "/items-options-project-editor" : null, () =>
     apiGetWithPagination<Item[]>("/items?per_page=1000"),
   );
-  const { data: assembliesResp } = useSWR("/assembly-options-project-editor", () =>
+  const { data: assembliesResp } = useSWR(active ? "/assembly-options-project-editor" : null, () =>
     apiGetWithPagination<AssemblyOption[]>("/assemblies?per_page=1000"),
   );
 
@@ -184,6 +188,34 @@ export function ProjectEditor({
     () => new Map(assemblies.map((assembly) => [assembly.assembly_id, assemblyToCatalogResult(assembly)])),
     [assemblies],
   );
+
+  function selectedRequirementCatalogResult(row: RequirementDraft): CatalogSearchResult | null {
+    if (!row.target_id) return null;
+    const targetId = Number(row.target_id);
+    if (!Number.isFinite(targetId) || targetId <= 0) return null;
+    if (row.target_type === "ITEM") {
+      return (
+        itemCatalogById.get(targetId) ?? {
+          entity_type: "item",
+          entity_id: targetId,
+          value_text: row.target_query || `Item #${targetId}`,
+          display_label: row.target_query || `Item #${targetId}`,
+          summary: `#${targetId}`,
+          match_source: null,
+        }
+      );
+    }
+    return (
+      assemblyCatalogById.get(targetId) ?? {
+        entity_type: "assembly",
+        entity_id: targetId,
+        value_text: row.target_query || `Assembly #${targetId}`,
+        display_label: row.target_query || `Assembly #${targetId}`,
+        summary: `Assembly #${targetId}`,
+        match_source: null,
+      }
+    );
+  }
 
   function resetPreviewState() {
     setEntryPreview(null);
@@ -635,7 +667,7 @@ export function ProjectEditor({
                             placeholder="Search items"
                             recentKey="project-requirement-item"
                             seedQuery={row.target_query}
-                            value={row.target_id ? itemCatalogById.get(Number(row.target_id)) ?? null : null}
+                            value={selectedRequirementCatalogResult(row)}
                           />
                         ) : (
                           <CatalogPicker
@@ -649,9 +681,8 @@ export function ProjectEditor({
                             }
                             placeholder="Search assemblies"
                             recentKey="project-requirement-assembly"
-                            value={
-                              row.target_id ? assemblyCatalogById.get(Number(row.target_id)) ?? null : null
-                            }
+                            seedQuery={row.target_query}
+                            value={selectedRequirementCatalogResult(row)}
                           />
                         )}
                         {row.match_status === "unregistered" && (

@@ -71,4 +71,27 @@ describe("CatalogPicker", () => {
       expect((input as HTMLInputElement).value).toBe("");
     });
   });
+
+  it("keeps Escape on picker controls from bubbling to parent handlers", async () => {
+    const user = userEvent.setup();
+    const parentKeyDown = vi.fn();
+
+    render(
+      <div onKeyDown={parentKeyDown}>
+        <CatalogPickerHost />
+      </div>,
+    );
+
+    await user.click(screen.getByRole("button", { name: "Select First" }));
+    const input = screen.getByRole("textbox");
+    await user.click(input);
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Clear" }));
+    parentKeyDown.mockClear();
+
+    await user.keyboard("{Escape}");
+
+    expect(parentKeyDown).not.toHaveBeenCalled();
+    expect((input as HTMLInputElement).value).toBe("ITEM-001 #1");
+  });
 });

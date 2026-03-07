@@ -21,7 +21,6 @@ import type {
   PlanningSource,
   ProjectDetail,
   Reservation,
-  RfqBatchSummary,
   WorkspaceProjectSummary,
   WorkspaceSummary,
 } from "../lib/types";
@@ -53,6 +52,18 @@ type DrawerContext =
       projectId: number;
       itemId: number | null;
     };
+
+const EMPTY_RFQ_SUMMARY: WorkspaceProjectSummary["rfq_summary"] = {
+  total_batches: 0,
+  open_batch_count: 0,
+  closed_batch_count: 0,
+  cancelled_batch_count: 0,
+  draft_line_count: 0,
+  sent_line_count: 0,
+  quoted_line_count: 0,
+  ordered_line_count: 0,
+  latest_target_date: null,
+};
 
 function cx(...values: Array<string | false | null | undefined>): string {
   return values.filter(Boolean).join(" ");
@@ -262,15 +273,13 @@ function ProjectDrawerContent(_props: {
   onPreviewBoard: (projectId: number) => void;
   onRefresh: () => Promise<void>;
   onDirtyChange: (isDirty: boolean) => void;
+  rfqSummary: WorkspaceProjectSummary["rfq_summary"];
+  active: boolean;
 }) {
-  const { projectId, onOpenItem, onPreviewBoard, onRefresh, onDirtyChange } = _props;
-  const { data, error, isLoading, mutate } = useSWR(`/projects/${projectId}`, () =>
+  const { projectId, onOpenItem, onPreviewBoard, onRefresh, onDirtyChange, rfqSummary, active } = _props;
+  const { data, error, isLoading, mutate } = useSWR(active ? `/projects/${projectId}` : null, () =>
     apiGet<ProjectDetail>(`/projects/${projectId}`),
   );
-  const { data: batchesResp } = useSWR(`/workspace-project-rfq-${projectId}`, () =>
-    apiGetWithPagination<RfqBatchSummary[]>(`/rfq-batches?project_id=${projectId}&per_page=100`),
-  );
-  const batches = batchesResp?.data ?? [];
 
   return (
     <div className="space-y-5">
@@ -286,7 +295,7 @@ function ProjectDrawerContent(_props: {
               </span>
             </div>
             <p className="text-sm text-slate-600">
-              Requirements {data.requirements.length} | RFQ batches {batches.length}
+              Requirements {data.requirements.length} | RFQ batches {rfqSummary.total_batches}
             </p>
             {data.description && <p className="text-sm text-slate-600">{data.description}</p>}
             <div className="flex flex-wrap gap-2 text-sm">
@@ -307,9 +316,9 @@ function ProjectDrawerContent(_props: {
           </section>
 
           <section className="grid gap-3 md:grid-cols-3">
-            <SummaryMetric label="Open Batches" value={batches.filter((batch) => batch.status === "OPEN").length} tone="amber" />
-            <SummaryMetric label="Quoted Lines" value={batches.reduce((sum, batch) => sum + batch.quoted_line_count, 0)} tone="emerald" />
-            <SummaryMetric label="Ordered Lines" value={batches.reduce((sum, batch) => sum + batch.ordered_line_count, 0)} tone="sky" />
+            <SummaryMetric label="Open Batches" value={rfqSummary.open_batch_count} tone="amber" />
+            <SummaryMetric label="Quoted Lines" value={rfqSummary.quoted_line_count} tone="emerald" />
+            <SummaryMetric label="Ordered Lines" value={rfqSummary.ordered_line_count} tone="sky" />
           </section>
 
           <ProjectEditor
@@ -317,6 +326,7 @@ function ProjectDrawerContent(_props: {
             title="Project Editor"
             submitLabel="Save Project"
             autoFocusField="planned_start"
+            active={active}
             onDirtyChange={onDirtyChange}
             onOpenItem={onOpenItem}
             onSaved={async () => {
@@ -335,22 +345,23 @@ function ItemDrawerContent(_props: {
   targetDate: string | null;
   onOpenProject: (projectId: number, label: string) => void;
   onOpenRfq: (projectId: number, itemId: number | null, label?: string) => void;
+  active: boolean;
 }) {
-  const { itemId, previewProjectId, targetDate, onOpenProject, onOpenRfq } = _props;
-  const { data: itemData, error: itemError } = useSWR(`/items/${itemId}`, () =>
+  const { itemId, previewProjectId, targetDate, onOpenProject, onOpenRfq, active } = _props;
+  const { data: itemData, error: itemError } = useSWR(active ? `/items/${itemId}` : null, () =>
     apiGet<Item>(`/items/${itemId}`),
   );
-  const { data: inventoryResp } = useSWR(`/workspace-item-inventory-${itemId}`, () =>
+  const { data: inventoryResp } = useSWR(active ? `/workspace-item-inventory-${itemId}` : null, () =>
     apiGetWithPagination<InventoryRow[]>(`/inventory?item_id=${itemId}&per_page=200`),
   );
-  const { data: flowData } = useSWR(`/items/${itemId}/flow`, () =>
+  const { data: flowData } = useSWR(active ? `/items/${itemId}/flow` : null, () =>
     apiGet<ItemFlowTimeline>(`/items/${itemId}/flow`),
   );
-  const { data: reservationsResp } = useSWR(`/workspace-item-reservations-${itemId}`, () =>
+  const { data: reservationsResp } = useSWR(active ? `/workspace-item-reservations-${itemId}` : null, () =>
     apiGetWithPagination<ReservationRow[]>(`/reservations?item_id=${itemId}&status=ACTIVE&per_page=200`),
   );
   const ordersPath = `/orders?item_id=${itemId}&include_arrived=false&per_page=200`;
-  const { data: ordersResp } = useSWR(ordersPath, () => apiGetWithPagination<Order[]>(ordersPath));
+  const { data: ordersResp } = useSWR(active ? ordersPath : null, () => apiGetWithPagination<Order[]>(ordersPath));
   const planningPath = useMemo(() => {
     const params = new URLSearchParams();
     if (previewProjectId != null) params.set("preview_project_id", String(previewProjectId));
@@ -358,7 +369,7 @@ function ItemDrawerContent(_props: {
     const query = params.toString();
     return `/items/${itemId}/planning-context${query ? `?${query}` : ""}`;
   }, [itemId, previewProjectId, targetDate]);
-  const { data: planningData } = useSWR(planningPath, () => apiGet<ItemPlanningContext>(planningPath));
+  const { data: planningData } = useSWR(active ? planningPath : null, () => apiGet<ItemPlanningContext>(planningPath));
 
   const inventoryRows = inventoryResp?.data ?? [];
   const reservations = reservationsResp?.data ?? [];
@@ -634,8 +645,9 @@ function RfqDrawerContent(_props: {
   onOpenItem: (itemId: number, label: string) => void;
   onRefresh: () => Promise<void>;
   onDirtyChange: (isDirty: boolean) => void;
+  active: boolean;
 }) {
-  const { projectId, itemId, onOpenItem, onRefresh, onDirtyChange } = _props;
+  const { projectId, itemId, onOpenItem, onRefresh, onDirtyChange, active } = _props;
   return (
     <div className="space-y-5">
       <section className="space-y-2">
@@ -662,6 +674,7 @@ function RfqDrawerContent(_props: {
         fixedProjectId={projectId}
         highlightedItemId={itemId}
         showFilters={false}
+        active={active}
         onOpenItem={onOpenItem}
         onDirtyChange={onDirtyChange}
         onSaved={onRefresh}
@@ -755,9 +768,17 @@ export function WorkspacePage() {
   const pipeline = workspaceSummary?.pipeline ?? [];
 
   useEffect(() => {
-    if (selectedProjectId != null) return;
+    const selectedStillExists =
+      selectedProjectId != null && projects.some((project) => project.project_id === selectedProjectId);
+    if (selectedStillExists) return;
     const defaultProject = pickDefaultProject(projects);
-    if (!defaultProject) return;
+    if (!defaultProject) {
+      setSelectedProjectId(null);
+      setAnalysisDateDraft("");
+      setAnalysisDateApplied("");
+      setActionMessage("");
+      return;
+    }
     setSelectedProjectId(defaultProject.project_id);
     setAnalysisDateDraft(defaultProject.planned_start ?? "");
     setAnalysisDateApplied(defaultProject.planned_start ?? "");
@@ -776,12 +797,12 @@ export function WorkspacePage() {
   }, [selectedProject?.project_id]);
 
   const analysisKey = useMemo(() => {
-    if (!selectedProjectId) return null;
+    if (!selectedProject) return null;
     const params = new URLSearchParams();
     if (analysisDateApplied.trim()) params.set("target_date", analysisDateApplied.trim());
     const query = params.toString();
-    return `/projects/${selectedProjectId}/planning-analysis${query ? `?${query}` : ""}`;
-  }, [analysisDateApplied, selectedProjectId]);
+    return `/projects/${selectedProject.project_id}/planning-analysis${query ? `?${query}` : ""}`;
+  }, [analysisDateApplied, selectedProject?.project_id]);
 
   const {
     data: analysisData,
@@ -790,7 +811,9 @@ export function WorkspacePage() {
     mutate: mutateAnalysis,
   } = useSWR(analysisKey, () => apiGet<PlanningAnalysisResult>(analysisKey ?? ""));
   const selectedAnalysisTargetDate =
-    analysisData?.project.project_id === selectedProjectId ? analysisData.target_date : null;
+    analysisData && analysisData.project.project_id === selectedProject?.project_id
+      ? analysisData.target_date
+      : null;
 
   const boardPipeline = analysisData?.pipeline ?? pipeline;
   const activeDrawer = drawerStack[drawerStack.length - 1] ?? null;
@@ -1389,6 +1412,11 @@ export function WorkspacePage() {
                 {entry.type === "project" && (
                   <ProjectDrawerContent
                     projectId={entry.projectId}
+                    rfqSummary={
+                      projects.find((project) => project.project_id === entry.projectId)?.rfq_summary ??
+                      EMPTY_RFQ_SUMMARY
+                    }
+                    active={active}
                     onOpenItem={openItemDrawer}
                     onPreviewBoard={openBoard}
                     onRefresh={refreshWorkspace}
@@ -1398,8 +1426,9 @@ export function WorkspacePage() {
                 {entry.type === "item" && (
                   <ItemDrawerContent
                     itemId={entry.itemId}
-                    previewProjectId={selectedProjectId}
+                    previewProjectId={selectedProject?.project_id ?? null}
                     targetDate={selectedAnalysisTargetDate ?? (analysisDateApplied.trim() || null)}
+                    active={active}
                     onOpenProject={openProjectDrawer}
                     onOpenRfq={openRfqDrawer}
                   />
@@ -1408,6 +1437,7 @@ export function WorkspacePage() {
                   <RfqDrawerContent
                     projectId={entry.projectId}
                     itemId={entry.itemId}
+                    active={active}
                     onOpenItem={openItemDrawer}
                     onRefresh={refreshWorkspace}
                     onDirtyChange={(isDirty) => setDrawerDirty(entry.key, entry.label, isDirty)}

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
-import { apiGet, apiGetWithPagination, apiSend } from "../lib/api";
+import { apiGet, apiGetAllPages, apiGetWithPagination, apiSend } from "../lib/api";
 import { areRfqLineDraftsEqual, type RfqLineDraft } from "../lib/editorDrafts";
 import {
   buildLineDraftMap,
@@ -25,6 +25,7 @@ type RfqBatchEditorProps = {
   onDirtyChange?: (isDirty: boolean) => void;
   onSaved?: () => Promise<void> | void;
   onOpenItem?: (itemId: number, label: string) => void;
+  active?: boolean;
 };
 
 function messageFromError(prefix: string, error: unknown): string {
@@ -40,6 +41,7 @@ export function RfqBatchEditor({
   onDirtyChange,
   onSaved,
   onOpenItem,
+  active = true,
 }: RfqBatchEditorProps) {
   const [statusFilter, setStatusFilter] = useState("");
   const [projectFilter, setProjectFilter] = useState("");
@@ -83,19 +85,16 @@ export function RfqBatchEditor({
     error: batchesError,
     isLoading: batchesLoading,
     mutate: mutateBatches,
-  } = useSWR(listPath, () => apiGetWithPagination<RfqBatchSummary[]>(listPath));
-  const { data: projectsResp } = useSWR(showFilters ? "/rfq-project-options-editor" : null, () =>
+  } = useSWR(active ? listPath : null, () => apiGetWithPagination<RfqBatchSummary[]>(listPath));
+  const { data: projectsResp } = useSWR(active && showFilters ? "/rfq-project-options-editor" : null, () =>
     apiGetWithPagination<ProjectRow[]>("/projects?per_page=500"),
-  );
-  const { data: ordersResp, mutate: mutateOrders } = useSWR("/rfq-open-orders-editor", () =>
-    apiGetWithPagination<Order[]>("/orders?include_arrived=false&per_page=500"),
   );
 
   const batches = batchesResp?.data ?? [];
   const projects = projectsResp?.data ?? [];
-  const openOrders = ordersResp?.data ?? [];
 
   useEffect(() => {
+    if (!active && !batchesResp) return;
     if (!selectedBatchId && batches.length) {
       setSelectedBatchId(String(batches[0].rfq_id));
       return;
@@ -103,7 +102,7 @@ export function RfqBatchEditor({
     if (selectedBatchId && !batches.some((batch) => String(batch.rfq_id) === selectedBatchId)) {
       setSelectedBatchId(batches.length ? String(batches[0].rfq_id) : "");
     }
-  }, [batches, selectedBatchId]);
+  }, [active, batches, batchesResp, selectedBatchId]);
 
   const detailKey = selectedBatchId ? `/rfq-batches/${selectedBatchId}` : null;
   const {
@@ -111,7 +110,75 @@ export function RfqBatchEditor({
     error: detailError,
     isLoading: detailLoading,
     mutate: mutateDetail,
-  } = useSWR(detailKey, () => apiGet<RfqBatchDetail>(detailKey ?? ""));
+  } = useSWR(active ? detailKey : null, () => apiGet<RfqBatchDetail>(detailKey ?? ""));
+
+  const orderOptionItemIds = useMemo(() => {
+    const itemIds = new Set<number>();
+    for (const line of detailData?.lines ?? []) {
+      itemIds.add(line.item_id);
+    }
+    return Array.from(itemIds).sort((left, right) => left - right);
+  }, [detailData?.lines]);
+
+  const linkedOrderIds = useMemo(() => {
+    const orderIds = new Set<number>();
+    for (const line of detailData?.lines ?? []) {
+      if (line.linked_order_id != null) {
+        orderIds.add(line.linked_order_id);
+      }
+    }
+    return Array.from(orderIds).sort((left, right) => left - right);
+  }, [detailData?.lines]);
+
+  const orderOptionsKey = useMemo(() => {
+    if (!active || !detailData) return null;
+    return `rfq-order-options:${orderOptionItemIds.join(",")}:${linkedOrderIds.join(",")}`;
+  }, [active, detailData, linkedOrderIds, orderOptionItemIds]);
+
+  const { data: orderOptions = [], mutate: mutateOrders } = useSWR(orderOptionsKey, async () => {
+    const orderMap = new Map<number, Order>();
+    const orderGroups = await Promise.all(
+      orderOptionItemIds.map((itemId) =>
+        apiGetAllPages<Order>(`/orders?item_id=${itemId}&include_arrived=false&per_page=200`),
+      ),
+    );
+    for (const group of orderGroups) {
+      for (const order of group) {
+        orderMap.set(order.order_id, order);
+      }
+    }
+    const missingLinkedIds = linkedOrderIds.filter((orderId) => !orderMap.has(orderId));
+    if (missingLinkedIds.length) {
+      const linkedOrders = await Promise.all(
+        missingLinkedIds.map(async (orderId) => {
+          try {
+            return await apiGet<Order>(`/orders/${orderId}`);
+          } catch {
+            return null;
+          }
+        }),
+      );
+      for (const order of linkedOrders) {
+        if (order) {
+          orderMap.set(order.order_id, order);
+        }
+      }
+    }
+    return Array.from(orderMap.values()).sort((left, right) => right.order_id - left.order_id);
+  });
+
+  const ordersByItemId = useMemo(() => {
+    const index = new Map<number, Order[]>();
+    for (const order of orderOptions) {
+      const current = index.get(order.item_id);
+      if (current) {
+        current.push(order);
+      } else {
+        index.set(order.item_id, [order]);
+      }
+    }
+    return index;
+  }, [orderOptions]);
 
   useEffect(() => {
     if (!detailData) {
@@ -411,10 +478,8 @@ export function RfqBatchEditor({
                           const draft = lineDrafts[line.line_id];
                           const isHighlightedLine =
                             highlightedItemId != null && line.item_id === highlightedItemId;
-                          const matchingOrders = openOrders.filter(
-                            (order) =>
-                              order.item_id === line.item_id || order.order_id === line.linked_order_id,
-                          );
+                          const matchingOrders = ordersByItemId.get(line.item_id) ?? [];
+
                           return (
                             <tr
                               key={line.line_id}

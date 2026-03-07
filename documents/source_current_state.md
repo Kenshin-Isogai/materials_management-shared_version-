@@ -37,6 +37,7 @@ Last updated: 2026-03-07 (JST)
   - success: `status=ok`
   - error: `status=error` with code/message/details
 - Business rules are centralized in `backend/app/service.py` and shared by API and CLI.
+- Planning snapshot hot paths now batch project/requirement loads, assembly component expansion, and per-item inventory totals; item planning context further narrows expansion to the requested item.
 - Current auth posture:
   - no enforced auth for PoC
   - capability metadata endpoint exists: `GET /api/auth/capabilities`
@@ -89,6 +90,12 @@ Last updated: 2026-03-07 (JST)
   - drawer close, breadcrumb back, route-leave, and stack-truncation flows now protect unsaved project/RFQ drafts
   - item-scoped RFQ drawers keep the whole batch available and move the focused item rows to the top
   - RFQ save refreshes now rehydrate saved rows from server detail so normalized values such as cleared stale `linked_order_id` fields appear immediately
+  - nested picker Escape now dismisses only the picker instead of bubbling up to close the whole drawer
+  - workspace summary refresh now repairs stale selected project ids before requesting `/projects/{id}/planning-analysis`
+  - inactive drawer panels suspend their SWR fetches and preload queries while hidden in the breadcrumb stack
+  - project drawer RFQ metrics now come from summary aggregates instead of a paginated RFQ batch slice
+  - project requirement rows preserve current item/assembly selections even when those ids are outside the initial preload page
+  - RFQ line order selectors now load per-item options across all pages and backfill currently linked orders, including arrived or older rows
   - legacy `/projects`, `/planning`, and `/rfq` remain available for heavier edit flows
 - Movements page now uses a single expanded `Movement Entry` table for both one-off and multi-row moves (the separate `Single Move` form was removed).
 - Adding a new row in `Movement Entry` now inherits the latest completed `from/to` locations so repeated transfers do not require retyping the same pair each time.

@@ -126,6 +126,31 @@ export async function apiGetWithPagination<T>(path: string): Promise<{
   return { data: payload.data, pagination: payload.pagination };
 }
 
+export async function apiGetAllPages<T>(path: string): Promise<T[]> {
+  const url = new URL(toAbsolutePath(path), "http://local.api");
+  if (!url.searchParams.has("per_page")) {
+    url.searchParams.set("per_page", "500");
+  }
+
+  const allRows: T[] = [];
+  let page = 1;
+
+  while (true) {
+    url.searchParams.set("page", String(page));
+    const requestPath = `${url.pathname}${url.search}`;
+    const response = await apiGetWithPagination<T[]>(requestPath);
+    allRows.push(...response.data);
+
+    const pagination = response.pagination;
+    if (!pagination || pagination.total_pages <= page) {
+      break;
+    }
+    page += 1;
+  }
+
+  return allRows;
+}
+
 export async function apiSend<T>(
   path: string,
   init?: RequestInit

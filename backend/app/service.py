@@ -7829,12 +7829,89 @@ def _validate_rfq_line_status(value: str) -> str:
 def _aggregate_project_required_by_item(
     conn: sqlite3.Connection,
     project: dict[str, Any],
+    *,
+    assembly_components_by_id: dict[int, list[tuple[int, int]]] | None = None,
+    focus_item_id: int | None = None,
 ) -> dict[int, int]:
     required_by_item: dict[int, int] = {}
     for requirement in project["requirements"]:
-        for item_id, quantity in _expand_requirement_to_items(conn, requirement):
+        if requirement.get("item_id"):
+            item_id = int(requirement["item_id"])
+            if focus_item_id is not None and item_id != focus_item_id:
+                continue
+            required_by_item[item_id] = required_by_item.get(item_id, 0) + int(requirement["quantity"])
+            continue
+
+        assembly_id = int(requirement["assembly_id"])
+        if assembly_components_by_id is None:
+            expanded_rows = _expand_requirement_to_items(conn, requirement)
+        else:
+            expanded_rows = [
+                (item_id, component_quantity * int(requirement["quantity"]))
+                for item_id, component_quantity in assembly_components_by_id.get(assembly_id, [])
+            ]
+        for item_id, quantity in expanded_rows:
+            if focus_item_id is not None and item_id != focus_item_id:
+                continue
             required_by_item[item_id] = required_by_item.get(item_id, 0) + quantity
     return required_by_item
+
+
+def _load_assembly_components_by_assembly(
+    conn: sqlite3.Connection,
+    assembly_ids: list[int],
+) -> dict[int, list[tuple[int, int]]]:
+    if not assembly_ids:
+        return {}
+    placeholders = ",".join("?" for _ in assembly_ids)
+    rows = conn.execute(
+        f"""
+        SELECT assembly_id, item_id, quantity
+        FROM assembly_components
+        WHERE assembly_id IN ({placeholders})
+        ORDER BY assembly_id, item_id
+        """,
+        tuple(assembly_ids),
+    ).fetchall()
+    components_by_assembly: dict[int, list[tuple[int, int]]] = {
+        assembly_id: [] for assembly_id in assembly_ids
+    }
+    for row in rows:
+        components_by_assembly.setdefault(int(row["assembly_id"]), []).append(
+            (int(row["item_id"]), int(row["quantity"]))
+        )
+    return components_by_assembly
+
+
+def _load_projects_with_requirements(
+    conn: sqlite3.Connection,
+    project_ids: list[int],
+) -> list[dict[str, Any]]:
+    if not project_ids:
+        return []
+    placeholders = ",".join("?" for _ in project_ids)
+    project_rows = conn.execute(
+        f"SELECT * FROM projects WHERE project_id IN ({placeholders})",
+        tuple(project_ids),
+    ).fetchall()
+    project_lookup = {int(row["project_id"]): {**dict(row), "requirements": []} for row in project_rows}
+    requirement_rows = conn.execute(
+        f"""
+        SELECT
+            pr.*,
+            a.name AS assembly_name,
+            im.item_number
+        FROM project_requirements pr
+        LEFT JOIN assemblies a ON a.assembly_id = pr.assembly_id
+        LEFT JOIN items_master im ON im.item_id = pr.item_id
+        WHERE pr.project_id IN ({placeholders})
+        ORDER BY pr.project_id, pr.requirement_id
+        """,
+        tuple(project_ids),
+    ).fetchall()
+    for row in requirement_rows:
+        project_lookup[int(row["project_id"])]["requirements"].append(dict(row))
+    return [project_lookup[project_id] for project_id in project_ids if project_id in project_lookup]
 
 
 def _normalize_project_planning_date(
@@ -7876,6 +7953,47 @@ def _load_item_planning_metadata(
         tuple(item_ids),
     ).fetchall()
     return {int(row["item_id"]): dict(row) for row in rows}
+
+
+def _load_total_available_inventory_by_item(
+    conn: sqlite3.Connection,
+    item_ids: list[int],
+) -> dict[int, int]:
+    if not item_ids:
+        return {}
+    placeholders = ",".join("?" for _ in item_ids)
+    inventory_rows = conn.execute(
+        f"""
+        SELECT item_id, location, quantity
+        FROM inventory_ledger
+        WHERE item_id IN ({placeholders})
+          AND quantity > 0
+          AND location <> 'RESERVED'
+        """,
+        tuple(item_ids),
+    ).fetchall()
+    allocation_rows = conn.execute(
+        f"""
+        SELECT item_id, location, COALESCE(SUM(quantity), 0) AS quantity
+        FROM reservation_allocations
+        WHERE status = 'ACTIVE'
+          AND item_id IN ({placeholders})
+        GROUP BY item_id, location
+        """,
+        tuple(item_ids),
+    ).fetchall()
+    allocated_by_key = {
+        (int(row["item_id"]), str(row["location"])): int(row["quantity"] or 0)
+        for row in allocation_rows
+    }
+    totals = {item_id: 0 for item_id in item_ids}
+    for row in inventory_rows:
+        item_id = int(row["item_id"])
+        location = str(row["location"])
+        available = max(0, int(row["quantity"]) - allocated_by_key.get((item_id, location), 0))
+        if available > 0:
+            totals[item_id] = totals.get(item_id, 0) + available
+    return totals
 
 
 def _planning_source_signature(source: dict[str, Any]) -> tuple[Any, ...]:
@@ -7957,6 +8075,7 @@ def _build_project_planning_snapshot(
     *,
     project_id: int | None = None,
     target_date: str | None = None,
+    focus_item_id: int | None = None,
 ) -> dict[str, Any]:
     selected_project: dict[str, Any] | None = None
     selected_target_date: str | None = None
@@ -7984,11 +8103,10 @@ def _build_project_planning_snapshot(
         (project_id, project_id, today_jst()),
     ).fetchall()
 
-    planning_projects: list[dict[str, Any]] = []
-    for row in committed_rows:
-        project = get_project(conn, int(row["project_id"]))
+    committed_project_ids = [int(row["project_id"]) for row in committed_rows]
+    planning_projects = _load_projects_with_requirements(conn, committed_project_ids)
+    for project in planning_projects:
         project["effective_planned_start"] = _normalize_project_planning_date(project)
-        planning_projects.append(project)
 
     if selected_project is not None:
         preview_project = dict(selected_project)
@@ -8004,15 +8122,31 @@ def _build_project_planning_snapshot(
     project_sequence = [int(project["project_id"]) for project in planning_projects]
     project_rank = {project_id: idx for idx, project_id in enumerate(project_sequence)}
 
+    assembly_ids = sorted(
+        {
+            int(requirement["assembly_id"])
+            for project in planning_projects
+            for requirement in project["requirements"]
+            if requirement.get("assembly_id")
+        }
+    )
+    assembly_components_by_id = _load_assembly_components_by_assembly(conn, assembly_ids)
+
     required_by_project: dict[int, dict[int, int]] = {}
     item_ids: set[int] = set()
     for project in planning_projects:
-        project_required = _aggregate_project_required_by_item(conn, project)
+        project_required = _aggregate_project_required_by_item(
+            conn,
+            project,
+            assembly_components_by_id=assembly_components_by_id,
+            focus_item_id=focus_item_id,
+        )
         required_by_project[int(project["project_id"])] = project_required
         item_ids.update(project_required.keys())
 
     item_ids_sorted = sorted(item_ids)
     item_metadata = _load_item_planning_metadata(conn, item_ids_sorted)
+    available_inventory_by_item = _load_total_available_inventory_by_item(conn, item_ids_sorted)
 
     generic_order_events: dict[int, list[dict[str, Any]]] = {item_id: [] for item_id in item_ids_sorted}
     project_order_events: dict[int, list[dict[str, Any]]] = {item_id: [] for item_id in item_ids_sorted}
@@ -8118,7 +8252,7 @@ def _build_project_planning_snapshot(
 
     for item_id in item_ids_sorted:
         generic_pool_sources: list[dict[str, Any]] = []
-        current_stock = _get_total_available_inventory(conn, item_id)
+        current_stock = int(available_inventory_by_item.get(item_id, 0))
         if current_stock > 0:
             generic_pool_sources.append(
                 _build_planning_source(
@@ -8475,6 +8609,7 @@ def get_item_planning_context(
         conn,
         project_id=preview_project_id,
         target_date=target_date,
+        focus_item_id=item_id,
     )
     project_rows: list[dict[str, Any]] = []
     for summary in snapshot["project_summaries"]:

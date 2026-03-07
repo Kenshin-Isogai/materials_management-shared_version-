@@ -1,4 +1,11 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type KeyboardEvent as ReactKeyboardEvent,
+  useDeferredValue,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import useSWR from "swr";
 import { apiGet } from "../lib/api";
 import type {
@@ -230,7 +237,26 @@ export function CatalogPicker(props: CatalogPickerProps) {
     props.onChange(props.value.filter((entry) => resultKey(entry) !== resultKey(result)));
   }
 
-  function handleKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+  function dismissPicker(event?: {
+    preventDefault: () => void;
+    stopPropagation: () => void;
+  }) {
+    event?.preventDefault();
+    event?.stopPropagation();
+    setIsOpen(false);
+    if (props.mode !== "multi") {
+      setQuery(singleDisplayValue);
+      return;
+    }
+    setQuery("");
+  }
+
+  function handleRootKeyDownCapture(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (!isOpen || event.key !== "Escape") return;
+    dismissPicker(event);
+  }
+
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLInputElement>) {
     if (event.key === "ArrowDown") {
       event.preventDefault();
       if (!isOpen) {
@@ -259,13 +285,7 @@ export function CatalogPicker(props: CatalogPickerProps) {
       return;
     }
     if (event.key === "Escape") {
-      event.preventDefault();
-      setIsOpen(false);
-      if (props.mode !== "multi") {
-        setQuery(singleDisplayValue);
-      } else {
-        setQuery("");
-      }
+      dismissPicker(event);
     }
   }
 
@@ -275,7 +295,7 @@ export function CatalogPicker(props: CatalogPickerProps) {
       : "absolute left-0 right-0 top-full z-30 mt-2 rounded-2xl border border-slate-200 bg-white shadow-panel";
 
   return (
-    <div className="relative" ref={rootRef}>
+    <div className="relative" ref={rootRef} onKeyDownCapture={handleRootKeyDownCapture}>
       {props.mode === "multi" && props.value.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-2">
           {props.value.map((item) => (

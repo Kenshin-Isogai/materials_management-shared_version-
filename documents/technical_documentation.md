@@ -28,6 +28,11 @@ This document explains the implemented architecture of the Materials Management 
   - drawer close, breadcrumb back, route leave, and drawer-stack truncation flows now guard unsaved project/RFQ drafts
   - item-scoped RFQ drawers keep the full batch visible while surfacing the focused item rows first
   - RFQ save flows selectively rehydrate the saved rows from refreshed server detail so backend-normalized values replace stale local drafts without discarding other unsaved rows
+  - nested `CatalogPicker` Escape handling is scoped locally so dismissing picker results does not also trigger drawer close/discard flows
+  - when `/workspace/summary` refresh removes the selected project, the page reselects the next valid project before issuing planning-analysis requests
+  - hidden breadcrumb panels stay mounted for navigation continuity, but inactive project/item/RFQ panels suspend their SWR fetches and preload queries
+  - project drawer RFQ metrics come from `workspace/summary` aggregate `rfq_summary` data rather than a paginated RFQ list slice
+  - shared project/RFQ drawer editors backfill current selections when ids fall outside initial preload pages so existing links still render correctly
   - legacy `/projects`, `/planning`, and `/rfq` routes remain available for heavy edits and operational fallback
 - The Projects page supports requirement target lookup via searchable item input (`datalist`) so users can select from large item registries faster than scrolling long select lists.
 - Requirement entry includes a preview-first bulk text parser (`item_number,quantity` per line).
@@ -456,6 +461,11 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
   - returns one row per committed project, plus the selected preview project when applicable
   - reuses canonical planning metrics and source arrays so the frontend does not recalculate allocation behavior
   - supports workspace what-if review by accepting optional `preview_project_id` and `target_date`
+  - narrows snapshot expansion to the requested item while still using the canonical sequential-planning rules
+- `_build_project_planning_snapshot(...)` now batches the hot-path lookup work:
+  - committed projects and requirements are loaded in one pass instead of repeated `get_project(...)` calls
+  - assembly component rows are preloaded once per snapshot and reused across project requirement expansion
+  - available inventory totals are precomputed per relevant item instead of re-queried inside the item loop
 - `GET /api/workspace/planning-export` serializes the selected planning view into CSV:
   - includes committed pipeline rows, selected-project totals, selected-project item rows, and RFQ summary counts
   - reuses canonical planning analysis output instead of duplicating export-only planning logic
