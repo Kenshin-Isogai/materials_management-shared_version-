@@ -2,6 +2,22 @@
 
 ### Fixed
 
+- Replaced the workspace unsaved-change route-leave guard from `unstable_usePrompt` to `useBlocker` with an explicit confirm/reset flow.
+- Fixed a frontend navigation regression where opening RFQ after workspace interactions could leave client-side tab changes stuck until a full page refresh, even though the URL updated.
+
+### Docs
+
+- Updated `documents/technical_documentation.md` and `documents/source_current_state.md` with the blocker implementation change and the RFQ/tab-navigation regression note.
+
+### Tests
+
+- Frontend test suite executed: `npm run test` -> `8 passed` test files, `15 passed` tests.
+- Frontend production build executed: `npm run build`.
+
+## 2026-03-08
+
+### Fixed
+
 - Migrated the frontend bootstrap from plain `BrowserRouter` to a React Router data router (`createBrowserRouter` + `RouterProvider`) while preserving the existing route tree under `AppShell`.
 - Restored the `/workspace` page so its unsaved-change prompt can use `unstable_usePrompt` without crashing on mount; opening the Workspace tab no longer produces a blank page from the router-context mismatch.
 

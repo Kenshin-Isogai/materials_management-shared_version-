@@ -20,7 +20,8 @@ This document explains the implemented architecture of the Materials Management 
   - default view: project summary dashboard with committed-vs-draft semantics
   - secondary view: committed pipeline table with cumulative generic-consumption metrics
   - deep-dive view: planning board with server-driven shortage rows and supply-source breakdowns
-  - frontend routing now boots through a React Router data router (`createBrowserRouter` + `RouterProvider`) so workspace route-leave blockers can use `unstable_usePrompt` safely
+- frontend routing now boots through a React Router data router (`createBrowserRouter` + `RouterProvider`)
+- workspace route-leave protection now uses `useBlocker` plus an explicit confirmation effect instead of `unstable_usePrompt`, avoiding stale blocked-navigation state after leaving workspace/RFQ flows
   - right-side drawer infrastructure provides local breadcrumb navigation for project, item, and RFQ context without leaving the board
   - project drawer now mounts the shared project editor, including preview-first bulk requirement entry
   - item drawer now combines inventory, incoming orders, item flow, and cross-project planning allocation context

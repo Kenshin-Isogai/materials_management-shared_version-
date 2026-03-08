@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Link,
-  unstable_usePrompt as usePrompt,
   useBeforeUnload,
+  useBlocker,
 } from "react-router-dom";
 import useSWR from "swr";
 import { ProjectEditor } from "../components/ProjectEditor";
@@ -858,6 +858,8 @@ export function WorkspacePage() {
   }, [drawerStack]);
 
   const hasDirtyDrawers = drawerStack.some((entry) => Boolean(dirtyDrawerLabels[entry.key]));
+  const blocker = useBlocker(hasDirtyDrawers);
+  const handledBlockedNavigationRef = useRef<string | null>(null);
 
   useBeforeUnload(
     (event) => {
@@ -867,10 +869,26 @@ export function WorkspacePage() {
     },
     { capture: true },
   );
-  usePrompt({
-    when: hasDirtyDrawers,
-    message: "Discard unsaved workspace drawer changes?",
-  });
+
+  useEffect(() => {
+    if (blocker.state !== "blocked") {
+      handledBlockedNavigationRef.current = null;
+      return;
+    }
+    const nextLocationKey = [
+      blocker.location.pathname,
+      blocker.location.search,
+      blocker.location.hash,
+    ].join("");
+    if (handledBlockedNavigationRef.current === nextLocationKey) return;
+    handledBlockedNavigationRef.current = nextLocationKey;
+    const confirmed = window.confirm("Discard unsaved workspace drawer changes?");
+    if (confirmed) {
+      blocker.proceed();
+      return;
+    }
+    blocker.reset();
+  }, [blocker]);
 
   async function refreshWorkspace() {
     await Promise.all([mutateWorkspace(), analysisKey ? mutateAnalysis() : Promise.resolve(undefined)]);
