@@ -2,6 +2,24 @@
 
 ### Fixed
 
+- Reduced RFQ page render pressure by lazy-loading linked-order choices per active line instead of preloading and rendering the full order-option set for the entire batch.
+- Preserved current linked-order selections in RFQ rows using saved line metadata so existing links remain visible before on-demand order options finish loading.
+- Limited RFQ line-table rendering to a paged slice (25/50/100 rows) so large batches no longer keep the full editable grid mounted during client-side tab transitions.
+
+### Docs
+
+- Updated `documents/technical_documentation.md` and `documents/source_current_state.md` with the RFQ lazy linked-order loading and paged line-table behavior.
+
+### Tests
+
+- Added frontend helper coverage for RFQ linked-order option state and RFQ line pagination helpers.
+- Frontend test suite executed: `npm run test` -> `8 passed` test files, `20 passed` tests.
+- Frontend production build executed: `npm run build`.
+
+## 2026-03-08
+
+### Fixed
+
 - Replaced the workspace unsaved-change route-leave guard from `unstable_usePrompt` to `useBlocker` with an explicit confirm/reset flow.
 - Fixed a frontend navigation regression where opening RFQ after workspace interactions could leave client-side tab changes stuck until a full page refresh, even though the URL updated.
 

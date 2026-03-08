@@ -97,7 +97,8 @@ Last updated: 2026-03-08 (JST)
   - inactive drawer panels suspend their SWR fetches and preload queries while hidden in the breadcrumb stack
   - project drawer RFQ metrics now come from summary aggregates instead of a paginated RFQ batch slice
   - project requirement rows preserve current item/assembly selections even when those ids are outside the initial preload page
-  - RFQ line order selectors now load per-item options across all pages and backfill currently linked orders, including arrived or older rows
+  - RFQ line order selectors now lazy-load matching orders for the active row only and keep the current linked order visible from saved metadata, reducing large-batch render pressure while preserving older/arrived selections
+  - shared RFQ editors now render paged line slices (25/50/100 rows) instead of mounting every editable RFQ line at once, reducing large-batch UI stalls during tab changes
   - legacy `/projects`, `/planning`, and `/rfq` remain available for heavier edit flows
 - Movements page now uses a single expanded `Movement Entry` table for both one-off and multi-row moves (the separate `Single Move` form was removed).
 - Adding a new row in `Movement Entry` now inherits the latest completed `from/to` locations so repeated transfers do not require retyping the same pair each time.

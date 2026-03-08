@@ -1,4 +1,5 @@
-import { NavLink, Outlet } from "react-router-dom";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { RouteErrorBoundary } from "./RouteErrorBoundary";
 
 const nav = [
   { to: "/", label: "Dashboard" },
@@ -20,6 +21,7 @@ const nav = [
 ];
 
 export function AppShell() {
+  const location = useLocation();
   return (
     <div className="min-h-screen text-ink">
       <header className="sticky top-0 z-40 border-b border-black/5 bg-canvas/90 backdrop-blur">
@@ -33,10 +35,9 @@ export function AppShell() {
               to={item.to}
               end={item.to === "/"}
               className={({ isActive }) =>
-                `rounded-lg px-3 py-2 text-sm font-semibold transition ${
-                  isActive
-                    ? "bg-signal text-white"
-                    : "text-slate-700 hover:bg-white hover:text-slate-900"
+                `rounded-lg px-3 py-2 text-sm font-semibold transition ${isActive
+                  ? "bg-signal text-white"
+                  : "text-slate-700 hover:bg-white hover:text-slate-900"
                 }`
               }
             >
@@ -46,7 +47,9 @@ export function AppShell() {
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-4 py-8">
-        <Outlet />
+        <RouteErrorBoundary location={location}>
+          <Outlet />
+        </RouteErrorBoundary>
       </main>
     </div>
   );

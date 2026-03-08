@@ -35,6 +35,8 @@ This document explains the implemented architecture of the Materials Management 
   - hidden breadcrumb panels stay mounted for navigation continuity, but inactive project/item/RFQ panels suspend their SWR fetches and preload queries
   - project drawer RFQ metrics come from `workspace/summary` aggregate `rfq_summary` data rather than a paginated RFQ list slice
   - shared project/RFQ drawer editors backfill current selections when ids fall outside initial preload pages so existing links still render correctly
+  - shared RFQ linked-order selectors now lazy-load per active row and keep the current selection visible from saved metadata, avoiding eager option rendering across the whole batch
+  - shared RFQ editors now page the line table (25/50/100 rows) so large batches do not mount the entire editable grid at once during route changes
   - legacy `/projects`, `/planning`, and `/rfq` routes remain available for heavy edits and operational fallback
 - The Projects page supports requirement target lookup via searchable item input (`datalist`) so users can select from large item registries faster than scrolling long select lists.
 - Requirement entry includes a preview-first bulk text parser (`item_number,quantity` per line).
