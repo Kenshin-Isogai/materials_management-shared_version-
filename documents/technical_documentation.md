@@ -65,8 +65,8 @@ flowchart LR
     CLI --> DBINIT
 
     SVC -->|SQL + transactions| DB[(SQLite\nbackend/database/inventory.db)]
-    SVC -->|CSV/PDF read-write and moves| FS[(Workspace Files\nquotations/ + exports/)]
-    SVC --> QPATHS[Path Rules\nbackend/app/quotation_paths.py]
+    SVC -->|CSV/PDF read-write and moves| FS[(Workspace Files\nimports/orders/ + exports/)]
+    SVC --> QPATHS[Path Rules\nbackend/app/order_import_paths.py]
     SVC --> UTILS[Validation/Date Utils\nbackend/app/utils.py]
 ```
 
@@ -76,7 +76,7 @@ flowchart LR
    This avoids duplicated logic and keeps behavior consistent for web and batch operations.
 2. Current-state table + event log model.
    `inventory_ledger` gives fast current stock lookup, while `transaction_log` enables traceability and undo.
-3. Filesystem-aware quotation ingestion.
+3. Filesystem-aware order ingestion.
    Orders are imported from CSV/PDF folders, then moved to canonical registered paths to preserve auditability.
 4. Reversible bulk imports.
    Item imports store job and row-level effects (`import_jobs`, `import_job_effects`) so undo/redo can be state-checked and safe.
@@ -327,10 +327,10 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 
 - Manual order import accepts only canonical registered PDF links or filename-only values.
 - Unregistered batch import resolves/moves CSV and PDF files and rewrites links to canonical workspace-relative paths.
-- Missing items discovered during unregistered batch import are aggregated into a single register CSV per batch run under `imports/items/pending/` (instead of per-quotation output beside source CSVs).
+- Missing items discovered during unregistered batch import are aggregated into a single register CSV per batch run under `imports/items/unregistered/` (instead of per-quotation output beside source CSVs).
 - Consolidated missing-item rows are de-duplicated by `(supplier, manufacturer_name, item_number)` so repeated unresolved rows across quotations are emitted once per batch register CSV.
 - Batch consolidation uses collision-safe temporary per-file register naming (supplier-prefixed) and deletes temporary files only after consolidated-register write succeeds.
-- Consolidated register files may include rows from multiple suppliers; successful pending-item registration moves the processed CSV into `imports/items/processed/<YYYY-MM>/` while preserving row-level supplier columns.
+- Consolidated register files may include rows from multiple suppliers; successful unregistered-item registration moves the processed CSV into `imports/items/registered/<YYYY-MM>/` while preserving row-level supplier columns.
 - In `missing_items_registration.csv`, `supplier` means the supplier alias namespace for ordered SKU resolution. `new_item` rows may optionally provide `manufacturer_name` (or `manufacturer`); blank values default to `UNKNOWN`.
 - Registration inputs accept both `resolution_type` (`new_item`/`alias`) and legacy `row_type` (`item`/`alias`) to avoid mixed-template confusion; `row_type=item` is normalized to `resolution_type=new_item`.
 - Content/file-based missing-item registration must preserve the same `skip_unresolved` behavior as path-based batch registration so API upload, CLI, and batch retry flows stay aligned.
@@ -339,12 +339,12 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 - File collisions are handled by non-destructive renaming (`_1`, `_2`, ...).
 - Missing/unresolved PDF links are surfaced as warnings, not silent failures.
 - Keep canonical layout:
-  - `quotations/unregistered/csv_files/<supplier>/`
-  - `quotations/unregistered/pdf_files/<supplier>/`
-  - `quotations/registered/csv_files/<supplier>/`
-  - `quotations/registered/pdf_files/<supplier>/`
-  - `imports/items/pending/`
-  - `imports/items/processed/<YYYY-MM>/`
+  - `imports/orders/unregistered/csv_files/<supplier>/`
+  - `imports/orders/unregistered/pdf_files/<supplier>/`
+  - `imports/orders/registered/csv_files/<supplier>/`
+  - `imports/orders/registered/pdf_files/<supplier>/`
+  - `imports/items/unregistered/`
+  - `imports/items/registered/<YYYY-MM>/`
 
 ### 5) Reservation partial-actions policy
 

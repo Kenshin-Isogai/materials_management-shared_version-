@@ -1,3 +1,28 @@
+## 2026-03-11
+
+### Changed
+
+- Path unification Phase 2: moved `quotations/` top-level directory under `imports/orders/`.
+  - Directory paths: `quotations/` → `imports/orders/`, `quotations/registered/` → `imports/orders/registered/`, `quotations/unregistered/` → `imports/orders/unregistered/`
+  - Config constants: `QUOTATIONS_ROOT` → `ORDERS_IMPORT_ROOT`, `QUOTATIONS_REGISTERED_ROOT` → `ORDERS_IMPORT_REGISTERED_ROOT`, `QUOTATIONS_UNREGISTERED_ROOT` → `ORDERS_IMPORT_UNREGISTERED_ROOT`, `QUOTATIONS_REGISTERED_CSV_ROOT` → `ORDERS_IMPORT_REGISTERED_CSV_ROOT`, `QUOTATIONS_REGISTERED_PDF_ROOT` → `ORDERS_IMPORT_REGISTERED_PDF_ROOT`, `QUOTATIONS_UNREGISTERED_CSV_ROOT` → `ORDERS_IMPORT_UNREGISTERED_CSV_ROOT`, `QUOTATIONS_UNREGISTERED_PDF_ROOT` → `ORDERS_IMPORT_UNREGISTERED_PDF_ROOT`
+  - Module: `quotation_paths.py` → `order_import_paths.py`
+  - Dataclass: `QuotationRoots` → `OrderImportRoots`
+  - Service function: `migrate_quotations_layout` → `migrate_orders_import_layout`
+  - CLI command: `migrate-quotations-layout` → `migrate-orders-layout` (old name kept as alias)
+  - Backward-compatible migration: `ensure_workspace_layout()` auto-migrates legacy `quotations/` directories to `imports/orders/` on startup.
+
+## 2026-03-10
+
+### Changed
+
+- Unified CSV import path terminology: renamed items import directories from `pending/processed` to `unregistered/registered` for consistency with the order/quotation import flow. Updated config constants, service functions, API endpoints, CLI commands, and frontend UI accordingly. Old CLI command names kept as aliases for backward compatibility. Legacy `pending`/`processed` directories are auto-migrated on startup via `ensure_workspace_layout()`.
+  - Directory paths: `imports/items/pending/` → `imports/items/unregistered/`, `imports/items/processed/` → `imports/items/registered/`
+  - Config constants: `ITEMS_IMPORT_PENDING_ROOT` → `ITEMS_IMPORT_UNREGISTERED_ROOT`, `ITEMS_IMPORT_PROCESSED_ROOT` → `ITEMS_IMPORT_REGISTERED_ROOT`
+  - Service function: `register_pending_item_csvs` → `register_unregistered_item_csvs`
+  - API endpoint: `/api/items/register-pending-batch` → `/api/items/register-unregistered-batch`
+  - CLI command: `register-pending-items` → `register-unregistered-items` (old name kept as alias)
+  - Schema: `PendingItemBatchRequest` → `UnregisteredItemBatchRequest`
+
 ## 2026-03-09
 
 ### Fixed
@@ -5,7 +30,7 @@
 - Restored the CLI pending-item batch registration command after the service rename.
   - `backend/main.py register-pending-items` now calls `register_pending_item_csvs(...)`.
   - The legacy command name `register-unregistered-missing` remains as a compatibility alias while using the new pending/processed root arguments internally.
-- Updated the root-level debug scripts to exercise the current pending-item workflow and current quotation root layout instead of removed helpers/paths.
+- Updated the root-level debug scripts to exercise the current pending-item workflow and current order import root layout instead of removed helpers/paths.
 
 ### Docs
 
@@ -400,7 +425,7 @@ Format style: Keep a simple date-based log while repository versioning policy is
 - Fixed `/api/register-missing/rows` schema to accept manufacturer input (`manufacturer_name`, plus `manufacturer` alias), so JSON row registration now persists manufacturer instead of dropping it.
 - Updated missing-item output behavior for unregistered order batch import.
   - Per-file unresolved rows are no longer left beside quotation CSV files.
-  - A single consolidated register CSV is generated per batch run under `quotations/unregistered/missing_item_registers/`.
+  - A single consolidated register CSV is generated per batch run under `imports/orders/unregistered/missing_item_registers/`.
   - Missing-item batch registration now scans that consolidated folder in addition to legacy per-file locations.
 
 ### Fixed
@@ -414,7 +439,7 @@ Format style: Keep a simple date-based log while repository versioning policy is
 - Fixed duplicate rows in consolidated `batch_missing_items_registration_*.csv` outputs.
   - Unregistered batch import now de-duplicates unresolved rows by `(supplier, manufacturer_name, item_number)` across multiple source quotations in the same run.
 - Fixed unregistered order CSV discovery to avoid interference from generated missing-item register files.
-  - Order batch import now explicitly skips files under `quotations/unregistered/missing_item_registers/`.
+  - Order batch import now explicitly skips files under `imports/orders/unregistered/missing_item_registers/`.
 - Fixed consolidated missing-item register follow-up regressions.
   - Per-file temporary missing-item filenames are now supplier-prefixed to avoid same-stem collisions across suppliers during a batch run.
   - Batch flow now writes the consolidated register before deleting per-file temporary files, preventing data loss on consolidated-write failures.
@@ -425,7 +450,7 @@ Format style: Keep a simple date-based log while repository versioning policy is
   - Added atomic per-file filesystem move handling for unregistered import.
   - CSV/PDF moves are now executed as one planned set, with rollback of already moved files if any move fails.
 - Clarified and verified missing-items path behavior for unregistered import:
-  - when a file returns `missing_items`, source CSV/PDF files remain under `quotations/unregistered/...`.
+  - when a file returns `missing_items`, source CSV/PDF files remain under `imports/orders/unregistered/...`.
 - Fixed duplicate quotation ingestion risk in order imports.
   - Order import now rejects re-import of the same `(supplier, quotation_number)` when orders already exist for that quotation.
   - API returns conflict error `DUPLICATE_QUOTATION_IMPORT` with duplicated quotation numbers in details.
@@ -553,7 +578,7 @@ Format style: Keep a simple date-based log while repository versioning policy is
   - auth capability endpoint
   - partial reservation release/consume behavior (API + service)
   - invalid partial quantity handling
-  - unregistered batch import with `quotations/unregistered/...` `pdf_link`
+  - unregistered batch import with `imports/orders/unregistered/...` `pdf_link`
   - items import-jobs listing endpoint route behavior
   - slash-date order import acceptance
   - unresolved missing-item row rejection

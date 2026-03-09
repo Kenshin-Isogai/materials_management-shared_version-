@@ -538,9 +538,9 @@ export function OrdersPage() {
       );
     } catch (error) {
       const messageText = String(error ?? "");
-      if (messageText.includes("quotations/registered/pdf_files")) {
+      if (messageText.includes("imports/orders/registered/pdf_files")) {
         setMessage(
-          "Preview failed: Manual import requires pdf_link to be blank, filename-only, or quotations/registered/pdf_files/<supplier>/<file>.pdf. " +
+          "Preview failed: Manual import requires pdf_link to be blank, filename-only, or imports/orders/registered/pdf_files/<supplier>/<file>.pdf. " +
           "For unregistered folder CSV files, use 'Unregistered Folder Batch'."
         );
       } else {
@@ -654,9 +654,9 @@ export function OrdersPage() {
       await Promise.all([mutateOrders(), mutateQuotations()]);
     } catch (error) {
       const messageText = String(error ?? "");
-      if (messageText.includes("quotations/registered/pdf_files")) {
+      if (messageText.includes("imports/orders/registered/pdf_files")) {
         setMessage(
-          "Import failed: Manual import requires pdf_link to be blank, filename-only, or quotations/registered/pdf_files/<supplier>/<file>.pdf. " +
+          "Import failed: Manual import requires pdf_link to be blank, filename-only, or imports/orders/registered/pdf_files/<supplier>/<file>.pdf. " +
           "For unregistered folder CSV files, use 'Unregistered Folder Batch'."
         );
       } else {
@@ -880,7 +880,7 @@ export function OrdersPage() {
           </p>
           <p className="mt-1">
             For manual import, <code>pdf_link</code> should be{" "}
-            <code>{"quotations/registered/pdf_files/<supplier>/<file>.pdf"}</code> or blank.
+            <code>{"imports/orders/registered/pdf_files/<supplier>/<file>.pdf"}</code> or blank.
           </p>
           <p>
             If you provide only a filename like <code>Q-2026-001.pdf</code>, it is auto-normalized
@@ -1200,11 +1200,11 @@ export function OrdersPage() {
         <p className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
           Canonical layout:
           {" "}
-          <code>{"quotations/unregistered/csv_files/<supplier>/*.csv"}</code>
+          <code>{"imports/orders/unregistered/csv_files/<supplier>/*.csv"}</code>
           {" "}
           and
           {" "}
-          <code>{"quotations/unregistered/pdf_files/<supplier>/*"}</code>
+          <code>{"imports/orders/unregistered/pdf_files/<supplier>/*"}</code>
           .
         </p>
         <div className="mt-3 flex flex-wrap gap-2">
@@ -1620,7 +1620,7 @@ export function OrdersPage() {
                             className="input"
                             value={editingQuotationPdfLink}
                             onChange={(event) => setEditingQuotationPdfLink(event.target.value)}
-                            placeholder="quotations/registered/pdf_files/<supplier>/<file>.pdf"
+                            placeholder="imports/orders/registered/pdf_files/<supplier>/<file>.pdf"
                           />
                         ) : (
                           row.pdf_link ?? "-"

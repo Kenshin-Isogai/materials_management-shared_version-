@@ -4,8 +4,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import (
-    QUOTATIONS_REGISTERED_ROOT,
-    QUOTATIONS_UNREGISTERED_ROOT,
+    ORDERS_IMPORT_REGISTERED_ROOT,
+    ORDERS_IMPORT_UNREGISTERED_ROOT,
     WORKSPACE_ROOT,
 )
 from .errors import AppError
@@ -20,9 +20,15 @@ _TYPO_SEGMENT_MAP = {
     "registred": "registered",
 }
 
+# Prefix-level migrations applied after segment-level typo fixes.
+# Each entry maps an old first segment to a replacement prefix (may be multi-segment).
+_PREFIX_MIGRATIONS: list[tuple[str, str]] = [
+    ("quotations", "imports/orders"),
+]
+
 
 @dataclass(frozen=True)
-class QuotationRoots:
+class OrderImportRoots:
     unregistered_root: Path
     registered_root: Path
     unregistered_csv_root: Path
@@ -35,10 +41,10 @@ def build_roots(
     *,
     unregistered_root: str | Path | None = None,
     registered_root: str | Path | None = None,
-) -> QuotationRoots:
-    unreg = Path(unregistered_root) if unregistered_root is not None else QUOTATIONS_UNREGISTERED_ROOT
-    reg = Path(registered_root) if registered_root is not None else QUOTATIONS_REGISTERED_ROOT
-    return QuotationRoots(
+) -> OrderImportRoots:
+    unreg = Path(unregistered_root) if unregistered_root is not None else ORDERS_IMPORT_UNREGISTERED_ROOT
+    reg = Path(registered_root) if registered_root is not None else ORDERS_IMPORT_REGISTERED_ROOT
+    return OrderImportRoots(
         unregistered_root=unreg,
         registered_root=reg,
         unregistered_csv_root=unreg / CSV_FILES_DIR,
@@ -48,7 +54,7 @@ def build_roots(
     )
 
 
-def ensure_roots(roots: QuotationRoots) -> None:
+def ensure_roots(roots: OrderImportRoots) -> None:
     for path in (
         roots.unregistered_root,
         roots.registered_root,
@@ -75,13 +81,18 @@ def normalize_legacy_path_text(raw: str) -> tuple[str, bool]:
     parts = [part for part in normalized.split("/") if part and part != "."]
     remapped = [_TYPO_SEGMENT_MAP.get(part.lower(), part) for part in parts]
     fixed = "/".join(remapped)
+    # Apply prefix-level migrations (e.g. quotations/ → imports/orders/)
+    for old_prefix, new_prefix in _PREFIX_MIGRATIONS:
+        if fixed == old_prefix or fixed.startswith(old_prefix + "/"):
+            fixed = new_prefix + fixed[len(old_prefix):]
+            break
     return fixed, fixed != text
 
 
 def supplier_from_unregistered_csv_path(
     csv_path: Path,
     *,
-    roots: QuotationRoots,
+    roots: OrderImportRoots,
 ) -> tuple[str, list[str]]:
     resolved_csv = csv_path.resolve()
     resolved_unreg = roots.unregistered_root.resolve()
@@ -127,7 +138,7 @@ def supplier_from_unregistered_csv_path(
     ]
 
 
-def validate_retry_unregistered_csv_path(csv_path: str | Path, *, roots: QuotationRoots) -> Path:
+def validate_retry_unregistered_csv_path(csv_path: str | Path, *, roots: OrderImportRoots) -> Path:
     path = Path(csv_path)
     if not path.exists():
         raise AppError(
@@ -160,7 +171,7 @@ def validate_retry_unregistered_csv_path(csv_path: str | Path, *, roots: Quotati
     return resolved
 
 
-def iter_unregistered_order_csvs(roots: QuotationRoots) -> list[Path]:
+def iter_unregistered_order_csvs(roots: OrderImportRoots) -> list[Path]:
     return sorted(
         [
             p
@@ -170,11 +181,11 @@ def iter_unregistered_order_csvs(roots: QuotationRoots) -> list[Path]:
     )
 
 
-def registered_csv_supplier_dir(roots: QuotationRoots, supplier_name: str) -> Path:
+def registered_csv_supplier_dir(roots: OrderImportRoots, supplier_name: str) -> Path:
     return roots.registered_csv_root / supplier_name
 
 
-def registered_pdf_supplier_dir(roots: QuotationRoots, supplier_name: str) -> Path:
+def registered_pdf_supplier_dir(roots: OrderImportRoots, supplier_name: str) -> Path:
     return roots.registered_pdf_root / supplier_name
 
 
@@ -186,7 +197,7 @@ def normalize_pdf_link(
     *,
     pdf_link: str,
     supplier_name: str,
-    roots: QuotationRoots,
+    roots: OrderImportRoots,
     csv_path: Path | None = None,
 ) -> tuple[Path | None, str, list[dict[str, str]], list[str]]:
     raw = (pdf_link or "").strip()

@@ -201,23 +201,23 @@ Last updated: 2026-03-09 (JST)
 
 ## 5. File and Import Workflow State
 
-- Canonical quotation folder layout is active:
-  - `quotations/unregistered/csv_files/<supplier>/`
-  - `quotations/unregistered/pdf_files/<supplier>/`
-  - `quotations/registered/csv_files/<supplier>/`
-  - `quotations/registered/pdf_files/<supplier>/`
+- Canonical order import folder layout is active:
+  - `imports/orders/unregistered/csv_files/<supplier>/`
+  - `imports/orders/unregistered/pdf_files/<supplier>/`
+  - `imports/orders/registered/csv_files/<supplier>/`
+  - `imports/orders/registered/pdf_files/<supplier>/`
 - Batch import functions normalize legacy/typo paths, move files safely, and emit warnings for unresolved paths.
-- Unregistered batch order import writes missing-item rows into one consolidated register CSV per run under `imports/items/pending/`; source CSV/PDF files remain in place for unresolved quotations.
+- Unregistered batch order import writes missing-item rows into one consolidated register CSV per run under `imports/items/unregistered/`; source CSV/PDF files remain in place for unresolved quotations.
 - Consolidated missing-item registers de-duplicate repeated unresolved rows by `(supplier, manufacturer_name, item_number)` across all quotations in the same batch run.
 - Temporary per-file missing-item CSVs generated during batch consolidation are supplier-prefixed and only removed after consolidated register creation succeeds.
 - Collision-safe file move behavior is implemented (`_1`, `_2`, ... suffixing).
-- Unregistered batch order import accepts non-canonical `pdf_link` path forms (including `quotations/unregistered/...` and typo-normalizable variants) and normalizes/moves links during processing.
+- Unregistered batch order import accepts non-canonical `pdf_link` path forms (including legacy `quotations/unregistered/...` and typo-normalizable variants) and normalizes/moves links during processing.
 - Per-file unregistered order import now executes CSV/PDF moves atomically with rollback on move failure, preventing partial file relocation.
 - Order import accepts common date formats with slash or flexible month/day (`YYYY/M/D`, `YYYY-MM-DD`) and normalizes to `YYYY-MM-DD`.
 - Fully empty CSV rows are ignored during order import to avoid false validation failures from trailing blank lines.
 - Missing-item registration now rejects unresolved `new_item` rows with all metadata blank, preventing accidental `UNKNOWN` placeholder item creation.
 - Manual and unregistered batch order imports reject duplicate quotation re-import for the same supplier when existing orders already reference that quotation.
-- Missing-item batch registration now reads pending CSVs from `imports/items/pending/` and moves successfully processed files into `imports/items/processed/<YYYY-MM>/`.
+- Missing-item batch registration now reads unregistered CSVs from `imports/items/unregistered/` and moves successfully processed files into `imports/items/registered/<YYYY-MM>/`.
 - `missing_items_registration.csv` uses `supplier` (not `manufacturer`) because rows are resolved in supplier alias scope; `new_item` rows may specify `manufacturer_name` (or `manufacturer`) and default to `UNKNOWN` when blank.
 - File-upload missing-item registration endpoint (`POST /api/register-missing`) accepts optional multipart form field `skip_unresolved=true` to skip unresolved `new_item` rows instead of failing the whole upload.
 - JSON missing-item registration endpoint (`/api/register-missing/rows`) accepts both `manufacturer_name` and `manufacturer` fields for `new_item` rows.

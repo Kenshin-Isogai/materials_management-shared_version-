@@ -587,6 +587,20 @@ def migrate_db(conn: sqlite3.Connection) -> None:
     _normalize_date_column(conn, "rfq_lines", "expected_arrival")
     _normalize_date_column(conn, "purchase_candidates", "target_date")
 
+    # Migrate legacy pdf_link paths: quotations/... → imports/orders/...
+    _has_pdf_link = any(
+        row[1] == "pdf_link"
+        for row in conn.execute("PRAGMA table_info(quotations)").fetchall()
+    )
+    if _has_pdf_link:
+        conn.execute(
+            """
+            UPDATE quotations
+            SET pdf_link = 'imports/orders' || substr(pdf_link, length('quotations') + 1)
+            WHERE pdf_link LIKE 'quotations/%'
+            """
+        )
+
     conn.commit()
 
 

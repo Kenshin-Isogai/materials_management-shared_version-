@@ -16,12 +16,12 @@ from uuid import uuid4
 
 from .config import (
     DEFAULT_EXPORTS_DIR,
-    ITEMS_IMPORT_PENDING_ROOT,
-    ITEMS_IMPORT_PROCESSED_ROOT,
+    ITEMS_IMPORT_UNREGISTERED_ROOT,
+    ITEMS_IMPORT_REGISTERED_ROOT,
 )
 from .errors import AppError
-from .quotation_paths import (
-    QuotationRoots,
+from .order_import_paths import (
+    OrderImportRoots,
     build_roots,
     ensure_roots,
     is_legacy_supplier_dir,
@@ -1330,14 +1330,14 @@ def _execute_planned_file_moves(planned_moves: list[tuple[Path, Path]]) -> None:
         ) from exc
 
 
-def _supplier_name_from_unregistered_path(csv_path: Path, roots: QuotationRoots) -> tuple[str, list[str]]:
+def _supplier_name_from_unregistered_path(csv_path: Path, roots: OrderImportRoots) -> tuple[str, list[str]]:
     return supplier_from_unregistered_csv_path(csv_path, roots=roots)
 
 
 def _resolve_pdf_source_path(
     csv_path: Path,
     pdf_link: str,
-    roots: QuotationRoots,
+    roots: OrderImportRoots,
     supplier_name: str,
 ) -> tuple[Path | None, str, list[dict[str, str]], list[str]]:
     return normalize_pdf_link(
@@ -4666,7 +4666,7 @@ def _normalize_manual_pdf_link(
                 ),
                 status_code=422,
             )
-        return f"quotations/registered/pdf_files/{supplier_name}/{filename}"
+        return f"imports/orders/registered/pdf_files/{supplier_name}/{filename}"
 
     if allow_noncanonical_path:
         filename = parts[-1]
@@ -4678,30 +4678,27 @@ def _normalize_manual_pdf_link(
             )
         return "/".join(parts)
 
-    if len(parts) != 5:
+    # Accept both new (6 segments) and legacy (5 segments) canonical paths
+    expected_new_prefix = ["imports", "orders", "registered", "pdf_files"]
+    expected_legacy_prefix = ["quotations", "registered", "pdf_files"]
+
+    if len(parts) == 6 and [part.lower() for part in parts[:4]] == expected_new_prefix:
+        supplier_in_path = parts[4]
+        filename = parts[5]
+    elif len(parts) == 5 and [part.lower() for part in parts[:3]] == expected_legacy_prefix:
+        supplier_in_path = parts[3]
+        filename = parts[4]
+    else:
         raise AppError(
             code="INVALID_CSV",
             message=(
                 "pdf_link must be empty, a PDF filename, or "
-                "'quotations/registered/pdf_files/<supplier>/<file>.pdf' "
+                "'imports/orders/registered/pdf_files/<supplier>/<file>.pdf' "
                 f"(row {row_index})"
             ),
             status_code=422,
         )
 
-    expected_prefix = ["quotations", "registered", "pdf_files"]
-    if [part.lower() for part in parts[:3]] != expected_prefix:
-        raise AppError(
-            code="INVALID_CSV",
-            message=(
-                "pdf_link must be under "
-                "'quotations/registered/pdf_files/<supplier>/' "
-                f"(row {row_index})"
-            ),
-            status_code=422,
-        )
-
-    supplier_in_path = parts[3]
     if supplier_in_path != supplier_name and supplier_in_path.lower() != supplier_name.lower():
         raise AppError(
             code="INVALID_CSV",
@@ -4712,7 +4709,6 @@ def _normalize_manual_pdf_link(
             status_code=422,
         )
 
-    filename = parts[4]
     if Path(filename).suffix.lower() != ".pdf":
         raise AppError(
             code="INVALID_CSV",
@@ -4720,10 +4716,10 @@ def _normalize_manual_pdf_link(
             status_code=422,
         )
 
-    return f"quotations/registered/pdf_files/{supplier_name}/{filename}"
+    return f"imports/orders/registered/pdf_files/{supplier_name}/{filename}"
 
 
-def _iter_order_csv_files(roots: QuotationRoots) -> list[Path]:
+def _iter_order_csv_files(roots: OrderImportRoots) -> list[Path]:
     files: list[Path] = []
     seen: set[str] = set()
     for base in (roots.unregistered_csv_root, roots.registered_csv_root):
@@ -4731,7 +4727,7 @@ def _iter_order_csv_files(roots: QuotationRoots) -> list[Path]:
             continue
         for csv_file in sorted(base.rglob("*.csv"), key=lambda p: str(p).lower()):
             try:
-                if csv_file.resolve().is_relative_to(ITEMS_IMPORT_PENDING_ROOT.resolve()):
+                if csv_file.resolve().is_relative_to(ITEMS_IMPORT_UNREGISTERED_ROOT.resolve()):
                     continue
             except Exception:
                 pass
@@ -4744,7 +4740,7 @@ def _iter_order_csv_files(roots: QuotationRoots) -> list[Path]:
 
 
 def _rewrite_order_csv_rows(
-    roots: QuotationRoots,
+    roots: OrderImportRoots,
     *,
     row_matcher: Any,
     row_updater: Any | None = None,
@@ -4800,7 +4796,7 @@ def _rewrite_order_csv_rows(
 
 
 def _insert_order_csv_row_after_match(
-    roots: QuotationRoots,
+    roots: OrderImportRoots,
     *,
     row_matcher: Any,
     row_builder: Any,
@@ -4865,7 +4861,7 @@ def _order_csv_row_matcher_for_occurrence(
 
 
 def _merge_order_csv_rows(
-    roots: QuotationRoots,
+    roots: OrderImportRoots,
     *,
     source_row_matcher: Any,
     target_row_matcher: Any,
@@ -5912,20 +5908,20 @@ def import_orders_from_csv_path(
     )
 
 
-def register_pending_item_csvs(
+def register_unregistered_item_csvs(
     conn: sqlite3.Connection,
     *,
-    items_pending_root: str | Path | None = None,
-    items_processed_root: str | Path | None = None,
+    items_unregistered_root: str | Path | None = None,
+    items_registered_root: str | Path | None = None,
     continue_on_error: bool = False,
 ) -> dict[str, Any]:
-    pending_root = Path(items_pending_root) if items_pending_root else ITEMS_IMPORT_PENDING_ROOT
-    processed_root = Path(items_processed_root) if items_processed_root else ITEMS_IMPORT_PROCESSED_ROOT
+    unregistered_root = Path(items_unregistered_root) if items_unregistered_root else ITEMS_IMPORT_UNREGISTERED_ROOT
+    registered_root = Path(items_registered_root) if items_registered_root else ITEMS_IMPORT_REGISTERED_ROOT
     
-    pending_root.mkdir(parents=True, exist_ok=True)
-    processed_root.mkdir(parents=True, exist_ok=True)
+    unregistered_root.mkdir(parents=True, exist_ok=True)
+    registered_root.mkdir(parents=True, exist_ok=True)
 
-    files = sorted(pending_root.rglob("*.csv"))
+    files = sorted(unregistered_root.rglob("*.csv"))
     report: list[dict[str, Any]] = []
     processed = 0
     succeeded = 0
@@ -5949,7 +5945,7 @@ def register_pending_item_csvs(
                     status_text = "skipped_unresolved_batch_file"
                     moved_to = None
                 else:
-                    month_dir = processed_root / today_jst()[:7]
+                    month_dir = registered_root / today_jst()[:7]
                     month_dir.mkdir(parents=True, exist_ok=True)
                     moved_to = _move_file_preserve_name(
                         csv_path,
@@ -6004,13 +6000,13 @@ def register_pending_item_csvs(
 def _import_unregistered_order_csv_file(
     conn: sqlite3.Connection,
     *,
-    roots: QuotationRoots,
+    roots: OrderImportRoots,
     csv_path: Path,
     supplier_name: str,
     default_order_date: str | None = None,
-    items_pending_root: Path | None = None,
+    items_unregistered_root: Path | None = None,
 ) -> dict[str, Any]:
-    pending_root = items_pending_root if items_pending_root else ITEMS_IMPORT_PENDING_ROOT
+    unregistered_items_root = items_unregistered_root if items_unregistered_root else ITEMS_IMPORT_UNREGISTERED_ROOT
     rows = _load_csv_rows_from_path(csv_path)
     result = import_orders_from_rows(
         conn,
@@ -6018,7 +6014,7 @@ def _import_unregistered_order_csv_file(
         rows=rows,
         default_order_date=default_order_date,
         source_name=f"{_safe_filename_component(supplier_name)}__{csv_path.name}",
-        missing_output_dir=pending_root,
+        missing_output_dir=unregistered_items_root,
         allow_noncanonical_pdf_link=True,
     )
     file_warnings: list[str] = []
@@ -6121,7 +6117,7 @@ def _import_unregistered_order_csv_file(
     }
 
 
-def _validate_retry_unregistered_csv_path(csv_path: str | Path, roots: QuotationRoots) -> Path:
+def _validate_retry_unregistered_csv_path(csv_path: str | Path, roots: OrderImportRoots) -> Path:
     return validate_retry_unregistered_csv_path(csv_path, roots=roots)
 
 
@@ -6177,11 +6173,11 @@ def import_unregistered_order_csvs(
     *,
     unregistered_root: str | Path | None = None,
     registered_root: str | Path | None = None,
-    items_pending_root: str | Path | None = None,
+    items_unregistered_root: str | Path | None = None,
     default_order_date: str | None = None,
     continue_on_error: bool = False,
 ) -> dict[str, Any]:
-    pending_root = Path(items_pending_root) if items_pending_root else ITEMS_IMPORT_PENDING_ROOT
+    unregistered_items_root = Path(items_unregistered_root) if items_unregistered_root else ITEMS_IMPORT_UNREGISTERED_ROOT
     roots = build_roots(
         unregistered_root=unregistered_root,
         registered_root=registered_root,
@@ -6216,7 +6212,7 @@ def import_unregistered_order_csvs(
                     csv_path=csv_path,
                     supplier_name=supplier_name,
                     default_order_date=default_order_date,
-                    items_pending_root=pending_root,
+                    items_unregistered_root=unregistered_items_root,
                 )
                 conn.execute(f"RELEASE {savepoint}")
             except Exception:
@@ -6264,7 +6260,7 @@ def import_unregistered_order_csvs(
     if missing_reports:
         batch_missing_csv_path = _write_batch_missing_items_register(
             missing_reports,
-            output_dir=pending_root,
+            output_dir=unregistered_items_root,
         )
         for item in missing_reports:
             per_file_path = item.get("missing_csv_path")
@@ -6311,7 +6307,7 @@ def _predict_move_target(src: Path, dst_dir: Path, reserved_targets: set[str]) -
         idx += 1
 
 
-def migrate_quotations_layout(
+def migrate_orders_import_layout(
     conn: sqlite3.Connection,
     *,
     unregistered_root: str | Path | None = None,

@@ -33,7 +33,7 @@ from .schemas import (
     OrderMergeRequest,
     OrderUpdateRequest,
     PartialArrivalRequest,
-    PendingItemBatchRequest,
+    UnregisteredItemBatchRequest,
     PurchaseCandidateUpdate,
     PurchaseCandidatesFromBomRequest,
     PurchaseCandidatesFromProjectRequest,
@@ -316,9 +316,9 @@ def create_app(db_path: str | None = None) -> FastAPI:
         conn.commit()
         return ok({"deleted": True})
 
-    @app.post("/api/items/register-pending-batch")
-    def post_register_pending_item_csvs(body: PendingItemBatchRequest, conn= db):
-        result = service.register_pending_item_csvs(
+    @app.post("/api/items/register-unregistered-batch")
+    def post_register_unregistered_item_csvs(body: UnregisteredItemBatchRequest, conn= db):
+        result = service.register_unregistered_item_csvs(
             conn,
             continue_on_error=body.continue_on_error,
         )

@@ -58,15 +58,16 @@ def _build_parser() -> argparse.ArgumentParser:
     miss.add_argument("--csv-path", required=True)
 
     pending_items = sub.add_parser(
-        "register-pending-items",
-        aliases=["register-unregistered-missing"],
-        help="Batch register pending item CSV files under imports/items/pending",
+        "register-unregistered-items",
+        aliases=["register-pending-items", "register-unregistered-missing"],
+        help="Batch register unregistered item CSV files under imports/items/unregistered",
     )
-    pending_items.add_argument("--items-pending-root", "--unregistered-root", dest="items_pending_root", default=None)
+    pending_items.add_argument("--items-unregistered-root", "--items-pending-root", "--unregistered-root", dest="items_unregistered_root", default=None)
     pending_items.add_argument(
+        "--items-registered-root",
         "--items-processed-root",
         "--registered-root",
-        dest="items_processed_root",
+        dest="items_registered_root",
         default=None,
     )
     pending_items.add_argument("--continue-on-error", action="store_true")
@@ -81,8 +82,9 @@ def _build_parser() -> argparse.ArgumentParser:
     unreg_orders.add_argument("--continue-on-error", action="store_true")
 
     migrate_layout = sub.add_parser(
-        "migrate-quotations-layout",
-        help="Migrate quotations folders/links to canonical csv_files/pdf_files layout",
+        "migrate-orders-layout",
+        aliases=["migrate-quotations-layout"],
+        help="Migrate order import folders/links to canonical csv_files/pdf_files layout",
     )
     migrate_layout.add_argument("--unregistered-root", default=None)
     migrate_layout.add_argument("--registered-root", default=None)
@@ -233,13 +235,13 @@ def main(argv: list[str] | None = None) -> int:
             lambda conn: service.register_missing_items_from_csv_path(conn, args.csv_path),
         )
 
-    if args.command in {"register-pending-items", "register-unregistered-missing"}:
+    if args.command in {"register-unregistered-items", "register-pending-items", "register-unregistered-missing"}:
         return _run_with_db(
             args,
-            lambda conn: service.register_pending_item_csvs(
+            lambda conn: service.register_unregistered_item_csvs(
                 conn,
-                items_pending_root=args.items_pending_root,
-                items_processed_root=args.items_processed_root,
+                items_unregistered_root=args.items_unregistered_root,
+                items_registered_root=args.items_registered_root,
                 continue_on_error=args.continue_on_error,
             ),
         )
@@ -256,10 +258,10 @@ def main(argv: list[str] | None = None) -> int:
             ),
         )
 
-    if args.command == "migrate-quotations-layout":
+    if args.command in {"migrate-orders-layout", "migrate-quotations-layout"}:
         return _run_with_db(
             args,
-            lambda conn: service.migrate_quotations_layout(
+            lambda conn: service.migrate_orders_import_layout(
                 conn,
                 unregistered_root=args.unregistered_root,
                 registered_root=args.registered_root,

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.errors import AppError
-from app.quotation_paths import (
+from app.order_import_paths import (
     build_roots,
     iter_unregistered_order_csvs,
     normalize_legacy_path_text,
@@ -16,8 +16,8 @@ from app.quotation_paths import (
 
 def test_supplier_from_canonical_csv_path(tmp_path: Path):
     roots = build_roots(
-        unregistered_root=tmp_path / "quotations" / "unregistered",
-        registered_root=tmp_path / "quotations" / "registered",
+        unregistered_root=tmp_path / "orders" / "unregistered",
+        registered_root=tmp_path / "orders" / "registered",
     )
     csv_path = roots.unregistered_csv_root / "SupplierA" / "Q-001.csv"
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -31,8 +31,8 @@ def test_supplier_from_canonical_csv_path(tmp_path: Path):
 
 def test_supplier_from_legacy_csv_path_has_warning(tmp_path: Path):
     roots = build_roots(
-        unregistered_root=tmp_path / "quotations" / "unregistered",
-        registered_root=tmp_path / "quotations" / "registered",
+        unregistered_root=tmp_path / "orders" / "unregistered",
+        registered_root=tmp_path / "orders" / "registered",
     )
     csv_path = roots.unregistered_root / "LegacySupplier" / "Q-legacy.csv"
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -46,8 +46,8 @@ def test_supplier_from_legacy_csv_path_has_warning(tmp_path: Path):
 
 def test_supplier_under_pdf_files_is_invalid(tmp_path: Path):
     roots = build_roots(
-        unregistered_root=tmp_path / "quotations" / "unregistered",
-        registered_root=tmp_path / "quotations" / "registered",
+        unregistered_root=tmp_path / "orders" / "unregistered",
+        registered_root=tmp_path / "orders" / "registered",
     )
     csv_path = roots.unregistered_pdf_root / "SupplierA" / "Q-001.csv"
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -63,13 +63,13 @@ def test_normalize_legacy_path_text_rewrites_known_typos():
     )
 
     assert changed is True
-    assert normalized == "quotations/unregistered/pdf_files/SupplierA/Q-001.pdf"
+    assert normalized == "imports/orders/unregistered/pdf_files/SupplierA/Q-001.pdf"
 
 
 def test_resolve_pdf_link_with_typoed_workspace_relative_path(tmp_path: Path):
     roots = build_roots(
-        unregistered_root=tmp_path / "quotations" / "unregistered",
-        registered_root=tmp_path / "quotations" / "registered",
+        unregistered_root=tmp_path / "orders" / "unregistered",
+        registered_root=tmp_path / "orders" / "registered",
     )
     pdf_path = roots.unregistered_pdf_root / "SupplierA" / "Q-001.pdf"
     pdf_path.parent.mkdir(parents=True, exist_ok=True)
@@ -87,15 +87,15 @@ def test_resolve_pdf_link_with_typoed_workspace_relative_path(tmp_path: Path):
     )
 
     assert source_pdf == pdf_path.resolve()
-    assert normalized == "quotations/unregistered/pdf_files/SupplierA/Q-001.pdf"
+    assert normalized == "imports/orders/unregistered/pdf_files/SupplierA/Q-001.pdf"
     assert normalizations
     assert warnings == []
 
 
 def test_iter_unregistered_order_csvs_skips_missing_item_registration_files(tmp_path: Path):
     roots = build_roots(
-        unregistered_root=tmp_path / "quotations" / "unregistered",
-        registered_root=tmp_path / "quotations" / "registered",
+        unregistered_root=tmp_path / "orders" / "unregistered",
+        registered_root=tmp_path / "orders" / "registered",
     )
 
     normal_csv = roots.unregistered_csv_root / "SupplierA" / "Q-001.csv"

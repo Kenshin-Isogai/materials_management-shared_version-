@@ -371,12 +371,12 @@ def test_import_unregistered_orders_missing_items_keeps_source_files(conn, tmp_p
             }
         )
 
-    items_pending_root = tmp_path / "imports" / "items" / "pending"
+    items_unregistered_root = tmp_path / "imports" / "items" / "unregistered"
     result = service.import_unregistered_order_csvs(
         conn,
         unregistered_root=unregistered_root,
         registered_root=registered_root,
-        items_pending_root=items_pending_root,
+        items_unregistered_root=items_unregistered_root,
     )
     conn.commit()
 
@@ -392,7 +392,7 @@ def test_import_unregistered_orders_missing_items_keeps_source_files(conn, tmp_p
     assert register_path is not None
     register_file = Path(register_path)
     assert register_file.exists()
-    assert register_file.parent == items_pending_root.resolve()
+    assert register_file.parent == items_unregistered_root.resolve()
 
     with register_file.open("r", encoding="utf-8", newline="") as fp:
         reader = csv.DictReader(fp)
@@ -527,7 +527,7 @@ def test_migrate_quotations_layout_dry_run_apply_and_idempotent(conn, tmp_path: 
     )
     conn.commit()
 
-    preview = service.migrate_quotations_layout(
+    preview = service.migrate_orders_import_layout(
         conn,
         unregistered_root=unregistered_root,
         registered_root=registered_root,
@@ -539,7 +539,7 @@ def test_migrate_quotations_layout_dry_run_apply_and_idempotent(conn, tmp_path: 
     assert legacy_csv.exists()
     assert legacy_pdf.exists()
 
-    applied = service.migrate_quotations_layout(
+    applied = service.migrate_orders_import_layout(
         conn,
         unregistered_root=unregistered_root,
         registered_root=registered_root,
@@ -570,7 +570,7 @@ def test_migrate_quotations_layout_dry_run_apply_and_idempotent(conn, tmp_path: 
     assert "quatations" not in str(row["pdf_link"])
     assert str(row["pdf_link"]).endswith("Q-100.pdf")
 
-    rerun = service.migrate_quotations_layout(
+    rerun = service.migrate_orders_import_layout(
         conn,
         unregistered_root=unregistered_root,
         registered_root=registered_root,
@@ -788,13 +788,13 @@ def test_import_orders_resolves_alias_with_dash_variant_item_number(conn):
     assert int(order["ordered_quantity"]) == 2
     assert int(order["order_amount"]) == 20
 
-def test_register_pending_item_csvs_reads_from_pending_root(conn, tmp_path: Path):
-    items_pending_root = tmp_path / "imports" / "items" / "pending"
-    items_processed_root = tmp_path / "imports" / "items" / "processed"
-    items_pending_root.mkdir(parents=True, exist_ok=True)
-    items_processed_root.mkdir(parents=True, exist_ok=True)
+def test_register_unregistered_item_csvs_reads_from_unregistered_root(conn, tmp_path: Path):
+    items_unregistered_root = tmp_path / "imports" / "items" / "unregistered"
+    items_registered_root = tmp_path / "imports" / "items" / "registered"
+    items_unregistered_root.mkdir(parents=True, exist_ok=True)
+    items_registered_root.mkdir(parents=True, exist_ok=True)
     
-    register_csv = items_pending_root / "batch_missing_items_registration_20260302_120000.csv"
+    register_csv = items_unregistered_root / "batch_missing_items_registration_20260302_120000.csv"
     with register_csv.open("w", encoding="utf-8", newline="") as fp:
         writer = csv.DictWriter(
             fp,
@@ -814,7 +814,7 @@ def test_register_pending_item_csvs_reads_from_pending_root(conn, tmp_path: Path
         writer.writeheader()
         writer.writerow(
             {
-                "source_csv": "quotations/unregistered/csv_files/SupplierBatch/QB-001.csv",
+                "source_csv": "imports/orders/unregistered/csv_files/SupplierBatch/QB-001.csv",
                 "source_supplier": "SupplierBatch",
                 "item_number": "BATCH-NEW-001",
                 "supplier": "SupplierBatch",
@@ -827,10 +827,10 @@ def test_register_pending_item_csvs_reads_from_pending_root(conn, tmp_path: Path
             }
         )
 
-    result = service.register_pending_item_csvs(
+    result = service.register_unregistered_item_csvs(
         conn,
-        items_pending_root=items_pending_root,
-        items_processed_root=items_processed_root,
+        items_unregistered_root=items_unregistered_root,
+        items_registered_root=items_registered_root,
     )
     conn.commit()
 
@@ -838,7 +838,7 @@ def test_register_pending_item_csvs_reads_from_pending_root(conn, tmp_path: Path
     assert result["succeeded"] == 1
     assert not register_csv.exists()
     from app.utils import today_jst
-    moved = items_processed_root / today_jst()[:7] / register_csv.name
+    moved = items_registered_root / today_jst()[:7] / register_csv.name
     assert moved.exists()
 
     row = conn.execute(
@@ -1014,16 +1014,16 @@ def test_import_unregistered_orders_keeps_per_file_missing_csv_when_batch_regist
 
     monkeypatch.setattr(service, "_write_batch_missing_items_register", _raise_write)
 
-    items_pending_root = tmp_path / "imports" / "items" / "pending"
+    items_unregistered_root = tmp_path / "imports" / "items" / "unregistered"
     with pytest.raises(OSError, match="simulated batch write failure"):
         service.import_unregistered_order_csvs(
             conn,
             unregistered_root=unregistered_root,
             registered_root=registered_root,
-            items_pending_root=items_pending_root,
+            items_unregistered_root=items_unregistered_root,
         )
 
-    temp_register = items_pending_root / "SupplierFail__Q-FAIL-MISSING_missing_items_registration.csv"
+    temp_register = items_unregistered_root / "SupplierFail__Q-FAIL-MISSING_missing_items_registration.csv"
     assert temp_register.exists()
 
 def test_update_and_delete_quotation_syncs_csv_and_db(conn, tmp_path: Path, monkeypatch):
@@ -1079,16 +1079,16 @@ def test_update_and_delete_quotation_syncs_csv_and_db(conn, tmp_path: Path, monk
         int(order["quotation_id"]),
         {
             "issue_date": "2026-03-05",
-            "pdf_link": "quotations/registered/pdf_files/SupplierSync/Q-SYNC-001.pdf",
+            "pdf_link": "imports/orders/registered/pdf_files/SupplierSync/Q-SYNC-001.pdf",
         },
     )
     assert updated["issue_date"] == "2026-03-05"
-    assert updated["pdf_link"] == "quotations/registered/pdf_files/SupplierSync/Q-SYNC-001.pdf"
+    assert updated["pdf_link"] == "imports/orders/registered/pdf_files/SupplierSync/Q-SYNC-001.pdf"
 
     with csv_path.open("r", encoding="utf-8", newline="") as fp:
         rows = list(csv.DictReader(fp))
     assert rows[0]["issue_date"] == "2026-03-05"
-    assert rows[0]["pdf_link"] == "quotations/registered/pdf_files/SupplierSync/Q-SYNC-001.pdf"
+    assert rows[0]["pdf_link"] == "imports/orders/registered/pdf_files/SupplierSync/Q-SYNC-001.pdf"
 
     delete_result = service.delete_quotation(conn, int(order["quotation_id"]))
     assert delete_result["deleted"] is True

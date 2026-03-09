@@ -377,7 +377,7 @@ def test_order_import_autonormalizes_pdf_link_filename(client):
     assert len(rows) == 1
     assert (
         rows[0]["pdf_link"]
-        == "quotations/registered/pdf_files/SupplierManual/Q-MANUAL-001.pdf"
+        == "imports/orders/registered/pdf_files/SupplierManual/Q-MANUAL-001.pdf"
     )
 
 def test_order_import_rejects_unregistered_pdf_link_path(client):
@@ -413,7 +413,7 @@ def test_order_import_rejects_unregistered_pdf_link_path(client):
             "issue_date": "2026-02-21",
             "order_date": "2026-02-22",
             "expected_arrival": "2026-03-01",
-            "pdf_link": "quotations/unregistered/pdf_files/SupplierManual/Q-MANUAL-002.pdf",
+            "pdf_link": "imports/orders/unregistered/pdf_files/SupplierManual/Q-MANUAL-002.pdf",
         }
     )
     response = client.post(
@@ -425,7 +425,7 @@ def test_order_import_rejects_unregistered_pdf_link_path(client):
     payload = response.json()
     assert payload["status"] == "error"
     assert payload["error"]["code"] == "INVALID_CSV"
-    assert "quotations/registered/pdf_files" in payload["error"]["message"]
+    assert "imports/orders/registered/pdf_files" in payload["error"]["message"]
 
 def test_order_import_rejects_duplicate_quotation_for_same_supplier(client):
     client.post("/api/manufacturers", json={"name": "API-DUP-QUOTE-MFG"})

@@ -21,13 +21,13 @@ The workspace drawers now complete the main planning loop in place:
 
 - Backend: Python, FastAPI, SQLite, `uv`
 - Frontend: React, TypeScript, Vite, SWR
-- Data/Files: SQLite database + workspace folders (`quotations/`, `exports/`)
+- Data/Files: SQLite database + workspace folders (`imports/orders/`, `exports/`)
 
 ## Repository Structure
 
 - `backend/`: API server, CLI, database schema/migrations, business logic, tests
 - `frontend/`: Web UI
-- `quotations/`: Registered/unregistered quotation CSV/PDF files
+- `imports/orders/`: Registered/unregistered order import CSV/PDF files
 - `exports/`: Generated CSV exports (for example missing-item registration templates)
 - `documents/`: Technical documentation
 - `specification.md`: Detailed functional specification
@@ -86,7 +86,7 @@ Example CLI commands:
 ```powershell
 uv run main.py import-orders --supplier "Thorlabs" --csv-path ".\sample\order_import.csv"
 uv run main.py import-unregistered-orders --continue-on-error
-uv run main.py register-pending-items --continue-on-error
+uv run main.py register-unregistered-items --continue-on-error
 uv run main.py bom-analyze --csv-path ".\sample\bom.csv" --target-date 2026-04-01
 uv run main.py purchase-candidates-from-project --project-id 1 --target-date 2026-04-01
 uv run main.py move --item-id 1 --quantity 5 --from-location STOCK --to-location BENCH_A
@@ -96,14 +96,14 @@ uv run main.py reserve --item-id 1 --quantity 2 --purpose "Experiment A"
 ## Database and File Layout
 
 - Default DB path: `backend/database/inventory.db`
-- Quotations roots:
-  - `quotations/unregistered/csv_files/<supplier>/`
-  - `quotations/unregistered/pdf_files/<supplier>/`
-  - `quotations/registered/csv_files/<supplier>/`
-  - `quotations/registered/pdf_files/<supplier>/`
-- Pending item register roots:
-  - `imports/items/pending/` (single consolidated missing-item CSV per batch run)
-  - `imports/items/processed/<YYYY-MM>/`
+- Orders import roots:
+  - `imports/orders/unregistered/csv_files/<supplier>/`
+  - `imports/orders/unregistered/pdf_files/<supplier>/`
+  - `imports/orders/registered/csv_files/<supplier>/`
+  - `imports/orders/registered/pdf_files/<supplier>/`
+- Unregistered item register roots:
+  - `imports/items/unregistered/` (single consolidated missing-item CSV per batch run)
+  - `imports/items/registered/<YYYY-MM>/`
 
 ## Testing
 

@@ -110,7 +110,7 @@ class UnregisteredBatchRequest(BaseModel):
     continue_on_error: bool = False
 
 
-class PendingItemBatchRequest(BaseModel):
+class UnregisteredItemBatchRequest(BaseModel):
     continue_on_error: bool = False
 
 

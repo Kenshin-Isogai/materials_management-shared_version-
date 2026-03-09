@@ -699,7 +699,7 @@ export function ItemsPage() {
         processed: number;
         succeeded: number;
         failed: number;
-      }>("/items/register-pending-batch", {
+      }>("/items/register-unregistered-batch", {
         method: "POST",
         body: JSON.stringify({ continue_on_error: true })
       });
@@ -1680,7 +1680,7 @@ export function ItemsPage() {
             disabled={registerPendingBusy || submitting}
             onClick={runRegisterPending}
           >
-            Run Pending Batch
+            Run Unregistered Batch
           </button>
         </div>
         {registerPendingMessage && <p className="mt-3 text-sm text-signal">{registerPendingMessage}</p>}

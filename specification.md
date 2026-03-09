@@ -608,9 +608,9 @@ Maps raw category names to canonical category names for soft-merge behavior.
    - direct match: `order_amount = quantity`
    - alias match: `order_amount = quantity * units_per_order`
    - preview override uses the selected `units_per_order` (default `1` when not specified)
-6. If unresolved items remain: generate `missing_items_registration.csv` into `imports/items/pending/` and return `status="missing_items"` (no orders inserted yet)
+6. If unresolved items remain: generate `missing_items_registration.csv` into `imports/items/unregistered/` and return `status="missing_items"` (no orders inserted yet)
 7. User completes missing item resolution in the generated CSV (new item or alias).
-8. User processes the pending item CSV via the Items page, creating master data records.
+8. User processes the unregistered item CSV via the Items page, creating master data records.
 9. User re-runs order import with the same order CSV (the missing item is now resolvable).
 8. If all rows resolve, insert orders into `orders` and keep traceability fields
    (`ordered_item_number`, `ordered_quantity`)
@@ -618,23 +618,23 @@ Maps raw category names to canonical category names for soft-merge behavior.
      to prevent duplicate quotation re-import
    - apply requested alias saves only after duplicate-quotation checks pass
 9. Normalize date fields to `YYYY-MM-DD`; reject invalid date strings
-10. For manual CSV import, `pdf_link` must be blank or `quotations/registered/pdf_files/<supplier>/<file>.pdf`
+10. For manual CSV import, `pdf_link` must be blank or `imports/orders/registered/pdf_files/<supplier>/<file>.pdf`
    - Filename-only values are normalized to the selected supplier's registered path
 11. Import-capable CSV workflows expose companion downloads:
    - template CSV: header-only exact import columns, UTF-8 with BOM
    - reference CSV: live canonical DB values relevant to that flow, generated on demand from current state
 
 **Batch Procedure (Unregistered Folder):**
-1. Scan all `*.csv` under `quotations/unregistered/csv_files`
+1. Scan all `*.csv` under `imports/orders/unregistered/csv_files`
 2. Derive supplier from CSV relative folder (must be under `<root>/csv_files/<supplier>/<file>.csv`)
 3. Run standard `import_orders()` for each CSV (`import_unregistered_order_csvs`):
    - If result is `ok`: move CSV to `registered/csv_files`, move referenced PDFs to `registered/pdf_files`, normalize CSV/quotation `pdf_link`
-   - If result is `missing_items`: keep source CSV/PDF under `unregistered`; collect missing rows into one consolidated batch register CSV under `imports/items/pending/`; do not move source files
+   - If result is `missing_items`: keep source CSV/PDF under `unregistered`; collect missing rows into one consolidated batch register CSV under `imports/items/unregistered/`; do not move source files
 
-**Pending Item Batch Procedure:**
-1. Process all `*.csv` accumulated in `imports/items/pending/` (`register_pending_item_csvs`)
+**Unregistered Item Batch Procedure:**
+1. Process all `*.csv` accumulated in `imports/items/unregistered/` (`register_unregistered_item_csvs`)
 2. Register missing items/aliases. Supports mixed batches (alias rows may reference canonical rows created as `new_item` in the same file).
-3. Move successfully processed CSV files to `imports/items/processed/<YYYY-MM>/`
+3. Move successfully processed CSV files to `imports/items/registered/<YYYY-MM>/`
 5. If one file errors, continue or stop based on `continue_on_error`
 
 **Arrival Processing:**
@@ -786,8 +786,8 @@ Projected Available =
 | `register_supplier_item_aliases_df()` | Bulk import aliases | supplier, dataframe |
 | `register_supplier_item_aliases()` | Bulk import aliases | supplier, csv_path |
 | `delete_supplier_item_alias()` | Delete one alias | alias_id |
-| `register_pending_item_csvs()` | Batch register completed pending items CSV files and move successful files to processed | items_pending_root, items_processed_root, continue_on_error |
-| `import_unregistered_order_csvs()` | Batch import unregistered order CSV files and move successful CSV/PDF files | unregistered/registered roots, items_pending_root, default_order_date, continue_on_error |
+| `register_unregistered_item_csvs()` | Batch register unregistered item CSV files and move successful files to registered | items_unregistered_root, items_registered_root, continue_on_error |
+| `import_unregistered_order_csvs()` | Batch import unregistered order CSV files and move successful CSV/PDF files | unregistered/registered roots, items_unregistered_root, default_order_date, continue_on_error |
 | `rename_category()` | Backward-compatible soft merge wrapper | source_category, target_category |
 
 **Constraints:**
@@ -1270,23 +1270,24 @@ For batch-generated consolidated register CSV, additional provenance columns may
 ### **7.1 Directory Structure**
 `
 <workspace_root>/
-  quotations/
-    unregistered/
-      csv_files/
-        <supplier_name>/
-          <order>.csv
-      pdf_files/
-        <supplier_name>/
-          <quotation>.pdf
-      missing_item_registers/
-        batch_missing_items_registration_<timestamp>.csv
-    registered/
-      csv_files/
-        <supplier_name>/
-          <order>.csv
-      pdf_files/
-        <supplier_name>/
-          <quotation>.pdf
+  imports/
+    orders/
+      unregistered/
+        csv_files/
+          <supplier_name>/
+            <order>.csv
+        pdf_files/
+          <supplier_name>/
+            <quotation>.pdf
+        missing_item_registers/
+          batch_missing_items_registration_<timestamp>.csv
+      registered/
+        csv_files/
+          <supplier_name>/
+            <order>.csv
+        pdf_files/
+          <supplier_name>/
+            <quotation>.pdf
   exports/
     <export_YYYYMMDD_HHMMSS>.csv
   backend/database/
@@ -1304,7 +1305,7 @@ For batch-generated consolidated register CSV, additional provenance columns may
 
 ### **7.3 PDF Storage Rules**
 
-- All quotation PDFs are stored under `quotations/registered/pdf_files/<supplier>/`
+- All quotation PDFs are stored under `imports/orders/registered/pdf_files/<supplier>/`
 - `pdf_link` in database stores relative path from workspace root
 - PDF files are moved (not copied) during batch import processing
 - Input paths are normalized (including known legacy typos and mixed separators)

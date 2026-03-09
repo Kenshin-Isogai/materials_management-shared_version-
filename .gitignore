@@ -8,7 +8,7 @@ backend/database/*.db-*
 backend/database/*.sqlite
 backend/database/*.sqlite3
 
-# Quotation assets (PDF/CSV imports)
+# Legacy quotation assets (now under imports/orders/)
 quotations/
 
 # Personal/local item list files and imported docs
