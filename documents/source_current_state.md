@@ -174,8 +174,10 @@ Last updated: 2026-03-09 (JST)
   - `PLANNING` rows intentionally return `preview_required` semantics instead of draft shortage numbers inferred in the frontend
 - Added item planning drill-in endpoint `GET /api/items/{item_id}/planning-context`.
   - returns committed-project allocation rows plus optional preview-project context for the active workspace board date
-- Added workspace CSV export endpoint `GET /api/workspace/planning-export`.
-  - export includes committed pipeline rows, selected-project summary, selected-project item rows, and RFQ counts
+- Added workspace CSV export endpoints `GET /api/workspace/planning-export` and `GET /api/workspace/planning-export-multi`.
+  - single-project export includes committed pipeline rows, selected-project summary, selected-project item rows, and RFQ counts
+  - multi-project export includes one summary row plus item rows for every project in pipeline order, optionally including the currently previewed project/date from the planning board
+  - multi-project CSV `target_date` now represents the shared selected board analysis date only; committed-only exports leave it blank rather than repeating each row's `planned_start`
 - `GET /api/orders` now supports `item_id` and `project_id` filters in addition to status/supplier filters.
 - Splitting an RFQ-owned open order now keeps the dedicated `project_id` only on the original RFQ-linked order; the new sibling order remains generic until an RFQ line explicitly links it.
 - Purchase candidate endpoints are now available:

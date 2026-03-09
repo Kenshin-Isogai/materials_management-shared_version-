@@ -3676,6 +3676,53 @@ def test_item_planning_context_endpoint_and_workspace_export(client):
     assert "selected_project_item" in export_text
     assert "pipeline" in export_text
 
+    multi_export_response = client.get(
+        "/api/workspace/planning-export-multi",
+        params={"project_id": preview["project_id"], "target_date": FUTURE_TARGET_DATE},
+    )
+    assert multi_export_response.status_code == 200
+    assert "text/csv" in multi_export_response.headers["content-type"]
+    multi_fieldnames, multi_rows = read_csv_response(multi_export_response)
+    assert multi_fieldnames[:4] == [
+        "section",
+        "project_rank",
+        "project_id",
+        "project_name",
+    ]
+    assert any(
+        row["section"] == "project_summary"
+        and row["project_id"] == str(committed["project_id"])
+        and row["project_rank"] == "1"
+        and row["target_date"] == FUTURE_TARGET_DATE
+        for row in multi_rows
+    )
+    assert any(
+        row["section"] == "project_summary"
+        and row["project_id"] == str(preview["project_id"])
+        and row["project_name"] == preview["name"]
+        and row["is_planning_preview"] == "True"
+        and row["target_date"] == FUTURE_TARGET_DATE
+        for row in multi_rows
+    )
+    assert any(
+        row["section"] == "project_item"
+        and row["project_id"] == str(preview["project_id"])
+        and row["item_id"] == str(item["item_id"])
+        and row["target_date"] == FUTURE_TARGET_DATE
+        for row in multi_rows
+    )
+
+    committed_only_export = client.get("/api/workspace/planning-export-multi")
+    assert committed_only_export.status_code == 200
+    _, committed_only_rows = read_csv_response(committed_only_export)
+    assert any(
+        row["project_id"] == str(committed["project_id"]) and row["target_date"] == ""
+        for row in committed_only_rows
+    )
+    assert not any(
+        row["project_id"] == str(preview["project_id"]) for row in committed_only_rows
+    )
+
 
 def test_project_rfq_batch_endpoint_uses_requested_target_date(client):
     client.post("/api/manufacturers", json={"name": "API-RFQ-TARGET-DATE-MFG"})

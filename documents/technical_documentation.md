@@ -446,6 +446,7 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 - Supporting summary endpoint: `GET /api/planning/pipeline`
 - Workspace summary endpoint: `GET /api/workspace/summary`
 - Workspace planning export endpoint: `GET /api/workspace/planning-export`
+- Workspace multi-project planning export endpoint: `GET /api/workspace/planning-export-multi`
 - Item-side planning context endpoint: `GET /api/items/{item_id}/planning-context`
 - Core domain rule (`service.project_planning_analysis` / `_build_project_planning_snapshot`):
   - committed projects are those with status `CONFIRMED` or `ACTIVE`
@@ -483,6 +484,11 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 - `GET /api/workspace/planning-export` serializes the selected planning view into CSV:
   - includes committed pipeline rows, selected-project totals, selected-project item rows, and RFQ summary counts
   - reuses canonical planning analysis output instead of duplicating export-only planning logic
+- `GET /api/workspace/planning-export-multi` serializes the whole planning pipeline into CSV:
+  - emits one `project_summary` row and one-or-more `project_item` rows per project in sequential planning order
+  - optional `project_id` / `target_date` include the selected board preview project in the same export so users can compare committed work against a what-if project
+  - `target_date` reflects the shared effective preview/analysis date used for that export; committed-only exports leave it blank because there is no single selected board date
+  - reuses `_build_project_planning_snapshot(...)` so the CSV stays aligned with the board/pipeline netting rules
 
 ### Project RFQ workflow
 

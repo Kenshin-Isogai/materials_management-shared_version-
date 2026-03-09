@@ -1039,6 +1039,30 @@ export function WorkspacePage() {
     }
   }
 
+  async function downloadPlanningPipelineExport(includeSelectedPreview: boolean) {
+    const params = new URLSearchParams();
+    let fallbackFilename = "workspace_planning_pipeline.csv";
+    if (includeSelectedPreview && selectedProjectId) {
+      params.set("project_id", String(selectedProjectId));
+      fallbackFilename = `workspace_planning_pipeline_project_${selectedProjectId}.csv`;
+      if (selectedAnalysisTargetDate) params.set("target_date", selectedAnalysisTargetDate);
+    }
+    const query = params.toString();
+    try {
+      await apiDownload(
+        `/workspace/planning-export-multi${query ? `?${query}` : ""}`,
+        fallbackFilename,
+      );
+      setActionMessage(
+        includeSelectedPreview
+          ? "Pipeline export downloaded with the selected project context."
+          : "Pipeline export downloaded.",
+      );
+    } catch (error) {
+      setActionMessage(`Export failed: ${String(error ?? "")}`);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <section className="flex flex-wrap items-start justify-between gap-4">
@@ -1126,9 +1150,14 @@ export function WorkspacePage() {
                 before newer projects can use them.
               </p>
             </div>
-            <Link className="button-subtle" to="/planning">
-              Open Legacy Planning Page
-            </Link>
+            <div className="flex flex-wrap gap-2">
+              <button className="button-subtle" type="button" onClick={() => void downloadPlanningPipelineExport(false)}>
+                Export Pipeline CSV
+              </button>
+              <Link className="button-subtle" to="/planning">
+                Open Legacy Planning Page
+              </Link>
+            </div>
           </div>
           <div className="overflow-x-auto">
             <table className="min-w-[1180px] text-sm">
@@ -1283,7 +1312,17 @@ export function WorkspacePage() {
                 )}
                 {selectedProjectId && (
                   <button className="button-subtle" type="button" disabled={working || !analysisData} onClick={() => void downloadPlanningExport()}>
-                    Export CSV
+                    Export Project CSV
+                  </button>
+                )}
+                {selectedProjectId && (
+                  <button
+                    className="button-subtle"
+                    type="button"
+                    disabled={working || !analysisData}
+                    onClick={() => void downloadPlanningPipelineExport(true)}
+                  >
+                    Export Pipeline CSV
                   </button>
                 )}
                 {selectedProjectId && (

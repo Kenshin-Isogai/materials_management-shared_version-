@@ -951,6 +951,7 @@ Base URL: `http://localhost:8000/api`
 |--------|----------|-------------|
 | GET | `/workspace/summary` | Return aggregate project dashboard data for `/workspace`, including committed-vs-draft semantics, RFQ summary counts, and committed pipeline rows without per-project planning-analysis fan-out |
 | GET | `/workspace/planning-export` | Download CSV export for the selected project planning view (`project_id`, optional `target_date`) including pipeline summary, selected-project totals, item rows, and RFQ counts |
+| GET | `/workspace/planning-export-multi` | Download CSV export for the full planning pipeline, optionally including a selected preview project (`project_id`, optional `target_date`) with per-project summaries and item rows |
 
 #### **Catalog Search**
 
@@ -1101,6 +1102,11 @@ Base URL: `http://localhost:8000/api`
 - includes pipeline rows for committed-project sequencing
 - includes selected-project summary totals and RFQ counts
 - includes selected-project item rows with coverage/recovery source labels
+
+`GET /api/workspace/planning-export-multi` returns a CSV attachment for the sequential planning pipeline:
+- committed-project exports include every pipeline project summary plus each project's item rows
+- optional `project_id` + `target_date` include the selected project as a preview row set using the same netting engine as the planning board
+- rows include `project_rank` so downstream CSV consumers can preserve the planning sequence
 
 `GET /planning/pipeline` rows also expose:
 - `generic_committed_total`: generic supply consumed by that project (on-time allocation plus later generic recovery)

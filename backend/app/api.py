@@ -808,6 +808,19 @@ def create_app(db_path: str | None = None) -> FastAPI:
         )
         return csv_attachment(filename, content)
 
+    @app.get("/api/workspace/planning-export-multi")
+    def get_workspace_planning_multi_export(
+        project_id: int | None = None,
+        target_date: str | None = None,
+        conn= db,
+    ):
+        filename, content = service.export_workspace_planning_multi_csv(
+            conn,
+            project_id=project_id,
+            target_date=target_date,
+        )
+        return csv_attachment(filename, content)
+
     @app.get("/api/projects/{project_id}")
     def get_project(project_id: int, conn= db):
         return ok(service.get_project(conn, project_id))

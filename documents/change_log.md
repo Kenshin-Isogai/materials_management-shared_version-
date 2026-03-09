@@ -2,6 +2,14 @@
 
 ### Fixed
 
+- Workspace multi-project CSV export now keeps `target_date` aligned with the selected planning analysis date instead of duplicating each row's `planned_start`.
+  - Preview-inclusive exports now write the shared requested/effective board date on every row so downstream consumers can distinguish analysis date from project start date.
+  - Committed-only exports leave `target_date` blank because there is no single selected preview date for the whole pipeline snapshot.
+
+## 2026-03-12
+
+### Fixed
+
 - Orders page quotation review now loads the full `/orders` and `/quotations` datasets across API pages before computing `Imported Quotations` order counts or opening `Quotation Details`.
   - Older quotations such as `オーテックス / 0000001809` and `ミスミ / AA116E19FB` no longer show `Orders = 0` just because their linked orders fall outside the first `/orders?per_page=200` page.
   - `Imported Quotations -> View Orders` now opens a dedicated quotation panel that lists every linked order for the selected quotation instead of only one linked order.
@@ -151,6 +159,7 @@
 - Added backend item planning/context and export support.
   - added `GET /api/items/{item_id}/planning-context` for cross-project item allocation drill-in
   - added `GET /api/workspace/planning-export` for CSV export of the selected planning view
+  - added `GET /api/workspace/planning-export-multi` for CSV export of the full planning pipeline, with optional selected-project preview inclusion
   - extended `GET /api/orders` with optional `item_id` / `project_id` filters for drawer-side order context
 - Enriched the canonical planning engine payload.
   - planning rows now expose `supply_sources_by_start` and `recovery_sources_after_start`

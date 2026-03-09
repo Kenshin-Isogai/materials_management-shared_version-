@@ -9171,6 +9171,137 @@ def export_workspace_planning_csv(
     return filename, _csv_bytes(fieldnames, rows)
 
 
+def export_workspace_planning_multi_csv(
+    conn: sqlite3.Connection,
+    *,
+    project_id: int | None = None,
+    target_date: str | None = None,
+) -> tuple[str, bytes]:
+    snapshot = _build_project_planning_snapshot(
+        conn,
+        project_id=project_id,
+        target_date=target_date,
+    )
+    rfq_lookup = _load_project_rfq_summary(conn)
+    export_target_date = snapshot["selected_target_date"] or ""
+    fieldnames = [
+        "section",
+        "project_rank",
+        "project_id",
+        "project_name",
+        "project_status",
+        "is_planning_preview",
+        "planned_start",
+        "target_date",
+        "rfq_open_batches",
+        "rfq_quoted_lines",
+        "rfq_ordered_lines",
+        "item_id",
+        "item_number",
+        "manufacturer_name",
+        "required_quantity",
+        "covered_on_time_quantity",
+        "shortage_at_start",
+        "recovered_after_start_quantity",
+        "remaining_shortage_quantity",
+        "dedicated_supply_by_start",
+        "generic_allocated_quantity",
+        "generic_committed_total",
+        "cumulative_generic_consumed_before_total",
+        "coverage_sources",
+        "recovery_sources",
+    ]
+    rows: list[dict[str, Any]] = []
+
+    for project_rank, summary in enumerate(snapshot["project_summaries"], start=1):
+        pid = int(summary["project_id"])
+        project_rows = snapshot["project_rows"].get(pid, [])
+        rfq_summary = rfq_lookup.get(pid, {})
+        recovered_total = sum(
+            int(row["recovered_after_start_quantity"]) for row in project_rows
+        )
+        rows.append(
+            {
+                "section": "project_summary",
+                "project_rank": project_rank,
+                "project_id": pid,
+                "project_name": summary["name"],
+                "project_status": summary["status"],
+                "is_planning_preview": bool(summary["is_planning_preview"]),
+                "planned_start": summary["planned_start"],
+                "target_date": export_target_date,
+                "rfq_open_batches": int(rfq_summary.get("open_batch_count") or 0),
+                "rfq_quoted_lines": int(rfq_summary.get("quoted_line_count") or 0),
+                "rfq_ordered_lines": int(rfq_summary.get("ordered_line_count") or 0),
+                "item_id": "",
+                "item_number": "",
+                "manufacturer_name": "",
+                "required_quantity": int(summary["required_total"]),
+                "covered_on_time_quantity": int(summary["covered_on_time_total"]),
+                "shortage_at_start": int(summary["shortage_at_start_total"]),
+                "recovered_after_start_quantity": recovered_total,
+                "remaining_shortage_quantity": int(summary["remaining_shortage_total"]),
+                "dedicated_supply_by_start": "",
+                "generic_allocated_quantity": "",
+                "generic_committed_total": int(summary["generic_committed_total"]),
+                "cumulative_generic_consumed_before_total": int(
+                    summary["cumulative_generic_consumed_before_total"]
+                ),
+                "coverage_sources": "",
+                "recovery_sources": "",
+            }
+        )
+        for row in project_rows:
+            rows.append(
+                {
+                    "section": "project_item",
+                    "project_rank": project_rank,
+                    "project_id": pid,
+                    "project_name": summary["name"],
+                    "project_status": summary["status"],
+                    "is_planning_preview": bool(summary["is_planning_preview"]),
+                    "planned_start": summary["planned_start"],
+                    "target_date": export_target_date,
+                    "rfq_open_batches": int(rfq_summary.get("open_batch_count") or 0),
+                    "rfq_quoted_lines": int(rfq_summary.get("quoted_line_count") or 0),
+                    "rfq_ordered_lines": int(rfq_summary.get("ordered_line_count") or 0),
+                    "item_id": int(row["item_id"]),
+                    "item_number": row["item_number"],
+                    "manufacturer_name": row["manufacturer_name"],
+                    "required_quantity": int(row["required_quantity"]),
+                    "covered_on_time_quantity": int(row["covered_on_time_quantity"]),
+                    "shortage_at_start": int(row["shortage_at_start"]),
+                    "recovered_after_start_quantity": int(
+                        row["recovered_after_start_quantity"]
+                    ),
+                    "remaining_shortage_quantity": int(
+                        row["remaining_shortage_quantity"]
+                    ),
+                    "dedicated_supply_by_start": int(row["dedicated_supply_by_start"]),
+                    "generic_allocated_quantity": int(
+                        row["generic_allocated_quantity"]
+                    ),
+                    "generic_committed_total": "",
+                    "cumulative_generic_consumed_before_total": "",
+                    "coverage_sources": _format_planning_source_list(
+                        list(row.get("supply_sources_by_start") or [])
+                    ),
+                    "recovery_sources": _format_planning_source_list(
+                        list(row.get("recovery_sources_after_start") or [])
+                    ),
+                }
+            )
+
+    if project_id is not None and snapshot["selected_target_date"] is not None:
+        filename = (
+            "workspace_planning_pipeline_"
+            f"project_{project_id}_{snapshot['selected_target_date']}.csv"
+        )
+    else:
+        filename = f"workspace_planning_pipeline_{today_jst()}.csv"
+    return filename, _csv_bytes(fieldnames, rows)
+
+
 def list_planning_pipeline(
     conn: sqlite3.Connection,
     *,
