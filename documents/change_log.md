@@ -329,6 +329,7 @@
 
 ### Changed
 
+- Projects item target search now includes item descriptions in candidate summaries across catalog-backed requirement selection and project requirement preview suggestions.
 - Projects requirement-entry productivity improvements:
   - Added searchable item target input on Projects requirements (`item_number #item_id` suggestions) to avoid long dropdown scanning when item count is large.
   - Added bulk requirement text parser (`item_number,quantity` per line) that auto-maps registered items and warns on unregistered item numbers.

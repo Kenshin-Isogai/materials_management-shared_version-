@@ -31,6 +31,50 @@ def test_health_endpoint(client):
     assert payload["status"] == "ok"
     assert payload["data"]["healthy"] is True
 
+
+def test_catalog_search_item_summary_includes_description(client):
+    manufacturer = client.post("/api/manufacturers", json={"name": "API-CATALOG-MFG"}).json()["data"]
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-CATALOG-001",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Mirror Mount",
+            "description": "Kinematic mirror mount",
+        },
+    ).json()["data"]
+
+    response = client.get("/api/catalog/search?q=kinematic&types=item")
+    assert response.status_code == 200
+    results = response.json()["data"]["results"]
+    match = next(result for result in results if result["entity_id"] == item["item_id"])
+    assert match["display_label"] == f"API-CATALOG-001 (API-CATALOG-MFG) #{item['item_id']}"
+    assert "API-CATALOG-MFG" in match["summary"]
+    assert "Mirror Mount" in match["summary"]
+    assert "Kinematic mirror mount" in match["summary"]
+
+
+def test_project_requirement_preview_item_summary_includes_description(client):
+    manufacturer = client.post("/api/manufacturers", json={"name": "API-PROJECT-MFG"}).json()["data"]
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-PROJECT-001",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Optics",
+            "description": "Beam shaping lens",
+        },
+    ).json()["data"]
+
+    response = client.post("/api/projects/requirements/preview", json={"text": "API-PROJECT-001,2"})
+    assert response.status_code == 200
+    row = response.json()["data"]["rows"][0]
+    suggested_match = row["suggested_match"]
+    assert suggested_match["entity_id"] == item["item_id"]
+    assert "API-PROJECT-MFG" in suggested_match["summary"]
+    assert "Optics" in suggested_match["summary"]
+    assert "Beam shaping lens" in suggested_match["summary"]
+
 def test_auth_capabilities_endpoint_defaults_and_header(client):
     response = client.get("/api/auth/capabilities")
     assert response.status_code == 200

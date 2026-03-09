@@ -1578,6 +1578,7 @@ def _load_item_preview_catalog_rows(conn: sqlite3.Connection) -> list[dict[str, 
             im.item_id,
             im.item_number,
             COALESCE(ca.canonical_category, im.category) AS category,
+            im.description,
             m.name AS manufacturer_name
         FROM items_master im
         JOIN manufacturers m ON m.manufacturer_id = im.manufacturer_id
@@ -1588,6 +1589,16 @@ def _load_item_preview_catalog_rows(conn: sqlite3.Connection) -> list[dict[str, 
     return _rows_to_dict(rows)
 
 
+def _build_item_catalog_summary_bits(item_row: dict[str, Any]) -> list[str]:
+    summary_bits = [str(item_row["manufacturer_name"])]
+    if item_row.get("category"):
+        summary_bits.append(str(item_row["category"]))
+    if item_row.get("description"):
+        summary_bits.append(str(item_row["description"]))
+    summary_bits.append(f"#{int(item_row['item_id'])}")
+    return summary_bits
+
+
 def _build_item_preview_match(
     item_row: dict[str, Any],
     *,
@@ -1595,16 +1606,12 @@ def _build_item_preview_match(
     confidence_score: int | None = None,
     match_reason: str | None = None,
 ) -> dict[str, Any]:
-    summary_bits = [str(item_row["manufacturer_name"])]
-    if item_row.get("category"):
-        summary_bits.append(str(item_row["category"]))
-    summary_bits.append(f"#{int(item_row['item_id'])}")
     return {
         "entity_type": "item",
         "entity_id": int(item_row["item_id"]),
         "value_text": str(item_row["item_number"]),
         "display_label": f"{item_row['item_number']} ({item_row['manufacturer_name']}) #{int(item_row['item_id'])}",
-        "summary": " | ".join(summary_bits),
+        "summary": " | ".join(_build_item_catalog_summary_bits(item_row)),
         "match_source": match_source,
         "confidence_score": confidence_score,
         "match_reason": match_reason,
@@ -10534,10 +10541,7 @@ def catalog_search(
                 "5": "alias_supplier_name",
             }
             match_source = source_map.get(source_idx or "", "item_number")
-            summary_bits = [str(row["manufacturer_name"])]
-            if row["category"]:
-                summary_bits.append(str(row["category"]))
-            summary_bits.append(f"#{int(row['item_id'])}")
+            summary_bits = _build_item_catalog_summary_bits(dict(row))
             if match_source == "supplier_item_alias" and row["ordered_item_number"]:
                 summary_bits.append(
                     f"alias {row['ordered_item_number']} @ {row['alias_supplier_name'] or 'supplier'}"

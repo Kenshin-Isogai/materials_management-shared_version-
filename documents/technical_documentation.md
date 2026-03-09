@@ -39,6 +39,7 @@ This document explains the implemented architecture of the Materials Management 
   - shared RFQ editors now page the line table (25/50/100 rows) so large batches do not mount the entire editable grid at once during route changes
   - legacy `/projects`, `/planning`, and `/rfq` routes remain available for heavy edits and operational fallback
 - The Projects page supports requirement target lookup via searchable item input (`datalist`) so users can select from large item registries faster than scrolling long select lists.
+  - item candidate summaries include manufacturer, category, and description text to disambiguate similar part numbers during selection
 - Requirement entry includes a preview-first bulk text parser (`item_number,quantity` per line).
   - `POST /api/projects/requirements/preview` classifies each line as `exact`, `high_confidence`, `needs_review`, or `unresolved`
   - preview rows return ranked item candidates and allow manual correction through `CatalogPicker` before the frontend applies them into editable requirement rows

@@ -107,6 +107,7 @@ Last updated: 2026-03-09 (JST)
 - Reservations and Projects page headers now include guidance clarifying scope: Reservations is execution-time allocation, Projects is future-demand planning.
 - Added typed catalog search endpoint `/api/catalog/search` for write-flow selectors (`item`, `assembly`, `supplier`, `project`).
 - Projects page requirement entry now uses `CatalogPicker` for item and assembly targets instead of ad hoc `#id` text matching/datalist suggestions.
+  - item search candidates now include item descriptions in their supporting summary text so similar part numbers are easier to distinguish
 - Projects page requirement entry now supports preview-first bulk text parsing (`item_number,quantity` per line).
   - `POST /api/projects/requirements/preview` classifies each line as `exact`, `high_confidence`, `needs_review`, or `unresolved`
   - preview rows return ranked item candidates, support `CatalogPicker` correction, and can be applied back into the editable requirement grid
