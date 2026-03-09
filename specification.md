@@ -635,6 +635,13 @@ Maps raw category names to canonical category names for soft-merge behavior.
 1. Process all `*.csv` accumulated in `imports/items/unregistered/` (`register_unregistered_item_csvs`)
 2. Register missing items/aliases. Supports mixed batches (alias rows may reference canonical rows created as `new_item` in the same file).
 3. Move successfully processed CSV files to `imports/items/registered/<YYYY-MM>/`
+4. After a fully successful batch run, automatically consolidate small CSV files in each `imports/items/registered/<YYYY-MM>/` subfolder into larger consolidated files (`consolidate_registered_item_csvs`)
+   - Consolidated file naming: `items_YYYY-MM_001.csv`, `items_YYYY-MM_002.csv`, etc.
+   - Maximum 5,000 rows per consolidated file (configurable via `ITEMS_IMPORT_MAX_CONSOLIDATED_ROWS`)
+   - Files matching the `items_YYYY-MM_NNN.csv` pattern are recognized as already-consolidated and merged into the next consolidation pass
+   - Consolidation stages replacement files and only swaps them into place after all chunk writes succeed; original non-consolidated source CSVs are deleted only after that successful swap
+   - Header-only registered CSV inputs are removed without generating an empty consolidated archive
+   - Consolidated CSVs are **read-only import-history archives** — they preserve original import data; UI edits to item attributes only affect the database, not the CSV archives
 5. If one file errors, continue or stop based on `continue_on_error`
 
 **Arrival Processing:**
@@ -786,7 +793,8 @@ Projected Available =
 | `register_supplier_item_aliases_df()` | Bulk import aliases | supplier, dataframe |
 | `register_supplier_item_aliases()` | Bulk import aliases | supplier, csv_path |
 | `delete_supplier_item_alias()` | Delete one alias | alias_id |
-| `register_unregistered_item_csvs()` | Batch register unregistered item CSV files and move successful files to registered | items_unregistered_root, items_registered_root, continue_on_error |
+| `register_unregistered_item_csvs()` | Batch register unregistered item CSV files, move successful files to registered, restore the source file if a post-move per-file failure occurs before the savepoint is released, and consolidate registered CSVs only when the batch completes without file errors | items_unregistered_root, items_registered_root, continue_on_error |
+| `consolidate_registered_item_csvs()` | Consolidate small CSVs in each `imports/items/registered/<YYYY-MM>/` subfolder into `items_YYYY-MM_NNN.csv` files (max 5,000 rows each); deletes originals after merge and removes header-only inputs without writing an empty archive | items_registered_root |
 | `import_unregistered_order_csvs()` | Batch import unregistered order CSV files and move successful CSV/PDF files | unregistered/registered roots, items_unregistered_root, default_order_date, continue_on_error |
 | `rename_category()` | Backward-compatible soft merge wrapper | source_category, target_category |
 
@@ -1301,6 +1309,7 @@ For batch-generated consolidated register CSV, additional provenance columns may
 | Order CSV | `<quotation_number>.csv` or free | `Q2026-0001.csv` |
 | Missing Items CSV (single file import) | `<original>_missing_items_registration.csv` | `Q2026-0001_missing_items_registration.csv` |
 | Missing Item Register CSV (batch import) | `batch_missing_items_registration_<timestamp>.csv` | `batch_missing_items_registration_20260302_120000.csv` |
+| Consolidated Registered Items CSV | `items_<YYYY-MM>_<NNN>.csv` | `items_2026-03_001.csv` |
 | Export CSV | `<type>_<timestamp>.csv` | `inventory_20260223_143052.csv` |
 
 ### **7.3 PDF Storage Rules**

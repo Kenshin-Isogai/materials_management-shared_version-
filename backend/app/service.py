@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from .config import (
     DEFAULT_EXPORTS_DIR,
+    ITEMS_IMPORT_MAX_CONSOLIDATED_ROWS,
     ITEMS_IMPORT_UNREGISTERED_ROOT,
     ITEMS_IMPORT_REGISTERED_ROOT,
 )
@@ -5933,6 +5934,7 @@ def register_unregistered_item_csvs(
         processed += 1
         supplier_name = "UNKNOWN"
         file_warnings: list[str] = []
+        moved_to: Path | None = None
         try:
             savepoint = f"sp_register_missing_{uuid4().hex}"
             conn.execute(f"SAVEPOINT {savepoint}")
@@ -5953,23 +5955,26 @@ def register_unregistered_item_csvs(
                     )
                     status_text = "ok"
 
+                report.append(
+                    {
+                        "file": str(csv_path),
+                        "supplier": supplier_name,
+                        "status": status_text,
+                        "moved_to": str(moved_to) if moved_to else None,
+                        "result": result,
+                        "warnings": file_warnings,
+                        "normalizations": [],
+                    }
+                )
                 conn.execute(f"RELEASE {savepoint}")
+                succeeded += 1
             except Exception:
+                if moved_to is not None and moved_to.exists() and not csv_path.exists():
+                    _move_file_to_target(moved_to, csv_path)
+                    moved_to = None
                 conn.execute(f"ROLLBACK TO {savepoint}")
                 conn.execute(f"RELEASE {savepoint}")
                 raise
-            succeeded += 1
-            report.append(
-                {
-                    "file": str(csv_path),
-                    "supplier": supplier_name,
-                    "status": status_text,
-                    "moved_to": str(moved_to) if moved_to else None,
-                    "result": result,
-                    "warnings": file_warnings,
-                    "normalizations": [],
-                }
-            )
         except Exception as exc:  # noqa: BLE001
             failed += 1
             report.append(
@@ -5986,6 +5991,11 @@ def register_unregistered_item_csvs(
                 break
 
     status = "ok" if failed == 0 else ("partial" if succeeded > 0 else "error")
+    if status == "ok":
+        consolidation = consolidate_registered_item_csvs(registered_root)
+    else:
+        consolidation = {"consolidated": 0, "folders": [], "skipped_due_to_errors": True}
+
     return {
         "status": status,
         "processed": processed,
@@ -5994,7 +6004,124 @@ def register_unregistered_item_csvs(
         "files": report,
         "warnings": warnings,
         "normalizations": normalizations,
+        "consolidation": consolidation,
     }
+
+
+_CONSOLIDATED_NAME_RE = re.compile(r"^items_\d{4}-\d{2}_\d{3}\.csv$")
+
+
+def consolidate_registered_item_csvs(
+    registered_root: str | Path | None = None,
+    *,
+    max_rows: int = ITEMS_IMPORT_MAX_CONSOLIDATED_ROWS,
+) -> dict[str, Any]:
+    """Merge small CSVs in each YYYY-MM subfolder into consolidated files.
+
+    Consolidated files are named ``items_YYYY-MM_001.csv``, ``_002.csv``, etc.
+    Each file contains at most *max_rows* data rows.  Original small CSVs are
+    deleted after a successful merge.  Already-consolidated files are re-read so
+    their rows are included in the new output (and the old files replaced).
+    """
+    root = Path(registered_root) if registered_root else ITEMS_IMPORT_REGISTERED_ROOT
+    if not root.is_dir():
+        return {"consolidated": 0, "folders": []}
+
+    folders_report: list[dict[str, Any]] = []
+    total_consolidated = 0
+
+    for month_dir in sorted(root.iterdir()):
+        if not month_dir.is_dir():
+            continue
+        month_name = month_dir.name
+
+        consolidated_files: list[Path] = []
+        unconsolidated_files: list[Path] = []
+        for f in sorted(month_dir.glob("*.csv")):
+            if _CONSOLIDATED_NAME_RE.match(f.name):
+                consolidated_files.append(f)
+            else:
+                unconsolidated_files.append(f)
+
+        if not unconsolidated_files:
+            continue
+
+        all_fieldnames: list[str] = []
+
+        def _collect_fieldnames(rows: list[dict[str, str]]) -> None:
+            for row in rows:
+                for key in row:
+                    if key not in all_fieldnames:
+                        all_fieldnames.append(key)
+
+        existing_rows: list[dict[str, str]] = []
+        for cf in consolidated_files:
+            rows = _load_csv_rows_from_path(cf)
+            existing_rows.extend(rows)
+            _collect_fieldnames(rows)
+
+        new_rows: list[dict[str, str]] = []
+        for f in unconsolidated_files:
+            rows = _load_csv_rows_from_path(f)
+            new_rows.extend(rows)
+            _collect_fieldnames(rows)
+
+        all_rows = existing_rows + new_rows
+
+        if not all_rows:
+            for cf in consolidated_files:
+                cf.unlink(missing_ok=True)
+            for f in unconsolidated_files:
+                f.unlink(missing_ok=True)
+            total_consolidated += len(unconsolidated_files)
+            folders_report.append(
+                {
+                    "folder": month_name,
+                    "files_consolidated": len(unconsolidated_files),
+                    "total_rows": 0,
+                    "output_files": 0,
+                }
+            )
+            continue
+
+        staged_outputs: list[tuple[Path, Path]] = []
+        chunk_idx = 1
+        try:
+            for i in range(0, len(all_rows), max_rows):
+                chunk = all_rows[i : i + max_rows]
+                filename = f"items_{month_name}_{chunk_idx:03d}.csv"
+                filepath = month_dir / filename
+                temp_path = month_dir / f".tmp_{filename}.{uuid4().hex}"
+                temp_path.write_bytes(_csv_bytes(all_fieldnames, chunk))
+                staged_outputs.append((temp_path, filepath))
+                chunk_idx += 1
+
+            for temp_path, final_path in staged_outputs:
+                temp_path.replace(final_path)
+
+            output_paths = {final_path for _, final_path in staged_outputs}
+            for cf in consolidated_files:
+                if cf not in output_paths:
+                    cf.unlink(missing_ok=True)
+
+            for f in unconsolidated_files:
+                f.unlink(missing_ok=True)
+        except Exception:
+            for temp_path, _ in staged_outputs:
+                temp_path.unlink(missing_ok=True)
+            raise
+
+        total_consolidated += len(unconsolidated_files)
+        folders_report.append(
+            {
+                "folder": month_name,
+                "files_consolidated": len(unconsolidated_files),
+                "total_rows": len(all_rows),
+                "output_files": chunk_idx - 1,
+            }
+        )
+
+    return {"consolidated": total_consolidated, "folders": folders_report}
 
 
 def _import_unregistered_order_csv_file(

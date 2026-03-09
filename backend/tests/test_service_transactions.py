@@ -831,6 +831,7 @@ def test_register_unregistered_item_csvs_reads_from_unregistered_root(conn, tmp_
         conn,
         items_unregistered_root=items_unregistered_root,
         items_registered_root=items_registered_root,
+        continue_on_error=True,
     )
     conn.commit()
 
@@ -839,7 +840,10 @@ def test_register_unregistered_item_csvs_reads_from_unregistered_root(conn, tmp_
     assert not register_csv.exists()
     from app.utils import today_jst
     moved = items_registered_root / today_jst()[:7] / register_csv.name
-    assert moved.exists()
+    # After consolidation, the original file is merged into a consolidated CSV
+    consolidated = items_registered_root / today_jst()[:7] / f"items_{today_jst()[:7]}_001.csv"
+    assert not moved.exists()
+    assert consolidated.exists()
 
     row = conn.execute(
         """
@@ -851,6 +855,289 @@ def test_register_unregistered_item_csvs_reads_from_unregistered_root(conn, tmp_
         ("BATCH-NEW-001", "UNKNOWN"),
     ).fetchone()
     assert row is not None
+
+
+def test_register_unregistered_item_csvs_restores_moved_file_when_post_move_reporting_fails(
+    conn, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    items_unregistered_root = tmp_path / "imports" / "items" / "unregistered"
+    items_registered_root = tmp_path / "imports" / "items" / "registered"
+    items_unregistered_root.mkdir(parents=True, exist_ok=True)
+    items_registered_root.mkdir(parents=True, exist_ok=True)
+
+    register_csv = items_unregistered_root / "batch_missing_items_registration_restore.csv"
+    with register_csv.open("w", encoding="utf-8", newline="") as fp:
+        writer = csv.DictWriter(
+            fp,
+            fieldnames=[
+                "source_csv",
+                "source_supplier",
+                "item_number",
+                "supplier",
+                "resolution_type",
+                "category",
+                "url",
+                "description",
+                "canonical_item_number",
+                "units_per_order",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "source_csv": "imports/orders/unregistered/csv_files/SupplierBatch/QB-RESTORE.csv",
+                "source_supplier": "SupplierBatch",
+                "item_number": "BATCH-RESTORE-001",
+                "supplier": "SupplierBatch",
+                "resolution_type": "new_item",
+                "category": "Lens",
+                "url": "",
+                "description": "",
+                "canonical_item_number": "",
+                "units_per_order": "",
+            }
+        )
+
+    original_move = service._move_file_preserve_name
+
+    class _ExplodingOncePath:
+        def __init__(self, path: Path):
+            self._path = path
+            self._has_raised = False
+
+        def exists(self) -> bool:
+            return self._path.exists()
+
+        def __str__(self) -> str:
+            if not self._has_raised:
+                self._has_raised = True
+                raise RuntimeError("simulated post-move reporting failure")
+            return str(self._path)
+
+    def _move_then_fail_once(src: Path, dst_dir: Path):
+        return _ExplodingOncePath(original_move(src, dst_dir))
+
+    monkeypatch.setattr(service, "_move_file_preserve_name", _move_then_fail_once)
+
+    result = service.register_unregistered_item_csvs(
+        conn,
+        items_unregistered_root=items_unregistered_root,
+        items_registered_root=items_registered_root,
+        continue_on_error=True,
+    )
+
+    assert result["status"] == "error"
+    assert result["succeeded"] == 0
+    assert result["failed"] == 1
+    assert register_csv.exists()
+    assert list(items_registered_root.rglob("*.csv")) == []
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM items_master i
+        JOIN manufacturers m ON m.manufacturer_id = i.manufacturer_id
+        WHERE i.item_number = ? AND m.name = ?
+        """,
+        ("BATCH-RESTORE-001", "UNKNOWN"),
+    ).fetchone()
+    assert row is None
+
+
+def test_register_unregistered_item_csvs_skips_consolidation_when_any_file_fails(conn, tmp_path: Path):
+    items_unregistered_root = tmp_path / "imports" / "items" / "unregistered"
+    items_registered_root = tmp_path / "imports" / "items" / "registered"
+    items_unregistered_root.mkdir(parents=True, exist_ok=True)
+    items_registered_root.mkdir(parents=True, exist_ok=True)
+
+    valid_csv = items_unregistered_root / "batch_missing_items_registration_ok.csv"
+    with valid_csv.open("w", encoding="utf-8", newline="") as fp:
+        writer = csv.DictWriter(
+            fp,
+            fieldnames=[
+                "source_csv",
+                "source_supplier",
+                "item_number",
+                "supplier",
+                "resolution_type",
+                "category",
+                "url",
+                "description",
+                "canonical_item_number",
+                "units_per_order",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "source_csv": "imports/orders/unregistered/csv_files/SupplierBatch/QB-OK.csv",
+                "source_supplier": "SupplierBatch",
+                "item_number": "BATCH-OK-001",
+                "supplier": "SupplierBatch",
+                "resolution_type": "new_item",
+                "category": "Lens",
+                "url": "",
+                "description": "",
+                "canonical_item_number": "",
+                "units_per_order": "",
+            }
+        )
+
+    invalid_csv = items_unregistered_root / "batch_missing_items_registration_fail.csv"
+    with invalid_csv.open("w", encoding="utf-8", newline="") as fp:
+        writer = csv.DictWriter(
+            fp,
+            fieldnames=[
+                "source_csv",
+                "source_supplier",
+                "item_number",
+                "supplier",
+                "resolution_type",
+                "category",
+                "url",
+                "description",
+                "canonical_item_number",
+                "units_per_order",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "source_csv": "imports/orders/unregistered/csv_files/SupplierBatch/QB-FAIL.csv",
+                "source_supplier": "SupplierBatch",
+                "item_number": "BATCH-FAIL-001",
+                "supplier": "SupplierBatch",
+                "resolution_type": "alias",
+                "category": "",
+                "url": "",
+                "description": "",
+                "canonical_item_number": "DOES-NOT-EXIST",
+                "units_per_order": "1",
+            }
+        )
+
+    result = service.register_unregistered_item_csvs(
+        conn,
+        items_unregistered_root=items_unregistered_root,
+        items_registered_root=items_registered_root,
+        continue_on_error=True,
+    )
+
+    from app.utils import today_jst
+
+    month_dir = items_registered_root / today_jst()[:7]
+    moved_valid = month_dir / valid_csv.name
+    consolidated = month_dir / f"items_{today_jst()[:7]}_001.csv"
+
+    assert result["status"] == "partial"
+    assert result["succeeded"] == 1
+    assert result["failed"] == 1
+    assert result["consolidation"] == {
+        "consolidated": 0,
+        "folders": [],
+        "skipped_due_to_errors": True,
+    }
+    assert moved_valid.exists()
+    assert invalid_csv.exists()
+    assert not consolidated.exists()
+
+
+def test_register_unregistered_item_csvs_skips_consolidation_when_error_stops_batch(conn, tmp_path: Path):
+    items_unregistered_root = tmp_path / "imports" / "items" / "unregistered"
+    items_registered_root = tmp_path / "imports" / "items" / "registered"
+    items_unregistered_root.mkdir(parents=True, exist_ok=True)
+    items_registered_root.mkdir(parents=True, exist_ok=True)
+
+    valid_csv = items_unregistered_root / "01_batch_missing_items_registration_ok.csv"
+    with valid_csv.open("w", encoding="utf-8", newline="") as fp:
+        writer = csv.DictWriter(
+            fp,
+            fieldnames=[
+                "source_csv",
+                "source_supplier",
+                "item_number",
+                "supplier",
+                "resolution_type",
+                "category",
+                "url",
+                "description",
+                "canonical_item_number",
+                "units_per_order",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "source_csv": "imports/orders/unregistered/csv_files/SupplierBatch/QB-OK-STOP.csv",
+                "source_supplier": "SupplierBatch",
+                "item_number": "BATCH-OK-STOP-001",
+                "supplier": "SupplierBatch",
+                "resolution_type": "new_item",
+                "category": "Lens",
+                "url": "",
+                "description": "",
+                "canonical_item_number": "",
+                "units_per_order": "",
+            }
+        )
+
+    invalid_csv = items_unregistered_root / "02_batch_missing_items_registration_fail.csv"
+    with invalid_csv.open("w", encoding="utf-8", newline="") as fp:
+        writer = csv.DictWriter(
+            fp,
+            fieldnames=[
+                "source_csv",
+                "source_supplier",
+                "item_number",
+                "supplier",
+                "resolution_type",
+                "category",
+                "url",
+                "description",
+                "canonical_item_number",
+                "units_per_order",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "source_csv": "imports/orders/unregistered/csv_files/SupplierBatch/QB-FAIL-STOP.csv",
+                "source_supplier": "SupplierBatch",
+                "item_number": "BATCH-FAIL-STOP-001",
+                "supplier": "SupplierBatch",
+                "resolution_type": "alias",
+                "category": "",
+                "url": "",
+                "description": "",
+                "canonical_item_number": "DOES-NOT-EXIST",
+                "units_per_order": "1",
+            }
+        )
+
+    result = service.register_unregistered_item_csvs(
+        conn,
+        items_unregistered_root=items_unregistered_root,
+        items_registered_root=items_registered_root,
+        continue_on_error=False,
+    )
+
+    from app.utils import today_jst
+
+    month_dir = items_registered_root / today_jst()[:7]
+    moved_valid = month_dir / valid_csv.name
+    consolidated = month_dir / f"items_{today_jst()[:7]}_001.csv"
+
+    assert result["status"] == "partial"
+    assert result["processed"] == 2
+    assert result["succeeded"] == 1
+    assert result["failed"] == 1
+    assert result["consolidation"] == {
+        "consolidated": 0,
+        "folders": [],
+        "skipped_due_to_errors": True,
+    }
+    assert moved_valid.exists()
+    assert invalid_csv.exists()
+    assert not consolidated.exists()
 
 def test_import_unregistered_orders_missing_items_same_csv_name_different_suppliers_preserves_rows(conn, tmp_path: Path):
     unregistered_root = tmp_path / "quotations" / "unregistered"

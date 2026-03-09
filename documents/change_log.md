@@ -1,3 +1,22 @@
+## 2026-03-12
+
+### Added
+
+- Automatic CSV consolidation for registered items imports: after each `register_unregistered_item_csvs()` batch run, small CSV files in `imports/items/registered/<YYYY-MM>/` subfolders are automatically merged into consolidated files via `consolidate_registered_item_csvs()`.
+  - Consolidated file naming: `items_YYYY-MM_NNN.csv` (e.g., `items_2026-03_001.csv`, `items_2026-03_002.csv`)
+  - Maximum 5,000 rows per consolidated file, configurable via `ITEMS_IMPORT_MAX_CONSOLIDATED_ROWS` in `config.py`
+  - Files already matching the `items_YYYY-MM_NNN.csv` pattern are recognized as previously consolidated and included in merge passes
+  - Original non-consolidated source CSVs are deleted after successful consolidation
+  - Design decision: consolidated CSVs are **import-history archives only** — UI edits to item attributes affect the database, not the CSV archives
+
+### Fixed
+
+- Hardened registered-item CSV consolidation safety.
+  - `register_unregistered_item_csvs()` now skips automatic consolidation when any file in the batch fails, preventing partially failed runs from rewriting archives.
+  - `consolidate_registered_item_csvs()` now stages replacement files and only swaps them into place after all chunk writes succeed, preserving existing consolidated archives when a write fails mid-run.
+  - `register_unregistered_item_csvs()` now keeps each per-file savepoint open until report construction succeeds, so a post-move failure restores the CSV to `imports/items/unregistered/` and rolls back that file's DB changes.
+  - `consolidate_registered_item_csvs()` now removes header-only registered CSV inputs without creating empty `items_YYYY-MM_NNN.csv` archives.
+
 ## 2026-03-11
 
 ### Changed
