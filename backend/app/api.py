@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 import json
 from typing import Any
 
-from fastapi import Depends, FastAPI, File, Form, Header, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -102,6 +102,20 @@ def _optional_role_dep():
         return normalized or None
 
     return _get_role
+
+
+def cleanup_unreg_file_with_retry(path_str: str) -> None:
+    import time
+    from pathlib import Path
+    p = Path(path_str)
+    for _ in range(5):
+        time.sleep(1)
+        try:
+            if p.is_file():
+                p.unlink()
+            return
+        except OSError:
+            pass
 
 
 def create_app(db_path: str | None = None) -> FastAPI:
@@ -223,6 +237,7 @@ def create_app(db_path: str | None = None) -> FastAPI:
 
     @app.post("/api/items/import")
     async def post_items_import(
+        background_tasks: BackgroundTasks,
         file: UploadFile = File(...),
         continue_on_error: bool = Form(default=True),
         row_overrides: str | None = Form(default=None),
@@ -237,6 +252,8 @@ def create_app(db_path: str | None = None) -> FastAPI:
             row_overrides=_parse_optional_json_form(row_overrides, "row_overrides"),
         )
         conn.commit()
+        if result.get("archive") and result["archive"].get("cleanup_unreg_file"):
+            background_tasks.add_task(cleanup_unreg_file_with_retry, result["archive"]["cleanup_unreg_file"])
         return ok(result)
 
     @app.post("/api/items/import-preview")

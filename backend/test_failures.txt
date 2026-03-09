@@ -1,0 +1,64 @@
+============================= test session starts =============================
+platform win32 -- Python 3.13.11, pytest-9.0.2, pluggy-1.6.0
+rootdir: C:\Users\IsogaiKenshin\Documents\Yaqumo\applications\materials_management\backend
+configfile: pyproject.toml
+plugins: anyio-4.12.1
+collected 55 items
+
+tests\test_service_transactions.py ....................F................ [ 67%]
+..................                                                       [100%]
+
+================================== FAILURES ===================================
+___________ test_register_pending_item_csvs_reads_from_pending_root ___________
+
+conn = <sqlite3.Connection object at 0x0000020E0E66A020>
+
+    def test_register_pending_item_csvs_reads_from_pending_root(conn):
+        ITEMS_IMPORT_PENDING_ROOT.mkdir(parents=True, exist_ok=True)
+        ITEMS_IMPORT_PROCESSED_ROOT.mkdir(parents=True, exist_ok=True)
+    
+        register_csv = ITEMS_IMPORT_PENDING_ROOT / "batch_missing_items_registration_20260302_120000.csv"
+        register_csv = ITEMS_IMPORT_PENDING_ROOT / "batch_missing_items_registration_20260302_120000.csv"
+        with register_csv.open("w", encoding="utf-8", newline="") as fp:
+            writer = csv.DictWriter(
+                fp,
+                fieldnames=[
+                    "source_csv",
+                    "source_supplier",
+                    "item_number",
+                    "supplier",
+                    "resolution_type",
+                    "category",
+                    "url",
+                    "description",
+                    "canonical_item_number",
+                    "units_per_order",
+                ],
+            )
+            writer.writeheader()
+            writer.writerow(
+                {
+                    "source_csv": "quotations/unregistered/csv_files/SupplierBatch/QB-001.csv",
+                    "source_supplier": "SupplierBatch",
+                    "item_number": "BATCH-NEW-001",
+                    "supplier": "SupplierBatch",
+                    "resolution_type": "new_item",
+                    "category": "Lens",
+                    "url": "",
+                    "description": "",
+                    "canonical_item_number": "",
+                    "units_per_order": "",
+                }
+            )
+    
+        result = service.register_pending_item_csvs(conn)
+        conn.commit()
+    
+        assert result["status"] == "ok"
+>       assert result["succeeded"] == 1
+E       assert 4 == 1
+
+tests\test_service_transactions.py:835: AssertionError
+=========================== short test summary info ===========================
+FAILED tests/test_service_transactions.py::test_register_pending_item_csvs_reads_from_pending_root
+======================== 1 failed, 54 passed in 1.53s =========================

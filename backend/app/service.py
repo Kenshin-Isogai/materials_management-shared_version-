@@ -643,7 +643,7 @@ def _get_or_create_quotation(
 def _load_csv_rows_from_content(content: bytes) -> list[dict[str, str]]:
     text = content.decode("utf-8-sig")
     reader = csv.DictReader(StringIO(text))
-    return [{k.strip(): (v.strip() if isinstance(v, str) else v) for k, v in row.items()} for row in reader]
+    return [{k.strip(): (v.strip() if isinstance(v, str) else v) for k, v in row.items() if k is not None} for row in reader]
 
 
 def _read_csv_text(content: bytes) -> str:
@@ -653,14 +653,14 @@ def _read_csv_text(content: bytes) -> str:
 def _load_csv_rows_from_path(path: str | Path) -> list[dict[str, str]]:
     with Path(path).open("r", encoding="utf-8-sig", newline="") as fp:
         reader = csv.DictReader(fp)
-        return [{k.strip(): (v.strip() if isinstance(v, str) else v) for k, v in row.items()} for row in reader]
+        return [{k.strip(): (v.strip() if isinstance(v, str) else v) for k, v in row.items() if k is not None} for row in reader]
 
 
 def _load_csv_rows_with_fieldnames_from_path(path: str | Path) -> tuple[list[str], list[dict[str, str]]]:
     with Path(path).open("r", encoding="utf-8-sig", newline="") as fp:
         reader = csv.DictReader(fp)
-        fieldnames = [str(name).strip() for name in (reader.fieldnames or [])]
-        rows = [{k.strip(): (v.strip() if isinstance(v, str) else v) for k, v in row.items()} for row in reader]
+        fieldnames = [str(name).strip() for name in (reader.fieldnames or []) if name is not None]
+        rows = [{k.strip(): (v.strip() if isinstance(v, str) else v) for k, v in row.items() if k is not None} for row in reader]
     return fieldnames, rows
 
 
@@ -1327,15 +1327,27 @@ def _archive_imported_items_csv(
     *,
     source_name: str = "items_import.csv",
     registered_root: str | Path | None = None,
+    unregistered_root: str | Path | None = None,
 ) -> dict[str, Any]:
     root = Path(registered_root) if registered_root else ITEMS_IMPORT_REGISTERED_ROOT
+    unreg_root = Path(unregistered_root) if unregistered_root else ITEMS_IMPORT_UNREGISTERED_ROOT
+
     month_dir = root / today_jst()[:7]
     archived_path = _write_bytes_preserve_name(content, month_dir, source_name)
     consolidation = consolidate_registered_item_csvs(root)
+
+    cleanup_file = None
+    safe_name = Path(source_name).name
+    if safe_name:
+        potential_unreg_file = unreg_root / safe_name
+        if potential_unreg_file.is_file():
+            cleanup_file = str(potential_unreg_file)
+
     return {
         "registered_root": str(root),
         "archived_path": str(archived_path),
         "consolidation": consolidation,
+        "cleanup_unreg_file": cleanup_file,
     }
 
 
