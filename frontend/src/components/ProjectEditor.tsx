@@ -69,6 +69,11 @@ function previewStatusTone(status: ProjectRequirementPreviewRow["status"]): stri
   }
 }
 
+function countItemsCsvExportCandidates(preview: ProjectRequirementPreview | null): number {
+  if (!preview) return 0;
+  return preview.rows.filter((row) => row.eligible_for_items_csv_export).length;
+}
+
 function buildRequirementsFromProject(project: ProjectDetail | null | undefined): RequirementDraft[] {
   if (!project?.requirements.length) {
     return [blankRequirementDraft(), blankRequirementDraft()];
@@ -322,6 +327,11 @@ export function ProjectEditor({
     return resolvePreviewSelection(entryPreviewSelections, row.row, fallbackSelection);
   }
 
+  const itemsCsvExportCandidateCount = useMemo(
+    () => countItemsCsvExportCandidates(entryPreview),
+    [entryPreview],
+  );
+
   async function previewEntryList() {
     if (!entryListText.trim()) return;
     setSaving(true);
@@ -346,7 +356,7 @@ export function ProjectEditor({
   }
 
   async function downloadUnresolvedItemsCsv() {
-    if (!entryPreview || entryPreview.summary.unresolved <= 0) return;
+    if (!entryPreview || itemsCsvExportCandidateCount <= 0) return;
     setSaving(true);
     setMessage("");
     try {
@@ -362,12 +372,13 @@ export function ProjectEditor({
             rows: entryPreview.rows.map((row) => ({
               raw_target: row.raw_target,
               status: row.status,
+              eligible_for_items_csv_export: row.eligible_for_items_csv_export,
             })),
             text: entryListText,
           }),
         },
       );
-      setMessage("Downloaded unresolved items CSV for the Items import flow.");
+      setMessage("Downloaded items registration CSV for the Items import flow.");
     } catch (error) {
       setMessage(formatActionError("CSV download failed", error));
     } finally {
@@ -632,9 +643,9 @@ export function ProjectEditor({
                     <button className="button" type="button" onClick={applyEntryPreviewToRequirements}>
                       Apply To Requirements
                     </button>
-                    {entryPreview.summary.unresolved > 0 && (
+                    {itemsCsvExportCandidateCount > 0 && (
                       <button className="button-subtle" type="button" onClick={() => void downloadUnresolvedItemsCsv()}>
-                        Download Unresolved Items CSV
+                        Download Items Registration CSV
                       </button>
                     )}
                     <button className="button-subtle" type="button" onClick={resetPreviewState}>

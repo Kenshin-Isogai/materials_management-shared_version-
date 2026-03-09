@@ -180,6 +180,7 @@ export type ProjectRequirementPreviewRow = {
   allowed_entity_types: Array<"item">;
   suggested_match: ProjectRequirementPreviewMatch | null;
   candidates: ProjectRequirementPreviewMatch[];
+  eligible_for_items_csv_export: boolean;
 };
 
 export type ProjectRequirementPreview = {

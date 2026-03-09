@@ -3213,9 +3213,11 @@ def test_project_requirements_preview_endpoint_classifies_exact_ambiguous_and_un
     assert rows[0]["status"] == "exact"
     assert rows[0]["suggested_match"]["entity_id"] == exact_item["item_id"]
     assert rows[0]["quantity"] == "2"
+    assert rows[0]["eligible_for_items_csv_export"] is False
 
     assert rows[1]["status"] == "needs_review"
     assert rows[1]["requires_user_selection"] is True
+    assert rows[1]["eligible_for_items_csv_export"] is False
     assert {candidate["entity_id"] for candidate in rows[1]["candidates"]} == {
         ambiguous_a["item_id"],
         ambiguous_b["item_id"],
@@ -3223,6 +3225,7 @@ def test_project_requirements_preview_endpoint_classifies_exact_ambiguous_and_un
 
     assert rows[2]["status"] == "unresolved"
     assert rows[2]["requires_user_selection"] is True
+    assert rows[2]["eligible_for_items_csv_export"] is True
 
 
 def test_project_requirements_preview_endpoint_defaults_invalid_quantity_to_one(client):
@@ -3247,6 +3250,7 @@ def test_project_requirements_preview_endpoint_defaults_invalid_quantity_to_one(
     assert row["quantity"] == "1"
     assert row["quantity_defaulted"] is True
     assert row["suggested_match"]["entity_id"] == item["item_id"]
+    assert row["eligible_for_items_csv_export"] is False
 
 
 def test_project_requirements_unresolved_items_csv_endpoint_exports_items_import_rows(client):
@@ -3363,6 +3367,120 @@ def test_project_requirements_unresolved_items_csv_endpoint_accepts_preview_rows
         {
             "row_type": "item",
             "item_number": "PROJECT-SNAPSHOT-002",
+            "manufacturer_name": "UNKNOWN",
+            "category": "",
+            "url": "",
+            "description": "",
+            "supplier": "",
+            "canonical_item_number": "",
+            "units_per_order": "1",
+        },
+    ]
+
+
+def test_project_requirements_items_csv_export_includes_missing_like_review_rows_only(client):
+    client.post("/api/manufacturers", json={"name": "API-PROJECT-EXPORT-REVIEW-MFG-A"})
+    client.post("/api/manufacturers", json={"name": "API-PROJECT-EXPORT-REVIEW-MFG-B"})
+    client.post(
+        "/api/items",
+        json={
+            "item_number": "API-PROJECT-EXPORT-EXACT",
+            "manufacturer_name": "API-PROJECT-EXPORT-REVIEW-MFG-A",
+            "category": "Lens",
+        },
+    )
+    client.post(
+        "/api/items",
+        json={
+            "item_number": "API-PROJECT-EXPORT-DUP",
+            "manufacturer_name": "API-PROJECT-EXPORT-REVIEW-MFG-A",
+            "category": "Lens",
+        },
+    )
+    client.post(
+        "/api/items",
+        json={
+            "item_number": "API-PROJECT-EXPORT-DUP",
+            "manufacturer_name": "API-PROJECT-EXPORT-REVIEW-MFG-B",
+            "category": "Mirror",
+        },
+    )
+    client.post(
+        "/api/items",
+        json={
+            "item_number": "API-PROJECT-EXPORT-NEAR-100",
+            "manufacturer_name": "API-PROJECT-EXPORT-REVIEW-MFG-A",
+            "category": "Lens",
+        },
+    )
+    client.post(
+        "/api/items",
+        json={
+            "item_number": "API-PROJECT-EXPORT-QTY",
+            "manufacturer_name": "API-PROJECT-EXPORT-REVIEW-MFG-A",
+            "category": "Lens",
+        },
+    )
+
+    preview_response = client.post(
+        "/api/projects/requirements/preview",
+        json={
+            "text": "\n".join(
+                [
+                    "API-PROJECT-EXPORT-EXACT,1",
+                    "API-PROJECT-EXPORT-DUP,2",
+                    "API-PROJECT-EXPORT-ALT-101,3",
+                    "API-PROJECT-EXPORT-QTY,abc",
+                    "ZZZ-PROJECT-EXPORT-MISSING,4",
+                ]
+            )
+        },
+    )
+    assert preview_response.status_code == 200
+    preview_rows = preview_response.json()["data"]["rows"]
+
+    assert preview_rows[0]["eligible_for_items_csv_export"] is False
+    assert preview_rows[1]["status"] == "needs_review"
+    assert preview_rows[1]["eligible_for_items_csv_export"] is False
+    assert preview_rows[2]["status"] == "needs_review"
+    assert preview_rows[2]["eligible_for_items_csv_export"] is True
+    assert preview_rows[3]["status"] == "needs_review"
+    assert preview_rows[3]["eligible_for_items_csv_export"] is False
+    assert preview_rows[4]["status"] == "unresolved"
+    assert preview_rows[4]["eligible_for_items_csv_export"] is True
+
+    export_response = client.post(
+        "/api/projects/requirements/preview/unresolved-items.csv",
+        json={
+            "text": "",
+            "rows": [
+                {
+                    "raw_target": row["raw_target"],
+                    "status": row["status"],
+                    "eligible_for_items_csv_export": row["eligible_for_items_csv_export"],
+                }
+                for row in preview_rows
+            ],
+        },
+    )
+    assert export_response.status_code == 200
+
+    _, export_rows = read_csv_response(export_response)
+    assert export_rows == [
+        {
+            "row_type": "item",
+            "item_number": "API-PROJECT-EXPORT-ALT-101",
+            "manufacturer_name": "UNKNOWN",
+            "category": "",
+            "url": "",
+            "description": "",
+            "supplier": "",
+            "canonical_item_number": "",
+            "units_per_order": "1",
+        },
+        {
+            "row_type": "item",
+            "item_number": "ZZZ-PROJECT-EXPORT-MISSING",
             "manufacturer_name": "UNKNOWN",
             "category": "",
             "url": "",

@@ -5560,6 +5560,42 @@ def _classify_ranked_preview_status(
     return "unresolved"
 
 
+def _project_requirement_preview_should_export_to_items_csv(
+    *,
+    raw_target: str,
+    status: str,
+    suggested_match: dict[str, Any] | None,
+) -> bool:
+    if not str(raw_target or "").strip():
+        return False
+    if status == "unresolved":
+        return True
+    if status != "needs_review" or not isinstance(suggested_match, dict):
+        return False
+    confidence_score = suggested_match.get("confidence_score")
+    normalized_confidence = int(confidence_score) if confidence_score is not None else None
+    return (
+        _classify_ranked_preview_status(
+            confidence_score=normalized_confidence,
+            match_reason=str(suggested_match.get("match_reason") or ""),
+        )
+        == "needs_review"
+    )
+
+
+def _project_requirement_preview_row_eligible_for_items_csv_export(row: dict[str, Any]) -> bool:
+    explicit_flag = row.get("eligible_for_items_csv_export")
+    if explicit_flag is not None:
+        return bool(explicit_flag) and bool(str(row.get("raw_target") or "").strip())
+    suggested_match = row.get("suggested_match")
+    normalized_suggested_match = suggested_match if isinstance(suggested_match, dict) else None
+    return _project_requirement_preview_should_export_to_items_csv(
+        raw_target=str(row.get("raw_target") or ""),
+        status=str(row.get("status") or ""),
+        suggested_match=normalized_suggested_match,
+    )
+
+
 PREVIEW_STATUS_PRIORITY = {
     "exact": 0,
     "high_confidence": 1,
@@ -8023,6 +8059,11 @@ def preview_project_requirement_bulk_text(
                 status = "needs_review"
             message = f"{message} Quantity was invalid and defaulted to 1."
 
+        eligible_for_items_csv_export = _project_requirement_preview_should_export_to_items_csv(
+            raw_target=raw_target,
+            status=status,
+            suggested_match=suggested_match,
+        )
         preview_row = {
             "row": line_number,
             "raw_line": stripped_line,
@@ -8036,6 +8077,7 @@ def preview_project_requirement_bulk_text(
             "allowed_entity_types": ["item"] if status != "exact" else [],
             "suggested_match": suggested_match,
             "candidates": candidate_matches,
+            "eligible_for_items_csv_export": eligible_for_items_csv_export,
         }
         preview_rows.append(preview_row)
         summary[status] += 1
@@ -8059,7 +8101,7 @@ def export_project_requirement_unresolved_items_csv(
     seen_item_numbers: set[str] = set()
 
     for row in preview_rows:
-        if str(row.get("status") or "") != "unresolved":
+        if not _project_requirement_preview_row_eligible_for_items_csv_export(row):
             continue
         item_number = str(row.get("raw_target") or "").strip()
         if not item_number:
@@ -8085,7 +8127,7 @@ def export_project_requirement_unresolved_items_csv(
     if not export_rows:
         raise AppError(
             code="NO_UNRESOLVED_PROJECT_ITEMS",
-            message="No unresolved project preview items are available to export.",
+            message="No exportable project preview items are available to export.",
             status_code=400,
         )
 

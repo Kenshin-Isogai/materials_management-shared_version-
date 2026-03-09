@@ -250,6 +250,7 @@ class ProjectRequirementPreviewRequest(BaseModel):
 class ProjectRequirementPreviewExportRow(BaseModel):
     raw_target: str = ""
     status: Literal["exact", "high_confidence", "needs_review", "unresolved"]
+    eligible_for_items_csv_export: bool | None = None
 
 
 class ProjectRequirementUnresolvedItemsCsvRequest(BaseModel):

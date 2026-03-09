@@ -111,7 +111,7 @@ Last updated: 2026-03-09 (JST)
 - Projects page requirement entry now supports preview-first bulk text parsing (`item_number,quantity` per line).
   - `POST /api/projects/requirements/preview` classifies each line as `exact`, `high_confidence`, `needs_review`, or `unresolved`
   - preview rows return ranked item candidates, support `CatalogPicker` correction, and can be applied back into the editable requirement grid
-- Projects page quick-parser previews can export unresolved item numbers as an Items import-compatible CSV, de-duplicated by item number and defaulting each row to `row_type=item`, `manufacturer_name=UNKNOWN`, and `units_per_order=1`; the export consumes the reviewed preview snapshot instead of reparsing textarea state.
+- Projects page quick-parser previews can export unresolved item numbers plus review rows that only have fuzzy/non-exact suggestions as an Items import-compatible CSV, de-duplicated by item number and defaulting each row to `row_type=item`, `manufacturer_name=UNKNOWN`, and `units_per_order=1`; review rows backed by exact registered matches stay excluded, and the export consumes the reviewed preview snapshot instead of reparsing textarea state.
 - Projects page bulk-parser unresolved rows keep their raw typed query visible until the user remaps them through the picker.
 - Assemblies page component rows now use the same `CatalogPicker` item selector, with keyboard search and recent selections stored in `localStorage`.
 - BOM spreadsheet entry now uses `CatalogPicker` in type-or-search mode for supplier and item columns while still allowing raw text entry.

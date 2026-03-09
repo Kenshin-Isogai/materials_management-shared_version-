@@ -815,7 +815,7 @@ Projected Available =
 - Manual CSV imports are preview-first before commit for items, inventory, orders, and reservations.
 - Projects quick requirement parsing is also preview-first before rows are applied into project requirements.
   - `POST /projects/requirements/preview` parses `item_number,quantity` text lines, classifies item matches as `exact`, `high_confidence`, `needs_review`, or `unresolved`, and returns ranked item candidates for correction
-  - `POST /projects/requirements/preview/unresolved-items.csv` exports unresolved preview rows as an Items import-compatible CSV using default registration metadata (`row_type=item`, `manufacturer_name=UNKNOWN`, `units_per_order=1`) and de-duplicates repeated unresolved item numbers
+  - `POST /projects/requirements/preview/unresolved-items.csv` exports unresolved preview rows plus `needs_review` rows that only have fuzzy/non-exact suggestions as an Items import-compatible CSV using default registration metadata (`row_type=item`, `manufacturer_name=UNKNOWN`, `units_per_order=1`), de-duplicates repeated item numbers, and still excludes review rows backed by exact registered matches
   - preview-confirmed project rows are applied client-side into the editable requirements grid; project create/update contracts remain unchanged
 - BOM spreadsheet entry is also preview-first before analysis, reservation, or shortage persistence.
   - `POST /bom/preview` classifies supplier and item matches as `exact`, `high_confidence`, `needs_review`, or `unresolved`

@@ -37,14 +37,14 @@ describe("ProjectEditor", () => {
     apiGetWithPaginationMock.mockResolvedValue({ data: [], pagination: undefined });
   });
 
-  it("downloads unresolved preview rows as an Items import CSV", async () => {
+  it("downloads exportable review preview rows as an Items import CSV", async () => {
     apiSendMock.mockResolvedValue({
       summary: {
         total_rows: 1,
         exact: 0,
         high_confidence: 0,
-        needs_review: 0,
-        unresolved: 1,
+        needs_review: 1,
+        unresolved: 0,
       },
       can_auto_accept: false,
       rows: [
@@ -55,12 +55,22 @@ describe("ProjectEditor", () => {
           quantity: "2",
           quantity_raw: "2",
           quantity_defaulted: false,
-          status: "unresolved",
-          message: "No registered item matched this line.",
+          status: "needs_review",
+          message: "Review the suggested item before applying.",
           requires_user_selection: true,
           allowed_entity_types: ["item"],
-          suggested_match: null,
+          suggested_match: {
+            entity_type: "item",
+            entity_id: 101,
+            value_text: "PROJECT-MISSING-002",
+            display_label: "PROJECT-MISSING-002 (Test) #101",
+            summary: "Test | #101",
+            match_source: "item_number",
+            confidence_score: 88,
+            match_reason: "item_number_fuzzy",
+          },
           candidates: [],
+          eligible_for_items_csv_export: true,
         },
       ],
     });
@@ -81,9 +91,9 @@ describe("ProjectEditor", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Download Unresolved Items CSV" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Download Items Registration CSV" })).toBeTruthy();
     });
-    fireEvent.click(screen.getByRole("button", { name: "Download Unresolved Items CSV" }));
+    fireEvent.click(screen.getByRole("button", { name: "Download Items Registration CSV" }));
 
     await waitFor(() => {
       expect(apiDownloadMock).toHaveBeenCalledWith(
@@ -98,7 +108,8 @@ describe("ProjectEditor", () => {
             rows: [
               {
                 raw_target: "PROJECT-MISSING-001",
-                status: "unresolved",
+                status: "needs_review",
+                eligible_for_items_csv_export: true,
               },
             ],
             text: "PROJECT-MISSING-001,2",
