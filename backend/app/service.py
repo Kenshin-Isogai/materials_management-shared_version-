@@ -5650,6 +5650,7 @@ def _process_order_rows_for_import(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     resolved: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
+    seen_missing: set[tuple[str, str]] = set()
     supplier_name_row = conn.execute(
         "SELECT name FROM suppliers WHERE supplier_id = ?",
         (supplier_id,),
@@ -5694,20 +5695,23 @@ def _process_order_rows_for_import(
         if override_units is not None:
             units_per_order = override_units
         if item_id is None:
-            missing.append(
-                {
-                    "row": idx,
-                    "item_number": item_number,
-                    "supplier": supplier_name,
-                    "manufacturer_name": "",
-                    "resolution_type": "new_item",
-                    "category": "",
-                    "url": "",
-                    "description": "",
-                    "canonical_item_number": "",
-                    "units_per_order": "",
-                }
-            )
+            dedupe_key = (supplier_name.casefold(), item_number.casefold())
+            if dedupe_key not in seen_missing:
+                seen_missing.add(dedupe_key)
+                missing.append(
+                    {
+                        "row": idx,
+                        "item_number": item_number,
+                        "supplier": supplier_name,
+                        "manufacturer_name": "",
+                        "resolution_type": "new_item",
+                        "category": "",
+                        "url": "",
+                        "description": "",
+                        "canonical_item_number": "",
+                        "units_per_order": "",
+                    }
+                )
             continue
         order_date = normalize_optional_date(row.get("order_date"), f"order_date (row {idx})")
         if order_date is None:

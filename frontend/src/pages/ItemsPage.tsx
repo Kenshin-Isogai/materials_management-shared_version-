@@ -272,6 +272,7 @@ const blankMetadataRow = (): MetadataBulkRow => ({
 });
 
 function toMissingResolverRows(rows: MissingItemResolverRow[] | undefined): MissingResolverRow[] {
+  const seen = new Set<string>();
   return (rows ?? [])
     .filter((row) => String(row.item_number ?? "").trim())
     .map((row) => {
@@ -289,7 +290,13 @@ function toMissingResolverRows(rows: MissingItemResolverRow[] | undefined): Miss
         units_per_order: String(row.units_per_order ?? "1")
       };
     })
-    .filter((row) => row.supplier && row.item_number);
+    .filter((row) => {
+      if (!row.supplier || !row.item_number) return false;
+      const key = `${row.supplier.toLowerCase()}::${row.item_number.toLowerCase()}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 }
 
 export function ItemsPage() {
@@ -673,12 +680,12 @@ export function ItemsPage() {
       const selectedItemNumber = selection?.value_text.trim();
       const canonicalChanged = Boolean(
         selectedItemNumber &&
-          (
-            row.action === "resolve_alias_canonical_item" ||
-            (suggestedMatch
-              ? selection?.entity_id !== suggestedMatch.entity_id
-              : selectedItemNumber !== row.canonical_item_number.trim())
-          )
+        (
+          row.action === "resolve_alias_canonical_item" ||
+          (suggestedMatch
+            ? selection?.entity_id !== suggestedMatch.entity_id
+            : selectedItemNumber !== row.canonical_item_number.trim())
+        )
       );
       const unitsChanged = String(unitsValue) !== String(row.units_per_order || "1");
       if (!canonicalChanged && !unitsChanged) continue;
@@ -1367,7 +1374,7 @@ export function ItemsPage() {
             </button>
           </div>
           <div className="overflow-x-auto">
-            <table className="min-w-[1280px] text-sm no-sticky-header">
+            <table className="min-w-[1280px] text-sm">
               <thead>
                 <tr className="border-b border-slate-200 text-left text-slate-500">
                   <th className="min-w-[110px] px-2 py-2">Type</th>

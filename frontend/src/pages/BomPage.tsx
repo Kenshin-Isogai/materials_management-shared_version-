@@ -379,7 +379,7 @@ export function BomPage() {
           Enter supplier and ordered item text as received, then use preview reconciliation before analysis or shortage follow-up.
         </p>
         <div className="mt-3 overflow-x-auto">
-          <table className="min-w-[700px] text-sm no-sticky-header">
+          <table className="min-w-[700px] text-sm">
             <thead>
               <tr className="border-b border-slate-200 text-left text-slate-500">
                 <th className="px-2 py-2">Supplier</th>

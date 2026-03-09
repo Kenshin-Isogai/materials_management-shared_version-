@@ -1644,51 +1644,51 @@ export function OrdersPage() {
                 </thead>
                 <tbody>
                   {filteredSortedQuotations.map((row) => (
-                  <tr key={row.quotation_id} className="border-b border-slate-100">
-                    <td className="px-2 py-2">#{row.quotation_id}</td>
-                    <td className="px-2 py-2">{row.supplier_name}</td>
-                    <td className="px-2 py-2 font-semibold">{row.quotation_number}</td>
-                    <td className="px-2 py-2">
-                      {editingQuotationId === row.quotation_id ? (
-                        <input
-                          className="input"
-                          value={editingQuotationIssueDate}
-                          onChange={(event) => setEditingQuotationIssueDate(event.target.value)}
-                          placeholder="YYYY-MM-DD"
-                        />
-                      ) : (
-                        row.issue_date ?? "-"
-                      )}
-                    </td>
-                    <td className="px-2 py-2 text-slate-600">
-                      {editingQuotationId === row.quotation_id ? (
-                        <input
-                          className="input"
-                          value={editingQuotationPdfLink}
-                          onChange={(event) => setEditingQuotationPdfLink(event.target.value)}
-                          placeholder="quotations/registered/pdf_files/<supplier>/<file>.pdf"
-                        />
-                      ) : (
-                        row.pdf_link ?? "-"
-                      )}
-                    </td>
-                    <td className="px-2 py-2">{orderCountByQuotationId.get(row.quotation_id) ?? 0}</td>
-                    <td className="px-2 py-2">
-                      <div className="flex gap-2">
-                        <button className="button-subtle" onClick={() => openQuotationContext(row.quotation_id)} disabled={loading}>Details</button>
+                    <tr key={row.quotation_id} className="border-b border-slate-100">
+                      <td className="px-2 py-2">#{row.quotation_id}</td>
+                      <td className="px-2 py-2">{row.supplier_name}</td>
+                      <td className="px-2 py-2 font-semibold">{row.quotation_number}</td>
+                      <td className="px-2 py-2">
                         {editingQuotationId === row.quotation_id ? (
-                          <>
-                            <button className="button-subtle" onClick={() => saveQuotationEdit(row.quotation_id)} disabled={loading}>Save</button>
-                            <button className="button-subtle" onClick={() => setEditingQuotationId(null)} disabled={loading}>Cancel</button>
-                          </>
+                          <input
+                            className="input"
+                            value={editingQuotationIssueDate}
+                            onChange={(event) => setEditingQuotationIssueDate(event.target.value)}
+                            placeholder="YYYY-MM-DD"
+                          />
                         ) : (
-                          <button className="button-subtle" onClick={() => beginEditQuotation(row)} disabled={loading}>Edit</button>
+                          row.issue_date ?? "-"
                         )}
-                        <button className="button-subtle" onClick={() => deleteQuotation(row.quotation_id)} disabled={loading}>Delete</button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                      </td>
+                      <td className="px-2 py-2 text-slate-600">
+                        {editingQuotationId === row.quotation_id ? (
+                          <input
+                            className="input"
+                            value={editingQuotationPdfLink}
+                            onChange={(event) => setEditingQuotationPdfLink(event.target.value)}
+                            placeholder="quotations/registered/pdf_files/<supplier>/<file>.pdf"
+                          />
+                        ) : (
+                          row.pdf_link ?? "-"
+                        )}
+                      </td>
+                      <td className="px-2 py-2">{orderCountByQuotationId.get(row.quotation_id) ?? 0}</td>
+                      <td className="px-2 py-2">
+                        <div className="flex gap-2">
+                          <button className="button-subtle" onClick={() => openQuotationContext(row.quotation_id)} disabled={loading}>Details</button>
+                          {editingQuotationId === row.quotation_id ? (
+                            <>
+                              <button className="button-subtle" onClick={() => saveQuotationEdit(row.quotation_id)} disabled={loading}>Save</button>
+                              <button className="button-subtle" onClick={() => setEditingQuotationId(null)} disabled={loading}>Cancel</button>
+                            </>
+                          ) : (
+                            <button className="button-subtle" onClick={() => beginEditQuotation(row)} disabled={loading}>Edit</button>
+                          )}
+                          <button className="button-subtle" onClick={() => deleteQuotation(row.quotation_id)} disabled={loading}>Delete</button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>

@@ -2532,3 +2532,53 @@ def test_manual_project_id_preserved_when_rfq_link_removed(conn):
     assert int(service.get_order(conn, order_id)["project_id"]) == project["project_id"], (
         "Manually-assigned project_id must not be cleared when the RFQ link is removed"
     )
+
+def test_import_orders_deduplicates_missing_rows_for_same_item(conn, tmp_path: Path):
+    """When the same unregistered item_number appears on multiple CSV rows
+    (e.g. different expected_arrival dates), there should be only one
+    missing row per (supplier, item_number) pair."""
+    supplier = service.create_supplier(conn, "SupplierDedup")
+    rows = [
+        {
+            "item_number": "DEDUP-ITEM-001",
+            "quantity": "2",
+            "quotation_number": "Q-DEDUP-001",
+            "issue_date": "2026-03-01",
+            "order_date": "2026-03-09",
+            "expected_arrival": "2026-03-10",
+            "pdf_link": "",
+        },
+        {
+            "item_number": "DEDUP-ITEM-001",
+            "quantity": "3",
+            "quotation_number": "Q-DEDUP-001",
+            "issue_date": "2026-03-01",
+            "order_date": "2026-03-09",
+            "expected_arrival": "2026-03-18",
+            "pdf_link": "",
+        },
+        {
+            "item_number": "DEDUP-ITEM-001",
+            "quantity": "1",
+            "quotation_number": "Q-DEDUP-001",
+            "issue_date": "2026-03-01",
+            "order_date": "2026-03-09",
+            "expected_arrival": "2026-04-20",
+            "pdf_link": "",
+        },
+    ]
+
+    result = service.import_orders_from_rows(
+        conn,
+        supplier_id=int(supplier["supplier_id"]),
+        rows=rows,
+        source_name="Q-DEDUP-001.csv",
+        missing_output_dir=tmp_path,
+    )
+
+    assert result["status"] == "missing_items"
+    assert result["missing_count"] == 1, (
+        f"Expected 1 deduplicated missing row, got {result['missing_count']}"
+    )
+    assert len(result["rows"]) == 1
+    assert result["rows"][0]["item_number"] == "DEDUP-ITEM-001"

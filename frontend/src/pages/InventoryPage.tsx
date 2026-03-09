@@ -433,71 +433,71 @@ export function InventoryPage() {
           Single-item and multi-item movements are both handled here.
         </p>
         <div className="overflow-x-auto">
-          <table className="min-w-full text-sm no-sticky-header">
-              <thead>
-                <tr className="border-b border-slate-200 text-left text-slate-500">
-                  <th className="px-2 py-2">Item</th>
-                  <th className="px-2 py-2">Qty</th>
-                  <th className="px-2 py-2">From</th>
-                  <th className="px-2 py-2">To</th>
-                  <th className="px-2 py-2">Note</th>
-                  <th className="px-2 py-2">-</th>
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 text-left text-slate-500">
+                <th className="px-2 py-2">Item</th>
+                <th className="px-2 py-2">Qty</th>
+                <th className="px-2 py-2">From</th>
+                <th className="px-2 py-2">To</th>
+                <th className="px-2 py-2">Note</th>
+                <th className="px-2 py-2">-</th>
+              </tr>
+            </thead>
+            <tbody>
+              {bulkRows.map((row, idx) => (
+                <tr key={idx} className="border-b border-slate-100">
+                  <td className="px-2 py-2">
+                    <div className="min-w-[18rem]">
+                      <CatalogPicker
+                        allowedTypes={["item"]}
+                        onChange={(value) =>
+                          updateBulkRow(idx, { item_id: value ? String(value.entity_id) : "" })
+                        }
+                        placeholder="Search items"
+                        recentKey="movements-entry-item"
+                        value={row.item_id ? itemCatalogById.get(Number(row.item_id)) ?? null : null}
+                      />
+                    </div>
+                  </td>
+                  <td className="px-2 py-2">
+                    <input
+                      className="input"
+                      type="number"
+                      min={1}
+                      value={row.quantity}
+                      onChange={(e) => updateBulkRow(idx, { quantity: e.target.value })}
+                    />
+                  </td>
+                  <td className="px-2 py-2">
+                    <input
+                      className="input"
+                      value={row.from_location}
+                      onChange={(e) => updateBulkRow(idx, { from_location: e.target.value })}
+                    />
+                  </td>
+                  <td className="px-2 py-2">
+                    <input
+                      className="input"
+                      value={row.to_location}
+                      onChange={(e) => updateBulkRow(idx, { to_location: e.target.value })}
+                    />
+                  </td>
+                  <td className="px-2 py-2">
+                    <input
+                      className="input"
+                      value={row.note}
+                      onChange={(e) => updateBulkRow(idx, { note: e.target.value })}
+                    />
+                  </td>
+                  <td className="px-2 py-2">
+                    <button className="button-subtle" type="button" onClick={() => removeBulkRow(idx)}>
+                      Del
+                    </button>
+                  </td>
                 </tr>
-              </thead>
-              <tbody>
-                {bulkRows.map((row, idx) => (
-                  <tr key={idx} className="border-b border-slate-100">
-                    <td className="px-2 py-2">
-                      <div className="min-w-[18rem]">
-                        <CatalogPicker
-                          allowedTypes={["item"]}
-                          onChange={(value) =>
-                            updateBulkRow(idx, { item_id: value ? String(value.entity_id) : "" })
-                          }
-                          placeholder="Search items"
-                          recentKey="movements-entry-item"
-                          value={row.item_id ? itemCatalogById.get(Number(row.item_id)) ?? null : null}
-                        />
-                      </div>
-                    </td>
-                    <td className="px-2 py-2">
-                      <input
-                        className="input"
-                        type="number"
-                        min={1}
-                        value={row.quantity}
-                        onChange={(e) => updateBulkRow(idx, { quantity: e.target.value })}
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      <input
-                        className="input"
-                        value={row.from_location}
-                        onChange={(e) => updateBulkRow(idx, { from_location: e.target.value })}
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      <input
-                        className="input"
-                        value={row.to_location}
-                        onChange={(e) => updateBulkRow(idx, { to_location: e.target.value })}
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      <input
-                        className="input"
-                        value={row.note}
-                        onChange={(e) => updateBulkRow(idx, { note: e.target.value })}
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      <button className="button-subtle" type="button" onClick={() => removeBulkRow(idx)}>
-                        Del
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
+              ))}
+            </tbody>
           </table>
         </div>
         <button className="button" disabled={isSubmitting} onClick={submitBulk} type="button">

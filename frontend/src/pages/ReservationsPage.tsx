@@ -474,88 +474,88 @@ export function ReservationsPage() {
       </section>
 
       <section className="panel space-y-3 p-4">
-          <div className="flex items-center justify-between">
-            <h2 className="font-display text-lg font-semibold">Reservation Entry</h2>
-            <button
-              className="button-subtle"
-              onClick={() => setBulkRows((prev) => [...prev, blankRow()])}
-            >
-              Add Row
-            </button>
-          </div>
-          <p className="text-xs text-slate-500">
-            Single-item and multi-item reservations are both handled here.
-          </p>
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-sm no-sticky-header">
-              <thead>
-                <tr className="border-b border-slate-200 text-left text-slate-500">
-                  <th className="px-2 py-2">Item</th>
-                  <th className="px-2 py-2">Qty</th>
-                  <th className="px-2 py-2">Purpose</th>
-                  <th className="px-2 py-2">Deadline</th>
-                  <th className="px-2 py-2">Note</th>
-                  <th className="px-2 py-2">-</th>
-                </tr>
-              </thead>
-              <tbody>
-                {bulkRows.map((row, idx) => (
-                  <tr key={idx} className="border-b border-slate-100">
-                    <td className="px-2 py-2">
-                      <CatalogPicker
-                        allowedTypes={["item"]}
-                        onChange={(value) =>
-                          updateBulkRow(idx, { item_id: value ? String(value.entity_id) : "" })
-                        }
-                        placeholder="Search items"
-                        recentKey="reservations-entry-item"
-                        value={row.item_id ? itemCatalogById.get(Number(row.item_id)) ?? null : null}
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      <input
-                        className="input"
-                        type="number"
-                        min={1}
-                        value={row.quantity}
-                        onChange={(e) => updateBulkRow(idx, { quantity: e.target.value })}
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      <input
-                        className="input"
-                        value={row.purpose}
-                        onChange={(e) => updateBulkRow(idx, { purpose: e.target.value })}
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      <input
-                        className="input"
-                        type="date"
-                        value={row.deadline}
-                        onChange={(e) => updateBulkRow(idx, { deadline: e.target.value })}
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      <input
-                        className="input"
-                        value={row.note}
-                        onChange={(e) => updateBulkRow(idx, { note: e.target.value })}
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      <button className="button-subtle" onClick={() => removeBulkRow(idx)}>
-                        Del
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <button className="button" disabled={loading} onClick={createBulk}>
-            Submit Batch
+        <div className="flex items-center justify-between">
+          <h2 className="font-display text-lg font-semibold">Reservation Entry</h2>
+          <button
+            className="button-subtle"
+            onClick={() => setBulkRows((prev) => [...prev, blankRow()])}
+          >
+            Add Row
           </button>
+        </div>
+        <p className="text-xs text-slate-500">
+          Single-item and multi-item reservations are both handled here.
+        </p>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 text-left text-slate-500">
+                <th className="px-2 py-2">Item</th>
+                <th className="px-2 py-2">Qty</th>
+                <th className="px-2 py-2">Purpose</th>
+                <th className="px-2 py-2">Deadline</th>
+                <th className="px-2 py-2">Note</th>
+                <th className="px-2 py-2">-</th>
+              </tr>
+            </thead>
+            <tbody>
+              {bulkRows.map((row, idx) => (
+                <tr key={idx} className="border-b border-slate-100">
+                  <td className="px-2 py-2">
+                    <CatalogPicker
+                      allowedTypes={["item"]}
+                      onChange={(value) =>
+                        updateBulkRow(idx, { item_id: value ? String(value.entity_id) : "" })
+                      }
+                      placeholder="Search items"
+                      recentKey="reservations-entry-item"
+                      value={row.item_id ? itemCatalogById.get(Number(row.item_id)) ?? null : null}
+                    />
+                  </td>
+                  <td className="px-2 py-2">
+                    <input
+                      className="input"
+                      type="number"
+                      min={1}
+                      value={row.quantity}
+                      onChange={(e) => updateBulkRow(idx, { quantity: e.target.value })}
+                    />
+                  </td>
+                  <td className="px-2 py-2">
+                    <input
+                      className="input"
+                      value={row.purpose}
+                      onChange={(e) => updateBulkRow(idx, { purpose: e.target.value })}
+                    />
+                  </td>
+                  <td className="px-2 py-2">
+                    <input
+                      className="input"
+                      type="date"
+                      value={row.deadline}
+                      onChange={(e) => updateBulkRow(idx, { deadline: e.target.value })}
+                    />
+                  </td>
+                  <td className="px-2 py-2">
+                    <input
+                      className="input"
+                      value={row.note}
+                      onChange={(e) => updateBulkRow(idx, { note: e.target.value })}
+                    />
+                  </td>
+                  <td className="px-2 py-2">
+                    <button className="button-subtle" onClick={() => removeBulkRow(idx)}>
+                      Del
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <button className="button" disabled={loading} onClick={createBulk}>
+          Submit Batch
+        </button>
       </section>
 
       <section className="panel p-4">
