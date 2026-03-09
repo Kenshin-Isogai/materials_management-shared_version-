@@ -98,6 +98,7 @@ export type Transaction = {
 export type MissingItemResolverRow = {
   row?: number;
   item_number: string;
+  manufacturer_name?: string;
   supplier: string;
   resolution_type?: "new_item" | "alias";
   category?: string;

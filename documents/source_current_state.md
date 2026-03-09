@@ -222,13 +222,14 @@ Last updated: 2026-03-09 (JST)
 - Manual and unregistered batch order imports reject duplicate quotation re-import for the same supplier when existing orders already reference that quotation.
 - Missing-item batch registration now reads unregistered CSVs from `imports/items/unregistered/` and moves successfully processed files into `imports/items/registered/<YYYY-MM>/`; if a per-file failure occurs after the move but before the savepoint is released, the CSV is restored to the unregistered location and that file's DB work is rolled back.
 - After a fully successful batch registration, registered item CSVs in each `imports/items/registered/<YYYY-MM>/` subfolder are automatically consolidated into larger files named `items_YYYY-MM_NNN.csv` (e.g., `items_2026-03_001.csv`, max 5,000 rows each). Files matching the consolidated pattern are merged into subsequent passes; replacements are staged and swapped atomically before the original unconsolidated files are deleted, and header-only inputs are removed without producing an empty archive. Consolidated CSVs are read-only import-history archives (UI edits only affect the database).
-- `missing_items_registration.csv` uses `supplier` (not `manufacturer`) because rows are resolved in supplier alias scope; `new_item` rows may specify `manufacturer_name` (or `manufacturer`) and default to `UNKNOWN` when blank.
+- `missing_items_registration.csv` uses `supplier` for alias-scope resolution, but `new_item` rows may also specify `manufacturer_name` (or `manufacturer`) and default to `UNKNOWN` when blank; the Items-page missing-order resolver now exposes both manufacturer and alias-supplier columns so it matches Bulk Item Entry for new-item registration.
 - File-upload missing-item registration endpoint (`POST /api/register-missing`) accepts optional multipart form field `skip_unresolved=true` to skip unresolved `new_item` rows instead of failing the whole upload.
 - JSON missing-item registration endpoint (`/api/register-missing/rows`) accepts both `manufacturer_name` and `manufacturer` fields for `new_item` rows.
 - Missing-item registration payloads now also accept legacy `row_type` (`item`/`alias`) as an alias of `resolution_type` (`new_item`/`alias`); `item` is normalized to `new_item`.
 - Supplier resolution for order import and missing-item registration now falls back to case-insensitive lookup before creating a new supplier, preventing alias-scope mismatches from supplier name casing differences.
 - Order import alias resolution now falls back to case-insensitive `ordered_item_number` matching within a supplier when exact alias text does not match.
 - Order import alias resolution also normalizes item-number variants (NFKC, dash variants like `-`/`−`, and whitespace removal) before final alias lookup to prevent false missing-items caused by visually similar SKU text.
+- Backend test fixtures now isolate workspace import/export roots under per-test temporary directories, preventing API/order-import test runs from creating stray CSV artifacts inside the repository `imports/items/unregistered/` folder.
 
 ## 6. Quality State
 

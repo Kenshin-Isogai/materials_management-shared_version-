@@ -18,6 +18,8 @@
   - `consolidate_registered_item_csvs()` now stages replacement files and only swaps them into place after all chunk writes succeed, preserving existing consolidated archives when a write fails mid-run.
   - `register_unregistered_item_csvs()` now keeps each per-file savepoint open until report construction succeeds, so a post-move failure restores the CSV to `imports/items/unregistered/` and rolls back that file's DB changes.
   - `consolidate_registered_item_csvs()` now removes header-only registered CSV inputs without creating empty `items_YYYY-MM_NNN.csv` archives.
+- Backend test fixtures now redirect workspace import/export roots into per-test temporary directories, preventing order-import/API test runs from contaminating `imports/items/unregistered/` with artifact CSVs.
+- Items page `Resolve Missing Items From Orders` now shows a manufacturer column in addition to alias supplier context, matching Bulk Item Entry for new-item registration while keeping alias-supplier edits available.
 
 ## 2026-03-11
 

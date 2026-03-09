@@ -182,6 +182,7 @@ type MissingResolverRow = {
   row?: number;
   supplier: string;
   item_number: string;
+  manufacturer_name: string;
   resolution_type: "new_item" | "alias";
   category: string;
   url: string;
@@ -282,6 +283,7 @@ function toMissingResolverRows(rows: MissingItemResolverRow[] | undefined): Miss
         row: row.row,
         supplier: String(row.supplier ?? "").trim(),
         item_number: String(row.item_number ?? "").trim(),
+        manufacturer_name: String(row.manufacturer_name ?? "UNKNOWN").trim() || "UNKNOWN",
         resolution_type: resolutionType,
         category: String(row.category ?? ""),
         url: String(row.url ?? ""),
@@ -292,7 +294,7 @@ function toMissingResolverRows(rows: MissingItemResolverRow[] | undefined): Miss
     })
     .filter((row) => {
       if (!row.supplier || !row.item_number) return false;
-      const key = `${row.supplier.toLowerCase()}::${row.item_number.toLowerCase()}`;
+      const key = `${row.supplier.toLowerCase()}::${row.manufacturer_name.toLowerCase()}::${row.item_number.toLowerCase()}`;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
@@ -923,6 +925,8 @@ export function ItemsPage() {
       const payloadRows = missingRows.map((row) => ({
         item_number: row.item_number.trim(),
         supplier: row.supplier.trim(),
+        manufacturer_name:
+          row.resolution_type === "alias" ? null : row.manufacturer_name.trim() || "UNKNOWN",
         resolution_type: row.resolution_type,
         category: row.category.trim() || null,
         url: row.url.trim() || null,
@@ -1155,12 +1159,13 @@ export function ItemsPage() {
           </p>
 
           <div className="mt-3 overflow-x-auto">
-            <table className="min-w-[1400px] text-sm">
+            <table className="min-w-[1520px] text-sm">
               <thead>
                 <tr className="border-b border-slate-200 text-left text-slate-500">
                   <th className="px-2 py-2">CSV Row</th>
-                  <th className="px-2 py-2">Supplier</th>
                   <th className="px-2 py-2">Ordered Item</th>
+                  <th className="px-2 py-2">Manufacturer</th>
+                  <th className="px-2 py-2">Alias Supplier</th>
                   <th className="px-2 py-2">Resolution</th>
                   <th className="px-2 py-2">Category</th>
                   <th className="px-2 py-2">URL</th>
@@ -1172,20 +1177,31 @@ export function ItemsPage() {
               </thead>
               <tbody>
                 {missingRows.map((row, idx) => (
-                  <tr key={`${row.supplier}-${row.item_number}-${idx}`} className="border-b border-slate-100">
+                  <tr
+                    key={`${row.supplier}-${row.manufacturer_name}-${row.item_number}-${idx}`}
+                    className="border-b border-slate-100"
+                  >
                     <td className="px-2 py-2">{row.row ?? "-"}</td>
-                    <td className="px-2 py-2">
-                      <input
-                        className="input"
-                        value={row.supplier}
-                        onChange={(e) => updateMissingRow(idx, { supplier: e.target.value })}
-                      />
-                    </td>
                     <td className="px-2 py-2">
                       <input
                         className="input"
                         value={row.item_number}
                         onChange={(e) => updateMissingRow(idx, { item_number: e.target.value })}
+                      />
+                    </td>
+                    <td className="px-2 py-2">
+                      <input
+                        className="input"
+                        value={row.manufacturer_name}
+                        onChange={(e) => updateMissingRow(idx, { manufacturer_name: e.target.value })}
+                        disabled={row.resolution_type === "alias"}
+                      />
+                    </td>
+                    <td className="px-2 py-2">
+                      <input
+                        className="input"
+                        value={row.supplier}
+                        onChange={(e) => updateMissingRow(idx, { supplier: e.target.value })}
                       />
                     </td>
                     <td className="px-2 py-2">
