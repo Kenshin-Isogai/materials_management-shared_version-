@@ -1,3 +1,16 @@
+## 2026-03-09
+
+### Fixed
+
+- Restored the CLI pending-item batch registration command after the service rename.
+  - `backend/main.py register-pending-items` now calls `register_pending_item_csvs(...)`.
+  - The legacy command name `register-unregistered-missing` remains as a compatibility alias while using the new pending/processed root arguments internally.
+- Updated the root-level debug scripts to exercise the current pending-item workflow and current quotation root layout instead of removed helpers/paths.
+
+### Docs
+
+- Updated `README.md`, `documents/technical_documentation.md`, and `documents/source_current_state.md` so the documented missing-item batch workflow points at `imports/items/pending/` and `imports/items/processed/<YYYY-MM>/`.
+
 ## 2026-03-08
 
 ### Fixed

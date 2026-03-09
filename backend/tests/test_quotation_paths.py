@@ -92,7 +92,7 @@ def test_resolve_pdf_link_with_typoed_workspace_relative_path(tmp_path: Path):
     assert warnings == []
 
 
-def test_iter_unregistered_order_csvs_skips_missing_item_registers_folder(tmp_path: Path):
+def test_iter_unregistered_order_csvs_skips_missing_item_registration_files(tmp_path: Path):
     roots = build_roots(
         unregistered_root=tmp_path / "quotations" / "unregistered",
         registered_root=tmp_path / "quotations" / "registered",
@@ -102,7 +102,7 @@ def test_iter_unregistered_order_csvs_skips_missing_item_registers_folder(tmp_pa
     normal_csv.parent.mkdir(parents=True, exist_ok=True)
     normal_csv.write_text("item_number,quantity\nA,1\n", encoding="utf-8")
 
-    missing_register = roots.unregistered_missing_root / "batch_missing_items_registration_20260302_120000.csv"
+    missing_register = roots.unregistered_csv_root / "SupplierA" / "SupplierA__Q-001_missing_items_registration.csv"
     missing_register.parent.mkdir(parents=True, exist_ok=True)
     missing_register.write_text("item_number,supplier\nA,SupplierA\n", encoding="utf-8")
 

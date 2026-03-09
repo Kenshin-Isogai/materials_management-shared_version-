@@ -327,10 +327,10 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 
 - Manual order import accepts only canonical registered PDF links or filename-only values.
 - Unregistered batch import resolves/moves CSV and PDF files and rewrites links to canonical workspace-relative paths.
-- Missing items discovered during unregistered batch import are aggregated into a single register CSV per batch run under `quotations/unregistered/missing_item_registers/` (instead of per-quotation output beside source CSVs).
+- Missing items discovered during unregistered batch import are aggregated into a single register CSV per batch run under `imports/items/pending/` (instead of per-quotation output beside source CSVs).
 - Consolidated missing-item rows are de-duplicated by `(supplier, manufacturer_name, item_number)` so repeated unresolved rows across quotations are emitted once per batch register CSV.
 - Batch consolidation uses collision-safe temporary per-file register naming (supplier-prefixed) and deletes temporary files only after consolidated-register write succeeds.
-- Consolidated register files may include rows from multiple suppliers; archive move in missing-item registration uses `registered/csv_files/UNKNOWN/` while preserving row-level supplier columns.
+- Consolidated register files may include rows from multiple suppliers; successful pending-item registration moves the processed CSV into `imports/items/processed/<YYYY-MM>/` while preserving row-level supplier columns.
 - In `missing_items_registration.csv`, `supplier` means the supplier alias namespace for ordered SKU resolution. `new_item` rows may optionally provide `manufacturer_name` (or `manufacturer`); blank values default to `UNKNOWN`.
 - Registration inputs accept both `resolution_type` (`new_item`/`alias`) and legacy `row_type` (`item`/`alias`) to avoid mixed-template confusion; `row_type=item` is normalized to `resolution_type=new_item`.
 - Content/file-based missing-item registration must preserve the same `skip_unresolved` behavior as path-based batch registration so API upload, CLI, and batch retry flows stay aligned.
@@ -343,7 +343,8 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
   - `quotations/unregistered/pdf_files/<supplier>/`
   - `quotations/registered/csv_files/<supplier>/`
   - `quotations/registered/pdf_files/<supplier>/`
-  - `quotations/unregistered/missing_item_registers/`
+  - `imports/items/pending/`
+  - `imports/items/processed/<YYYY-MM>/`
 
 ### 5) Reservation partial-actions policy
 

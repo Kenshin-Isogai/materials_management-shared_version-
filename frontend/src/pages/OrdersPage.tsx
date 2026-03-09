@@ -774,33 +774,7 @@ export function OrdersPage() {
     }
   }
 
-  async function runRegisterUnregisteredMissing() {
-    setLoading(true);
-    setMessage("");
-    setBatchMissingReports([]);
-    setBatchErrorReports([]);
-    setBatchWarnings([]);
-    setBatchNormalizations([]);
-    try {
-      const result = await apiSend<RegisterBatchResult>("/orders/register-unregistered-missing", {
-        method: "POST",
-        body: JSON.stringify({
-          unregistered_root: unregisteredRoot || null,
-          registered_root: registeredRoot || null,
-          continue_on_error: true
-        })
-      });
-      setBatchWarnings(uniqueWarnings(result.warnings ?? []));
-      setBatchNormalizations(uniqueNormalizations(result.normalizations ?? []));
-      setBatchErrorReports(toBatchErrorReports("register", result.files));
-      setMessage(
-        `Missing registration batch: status=${result.status}, processed=${result.processed}, succeeded=${result.succeeded}, failed=${result.failed}`
-      );
-      await Promise.all([mutateOrders(), mutateQuotations()]);
-    } finally {
-      setLoading(false);
-    }
-  }
+
 
   async function runImportUnregisteredOrders() {
     setLoading(true);
@@ -842,14 +816,6 @@ export function OrdersPage() {
     setBatchWarnings([]);
     setBatchNormalizations([]);
     try {
-      const registerResult = await apiSend<RegisterBatchResult>("/orders/register-unregistered-missing", {
-        method: "POST",
-        body: JSON.stringify({
-          unregistered_root: null,
-          registered_root: null,
-          continue_on_error: true
-        })
-      });
       const importResult = await apiSend<ImportBatchResult>("/orders/import-unregistered", {
         method: "POST",
         body: JSON.stringify({
@@ -862,23 +828,14 @@ export function OrdersPage() {
       setBatchMissingReports(
         (importResult.files ?? []).filter((entry) => entry.status === "missing_items")
       );
-      setBatchErrorReports([
-        ...toBatchErrorReports("register", registerResult.files),
-        ...toBatchErrorReports("import", importResult.files),
-      ]);
+      setBatchErrorReports(toBatchErrorReports("import", importResult.files));
 
-      const mergedWarnings = uniqueWarnings([
-        ...(registerResult.warnings ?? []),
-        ...(importResult.warnings ?? [])
-      ]);
-      const mergedNormalizations = uniqueNormalizations([
-        ...(registerResult.normalizations ?? []),
-        ...(importResult.normalizations ?? [])
-      ]);
+      const mergedWarnings = uniqueWarnings(importResult.warnings ?? []);
+      const mergedNormalizations = uniqueNormalizations(importResult.normalizations ?? []);
       setBatchWarnings(mergedWarnings);
       setBatchNormalizations(mergedNormalizations);
       setMessage(
-        `Unregistered batch complete: register(status=${registerResult.status}, processed=${registerResult.processed}, succeeded=${registerResult.succeeded}, failed=${registerResult.failed}) + import(status=${importResult.status}, processed=${importResult.processed}, succeeded=${importResult.succeeded}, missing_items=${importResult.missing_items}, failed=${importResult.failed})`
+        `Unregistered batch complete: import(status=${importResult.status}, processed=${importResult.processed}, succeeded=${importResult.succeeded}, missing_items=${importResult.missing_items}, failed=${importResult.failed})`
       );
       await Promise.all([mutateOrders(), mutateQuotations()]);
     } finally {
@@ -1280,9 +1237,6 @@ export function OrdersPage() {
               />
             </div>
             <div className="flex flex-wrap gap-2">
-              <button className="button-subtle" onClick={runRegisterUnregisteredMissing} disabled={loading}>
-                Register Missing CSVs
-              </button>
               <button className="button-subtle" onClick={runImportUnregisteredOrders} disabled={loading}>
                 Import Unregistered Orders
               </button>

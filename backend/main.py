@@ -57,13 +57,19 @@ def _build_parser() -> argparse.ArgumentParser:
     miss = sub.add_parser("register-missing", help="Register missing items CSV")
     miss.add_argument("--csv-path", required=True)
 
-    unreg_missing = sub.add_parser(
-        "register-unregistered-missing",
-        help="Batch register *_missing_items_registration.csv under unregistered root",
+    pending_items = sub.add_parser(
+        "register-pending-items",
+        aliases=["register-unregistered-missing"],
+        help="Batch register pending item CSV files under imports/items/pending",
     )
-    unreg_missing.add_argument("--unregistered-root", default=None)
-    unreg_missing.add_argument("--registered-root", default=None)
-    unreg_missing.add_argument("--continue-on-error", action="store_true")
+    pending_items.add_argument("--items-pending-root", "--unregistered-root", dest="items_pending_root", default=None)
+    pending_items.add_argument(
+        "--items-processed-root",
+        "--registered-root",
+        dest="items_processed_root",
+        default=None,
+    )
+    pending_items.add_argument("--continue-on-error", action="store_true")
 
     unreg_orders = sub.add_parser(
         "import-unregistered-orders",
@@ -227,13 +233,13 @@ def main(argv: list[str] | None = None) -> int:
             lambda conn: service.register_missing_items_from_csv_path(conn, args.csv_path),
         )
 
-    if args.command == "register-unregistered-missing":
+    if args.command in {"register-pending-items", "register-unregistered-missing"}:
         return _run_with_db(
             args,
-            lambda conn: service.register_unregistered_missing_items_csvs(
+            lambda conn: service.register_pending_item_csvs(
                 conn,
-                unregistered_root=args.unregistered_root,
-                registered_root=args.registered_root,
+                items_pending_root=args.items_pending_root,
+                items_processed_root=args.items_processed_root,
                 continue_on_error=args.continue_on_error,
             ),
         )

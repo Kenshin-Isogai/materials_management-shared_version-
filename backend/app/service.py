@@ -14,14 +14,17 @@ import sqlite3
 from typing import Any, Iterable
 from uuid import uuid4
 
-from .config import DEFAULT_EXPORTS_DIR
+from .config import (
+    DEFAULT_EXPORTS_DIR,
+    ITEMS_IMPORT_PENDING_ROOT,
+    ITEMS_IMPORT_PROCESSED_ROOT,
+)
 from .errors import AppError
 from .quotation_paths import (
     QuotationRoots,
     build_roots,
     ensure_roots,
     is_legacy_supplier_dir,
-    iter_unregistered_missing_csvs,
     iter_unregistered_order_csvs,
     normalize_pdf_link,
     registered_csv_supplier_dir,
@@ -4728,7 +4731,7 @@ def _iter_order_csv_files(roots: QuotationRoots) -> list[Path]:
             continue
         for csv_file in sorted(base.rglob("*.csv"), key=lambda p: str(p).lower()):
             try:
-                if csv_file.resolve().is_relative_to(roots.unregistered_missing_root.resolve()):
+                if csv_file.resolve().is_relative_to(ITEMS_IMPORT_PENDING_ROOT.resolve()):
                     continue
             except Exception:
                 pass
@@ -5909,20 +5912,20 @@ def import_orders_from_csv_path(
     )
 
 
-def register_unregistered_missing_items_csvs(
+def register_pending_item_csvs(
     conn: sqlite3.Connection,
     *,
-    unregistered_root: str | Path | None = None,
-    registered_root: str | Path | None = None,
+    items_pending_root: str | Path | None = None,
+    items_processed_root: str | Path | None = None,
     continue_on_error: bool = False,
 ) -> dict[str, Any]:
-    roots = build_roots(
-        unregistered_root=unregistered_root,
-        registered_root=registered_root,
-    )
-    ensure_roots(roots)
+    pending_root = Path(items_pending_root) if items_pending_root else ITEMS_IMPORT_PENDING_ROOT
+    processed_root = Path(items_processed_root) if items_processed_root else ITEMS_IMPORT_PROCESSED_ROOT
+    
+    pending_root.mkdir(parents=True, exist_ok=True)
+    processed_root.mkdir(parents=True, exist_ok=True)
 
-    files = iter_unregistered_missing_csvs(roots)
+    files = sorted(pending_root.rglob("*.csv"))
     report: list[dict[str, Any]] = []
     processed = 0
     succeeded = 0
@@ -5935,18 +5938,6 @@ def register_unregistered_missing_items_csvs(
         supplier_name = "UNKNOWN"
         file_warnings: list[str] = []
         try:
-            if csv_path.resolve().is_relative_to(roots.unregistered_missing_root.resolve()):
-                supplier_name = "UNKNOWN"
-                supplier_warnings = [
-                    "Consolidated missing-item register detected; registered archive folder uses UNKNOWN."
-                ]
-            else:
-                supplier_name, supplier_warnings = _supplier_name_from_unregistered_path(csv_path, roots)
-            for warning in supplier_warnings:
-                if warning not in file_warnings:
-                    file_warnings.append(warning)
-                if warning not in warnings:
-                    warnings.append(warning)
             savepoint = f"sp_register_missing_{uuid4().hex}"
             conn.execute(f"SAVEPOINT {savepoint}")
             try:
@@ -5958,9 +5949,11 @@ def register_unregistered_missing_items_csvs(
                     status_text = "skipped_unresolved_batch_file"
                     moved_to = None
                 else:
+                    month_dir = processed_root / today_jst()[:7]
+                    month_dir.mkdir(parents=True, exist_ok=True)
                     moved_to = _move_file_preserve_name(
                         csv_path,
-                        registered_csv_supplier_dir(roots, supplier_name),
+                        month_dir,
                     )
                     status_text = "ok"
 
@@ -6015,7 +6008,9 @@ def _import_unregistered_order_csv_file(
     csv_path: Path,
     supplier_name: str,
     default_order_date: str | None = None,
+    items_pending_root: Path | None = None,
 ) -> dict[str, Any]:
+    pending_root = items_pending_root if items_pending_root else ITEMS_IMPORT_PENDING_ROOT
     rows = _load_csv_rows_from_path(csv_path)
     result = import_orders_from_rows(
         conn,
@@ -6023,7 +6018,7 @@ def _import_unregistered_order_csv_file(
         rows=rows,
         default_order_date=default_order_date,
         source_name=f"{_safe_filename_component(supplier_name)}__{csv_path.name}",
-        missing_output_dir=roots.unregistered_missing_root,
+        missing_output_dir=pending_root,
         allow_noncanonical_pdf_link=True,
     )
     file_warnings: list[str] = []
@@ -6182,9 +6177,11 @@ def import_unregistered_order_csvs(
     *,
     unregistered_root: str | Path | None = None,
     registered_root: str | Path | None = None,
+    items_pending_root: str | Path | None = None,
     default_order_date: str | None = None,
     continue_on_error: bool = False,
 ) -> dict[str, Any]:
+    pending_root = Path(items_pending_root) if items_pending_root else ITEMS_IMPORT_PENDING_ROOT
     roots = build_roots(
         unregistered_root=unregistered_root,
         registered_root=registered_root,
@@ -6219,6 +6216,7 @@ def import_unregistered_order_csvs(
                     csv_path=csv_path,
                     supplier_name=supplier_name,
                     default_order_date=default_order_date,
+                    items_pending_root=pending_root,
                 )
                 conn.execute(f"RELEASE {savepoint}")
             except Exception:
@@ -6266,7 +6264,7 @@ def import_unregistered_order_csvs(
     if missing_reports:
         batch_missing_csv_path = _write_batch_missing_items_register(
             missing_reports,
-            output_dir=roots.unregistered_missing_root,
+            output_dir=pending_root,
         )
         for item in missing_reports:
             per_file_path = item.get("missing_csv_path")

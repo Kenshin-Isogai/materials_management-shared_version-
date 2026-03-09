@@ -86,6 +86,7 @@ Example CLI commands:
 ```powershell
 uv run main.py import-orders --supplier "Thorlabs" --csv-path ".\sample\order_import.csv"
 uv run main.py import-unregistered-orders --continue-on-error
+uv run main.py register-pending-items --continue-on-error
 uv run main.py bom-analyze --csv-path ".\sample\bom.csv" --target-date 2026-04-01
 uv run main.py purchase-candidates-from-project --project-id 1 --target-date 2026-04-01
 uv run main.py move --item-id 1 --quantity 5 --from-location STOCK --to-location BENCH_A
@@ -98,9 +99,11 @@ uv run main.py reserve --item-id 1 --quantity 2 --purpose "Experiment A"
 - Quotations roots:
   - `quotations/unregistered/csv_files/<supplier>/`
   - `quotations/unregistered/pdf_files/<supplier>/`
-  - `quotations/unregistered/missing_item_registers/` (single consolidated missing-item CSV per batch run)
   - `quotations/registered/csv_files/<supplier>/`
   - `quotations/registered/pdf_files/<supplier>/`
+- Pending item register roots:
+  - `imports/items/pending/` (single consolidated missing-item CSV per batch run)
+  - `imports/items/processed/<YYYY-MM>/`
 
 ## Testing
 

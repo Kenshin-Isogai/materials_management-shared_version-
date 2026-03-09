@@ -110,6 +110,10 @@ class UnregisteredBatchRequest(BaseModel):
     continue_on_error: bool = False
 
 
+class PendingItemBatchRequest(BaseModel):
+    continue_on_error: bool = False
+
+
 class UnregisteredFileRetryRequest(BaseModel):
     csv_path: str = Field(min_length=1)
     unregistered_root: str | None = None

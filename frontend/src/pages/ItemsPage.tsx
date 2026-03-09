@@ -332,6 +332,8 @@ export function ItemsPage() {
   const [metadataMessage, setMetadataMessage] = useState("");
   const [metadataResult, setMetadataResult] = useState<MetadataBulkResult | null>(null);
   const [metadataBusy, setMetadataBusy] = useState(false);
+  const [registerPendingMessage, setRegisterPendingMessage] = useState("");
+  const [registerPendingBusy, setRegisterPendingBusy] = useState(false);
   const [sortKey, setSortKey] = useState<"item_id" | "item_number" | "manufacturer_name" | "category" | "url">("item_id");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [isItemListExpanded, setIsItemListExpanded] = useState(true);
@@ -685,6 +687,31 @@ export function ItemsPage() {
       setCsvMessage(formatActionError("Import failed", error));
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function runRegisterPending() {
+    setRegisterPendingBusy(true);
+    setRegisterPendingMessage("");
+    try {
+      const result = await apiSend<{
+        status: string;
+        processed: number;
+        succeeded: number;
+        failed: number;
+      }>("/items/register-pending-batch", {
+        method: "POST",
+        body: JSON.stringify({ continue_on_error: true })
+      });
+      setRegisterPendingMessage(
+        `Batch registration: status=${result.status}, processed=${result.processed}, succeeded=${result.succeeded}, failed=${result.failed}`
+      );
+      await mutate();
+      await mutateImportJobs();
+    } catch (error) {
+      setRegisterPendingMessage(formatActionError("Batch registration failed", error));
+    } finally {
+      setRegisterPendingBusy(false);
     }
   }
 
@@ -1639,6 +1666,24 @@ export function ItemsPage() {
             </table>
           </div>
         )}
+      </section>
+
+      <section className="panel p-4">
+        <h2 className="font-display text-lg font-semibold">Process Pending CSVs</h2>
+        <p className="mt-1 text-sm text-slate-600">
+          Process system-generated missing item CSVs in the pending imports folder.
+        </p>
+        <div className="mt-3 flex gap-3">
+          <button
+            className="button"
+            type="button"
+            disabled={registerPendingBusy || submitting}
+            onClick={runRegisterPending}
+          >
+            Run Pending Batch
+          </button>
+        </div>
+        {registerPendingMessage && <p className="mt-3 text-sm text-signal">{registerPendingMessage}</p>}
       </section>
 
       <section className="panel p-4">

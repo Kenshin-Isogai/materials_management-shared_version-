@@ -371,10 +371,12 @@ def test_import_unregistered_orders_missing_items_keeps_source_files(conn, tmp_p
             }
         )
 
+    items_pending_root = tmp_path / "imports" / "items" / "pending"
     result = service.import_unregistered_order_csvs(
         conn,
         unregistered_root=unregistered_root,
         registered_root=registered_root,
+        items_pending_root=items_pending_root,
     )
     conn.commit()
 
@@ -390,7 +392,7 @@ def test_import_unregistered_orders_missing_items_keeps_source_files(conn, tmp_p
     assert register_path is not None
     register_file = Path(register_path)
     assert register_file.exists()
-    assert register_file.parent == (unregistered_root / "missing_item_registers")
+    assert register_file.parent == items_pending_root.resolve()
 
     with register_file.open("r", encoding="utf-8", newline="") as fp:
         reader = csv.DictReader(fp)
@@ -786,13 +788,13 @@ def test_import_orders_resolves_alias_with_dash_variant_item_number(conn):
     assert int(order["ordered_quantity"]) == 2
     assert int(order["order_amount"]) == 20
 
-def test_register_unregistered_missing_items_reads_consolidated_register_folder(conn, tmp_path: Path):
-    unregistered_root = tmp_path / "quotations" / "unregistered"
-    registered_root = tmp_path / "quotations" / "registered"
-    register_dir = unregistered_root / "missing_item_registers"
-    register_dir.mkdir(parents=True, exist_ok=True)
-
-    register_csv = register_dir / "batch_missing_items_registration_20260302_120000.csv"
+def test_register_pending_item_csvs_reads_from_pending_root(conn, tmp_path: Path):
+    items_pending_root = tmp_path / "imports" / "items" / "pending"
+    items_processed_root = tmp_path / "imports" / "items" / "processed"
+    items_pending_root.mkdir(parents=True, exist_ok=True)
+    items_processed_root.mkdir(parents=True, exist_ok=True)
+    
+    register_csv = items_pending_root / "batch_missing_items_registration_20260302_120000.csv"
     with register_csv.open("w", encoding="utf-8", newline="") as fp:
         writer = csv.DictWriter(
             fp,
@@ -825,17 +827,18 @@ def test_register_unregistered_missing_items_reads_consolidated_register_folder(
             }
         )
 
-    result = service.register_unregistered_missing_items_csvs(
+    result = service.register_pending_item_csvs(
         conn,
-        unregistered_root=unregistered_root,
-        registered_root=registered_root,
+        items_pending_root=items_pending_root,
+        items_processed_root=items_processed_root,
     )
     conn.commit()
 
     assert result["status"] == "ok"
     assert result["succeeded"] == 1
     assert not register_csv.exists()
-    moved = registered_root / "csv_files" / "UNKNOWN" / register_csv.name
+    from app.utils import today_jst
+    moved = items_processed_root / today_jst()[:7] / register_csv.name
     assert moved.exists()
 
     row = conn.execute(
@@ -1011,14 +1014,16 @@ def test_import_unregistered_orders_keeps_per_file_missing_csv_when_batch_regist
 
     monkeypatch.setattr(service, "_write_batch_missing_items_register", _raise_write)
 
+    items_pending_root = tmp_path / "imports" / "items" / "pending"
     with pytest.raises(OSError, match="simulated batch write failure"):
         service.import_unregistered_order_csvs(
             conn,
             unregistered_root=unregistered_root,
             registered_root=registered_root,
+            items_pending_root=items_pending_root,
         )
 
-    temp_register = unregistered_root / "missing_item_registers" / "SupplierFail__Q-FAIL-MISSING_missing_items_registration.csv"
+    temp_register = items_pending_root / "SupplierFail__Q-FAIL-MISSING_missing_items_registration.csv"
     assert temp_register.exists()
 
 def test_update_and_delete_quotation_syncs_csv_and_db(conn, tmp_path: Path, monkeypatch):

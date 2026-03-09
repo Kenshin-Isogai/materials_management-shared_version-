@@ -33,6 +33,7 @@ from .schemas import (
     OrderMergeRequest,
     OrderUpdateRequest,
     PartialArrivalRequest,
+    PendingItemBatchRequest,
     PurchaseCandidateUpdate,
     PurchaseCandidatesFromBomRequest,
     PurchaseCandidatesFromProjectRequest,
@@ -315,6 +316,15 @@ def create_app(db_path: str | None = None) -> FastAPI:
         conn.commit()
         return ok({"deleted": True})
 
+    @app.post("/api/items/register-pending-batch")
+    def post_register_pending_item_csvs(body: PendingItemBatchRequest, conn= db):
+        result = service.register_pending_item_csvs(
+            conn,
+            continue_on_error=body.continue_on_error,
+        )
+        conn.commit()
+        return ok(result)
+
     @app.get("/api/items/{item_id}/history")
     def get_item_history(item_id: int, conn= db):
         return ok(service.list_item_history(conn, item_id))
@@ -541,17 +551,6 @@ def create_app(db_path: str | None = None) -> FastAPI:
             source_name=file.filename or "order_import.csv",
             row_overrides=_parse_optional_json_form(row_overrides, "row_overrides"),
             alias_saves=_parse_optional_json_form(alias_saves, "alias_saves"),
-        )
-        conn.commit()
-        return ok(result)
-
-    @app.post("/api/orders/register-unregistered-missing")
-    def post_register_unregistered_missing(body: UnregisteredBatchRequest, conn= db):
-        result = service.register_unregistered_missing_items_csvs(
-            conn,
-            unregistered_root=body.unregistered_root,
-            registered_root=body.registered_root,
-            continue_on_error=body.continue_on_error,
         )
         conn.commit()
         return ok(result)

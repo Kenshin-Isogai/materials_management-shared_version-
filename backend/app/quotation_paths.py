@@ -29,7 +29,6 @@ class QuotationRoots:
     unregistered_pdf_root: Path
     registered_csv_root: Path
     registered_pdf_root: Path
-    unregistered_missing_root: Path
 
 
 def build_roots(
@@ -46,7 +45,6 @@ def build_roots(
         unregistered_pdf_root=unreg / PDF_FILES_DIR,
         registered_csv_root=reg / CSV_FILES_DIR,
         registered_pdf_root=reg / PDF_FILES_DIR,
-        unregistered_missing_root=unreg / "missing_item_registers",
     )
 
 
@@ -56,7 +54,6 @@ def ensure_roots(roots: QuotationRoots) -> None:
         roots.registered_root,
         roots.unregistered_csv_root,
         roots.unregistered_pdf_root,
-        roots.unregistered_missing_root,
         roots.registered_csv_root,
         roots.registered_pdf_root,
     ):
@@ -163,21 +160,11 @@ def validate_retry_unregistered_csv_path(csv_path: str | Path, *, roots: Quotati
     return resolved
 
 
-def iter_unregistered_missing_csvs(roots: QuotationRoots) -> list[Path]:
-    paths = {
-        *roots.unregistered_csv_root.rglob("*_missing_items_registration.csv"),
-        *roots.unregistered_missing_root.rglob("*_missing_items_registration*.csv"),
-    }
-    return sorted(paths)
-
-
 def iter_unregistered_order_csvs(roots: QuotationRoots) -> list[Path]:
-    missing_root = roots.unregistered_missing_root.resolve()
     return sorted(
         [
             p
             for p in roots.unregistered_csv_root.rglob("*.csv")
-            if not p.resolve().is_relative_to(missing_root)
             if not p.name.endswith("_missing_items_registration.csv")
         ]
     )

@@ -1,6 +1,6 @@
 # Source Current State
 
-Last updated: 2026-03-08 (JST)
+Last updated: 2026-03-09 (JST)
 
 ## 1. System Snapshot
 
@@ -207,7 +207,7 @@ Last updated: 2026-03-08 (JST)
   - `quotations/registered/csv_files/<supplier>/`
   - `quotations/registered/pdf_files/<supplier>/`
 - Batch import functions normalize legacy/typo paths, move files safely, and emit warnings for unresolved paths.
-- Unregistered batch order import writes missing-item rows into one consolidated register CSV per run under `quotations/unregistered/missing_item_registers/`; source CSV/PDF files remain in place for unresolved quotations.
+- Unregistered batch order import writes missing-item rows into one consolidated register CSV per run under `imports/items/pending/`; source CSV/PDF files remain in place for unresolved quotations.
 - Consolidated missing-item registers de-duplicate repeated unresolved rows by `(supplier, manufacturer_name, item_number)` across all quotations in the same batch run.
 - Temporary per-file missing-item CSVs generated during batch consolidation are supplier-prefixed and only removed after consolidated register creation succeeds.
 - Collision-safe file move behavior is implemented (`_1`, `_2`, ... suffixing).
@@ -217,7 +217,7 @@ Last updated: 2026-03-08 (JST)
 - Fully empty CSV rows are ignored during order import to avoid false validation failures from trailing blank lines.
 - Missing-item registration now rejects unresolved `new_item` rows with all metadata blank, preventing accidental `UNKNOWN` placeholder item creation.
 - Manual and unregistered batch order imports reject duplicate quotation re-import for the same supplier when existing orders already reference that quotation.
-- Missing-item batch registration now reads both `quotations/unregistered/csv_files/**/_missing_items_registration.csv` and consolidated registers under `quotations/unregistered/missing_item_registers/`.
+- Missing-item batch registration now reads pending CSVs from `imports/items/pending/` and moves successfully processed files into `imports/items/processed/<YYYY-MM>/`.
 - `missing_items_registration.csv` uses `supplier` (not `manufacturer`) because rows are resolved in supplier alias scope; `new_item` rows may specify `manufacturer_name` (or `manufacturer`) and default to `UNKNOWN` when blank.
 - File-upload missing-item registration endpoint (`POST /api/register-missing`) accepts optional multipart form field `skip_unresolved=true` to skip unresolved `new_item` rows instead of failing the whole upload.
 - JSON missing-item registration endpoint (`/api/register-missing/rows`) accepts both `manufacturer_name` and `manufacturer` fields for `new_item` rows.
