@@ -303,14 +303,7 @@ export function ItemsPage() {
   const location = useLocation();
   const navigate = useNavigate();
   const [q, setQ] = useState("");
-  const [itemNumber, setItemNumber] = useState("");
-  const [entryType, setEntryType] = useState<ItemRowType>("item");
-  const [manufacturerName, setManufacturerName] = useState("UNKNOWN");
-  const [aliasSupplier, setAliasSupplier] = useState("");
-  const [canonicalItemNumber, setCanonicalItemNumber] = useState("");
-  const [unitsPerOrder, setUnitsPerOrder] = useState("1");
-  const [category, setCategory] = useState("");
-  const [description, setDescription] = useState("");
+
   const [entryMessage, setEntryMessage] = useState("");
   const [bulkRows, setBulkRows] = useState<ItemEntryRow[]>([blankRow(), blankRow(), blankRow()]);
   const [csvFile, setCsvFile] = useState<File | null>(null);
@@ -492,37 +485,6 @@ export function ItemsPage() {
         ],
       }),
     });
-  }
-
-  async function createOne(event: FormEvent) {
-    event.preventDefault();
-    setSubmitting(true);
-    setEntryMessage("");
-    try {
-      if (entryType === "alias") {
-        await registerAliasRow(itemNumber, aliasSupplier, canonicalItemNumber, unitsPerOrder);
-        setAliasSupplier("");
-        setCanonicalItemNumber("");
-        setUnitsPerOrder("1");
-      } else {
-        await apiSend<Item>("/items", {
-          method: "POST",
-          body: JSON.stringify({
-            item_number: itemNumber,
-            manufacturer_name: manufacturerName,
-            category: category || null,
-            description: description || null
-          })
-        });
-      }
-      setItemNumber("");
-      setDescription("");
-      await mutate();
-    } catch (error) {
-      setEntryMessage(String(error instanceof Error ? error.message : error));
-    } finally {
-      setSubmitting(false);
-    }
   }
 
   function updateBulkRow(index: number, patch: Partial<ItemEntryRow>) {
@@ -1147,6 +1109,12 @@ export function ItemsPage() {
         </p>
       </section>
 
+      <datalist id="category-options">
+        {uniqueCategoryOptions.map((value) => (
+          <option key={value} value={value} />
+        ))}
+      </datalist>
+
       {missingRows.length > 0 && (
         <section className="panel p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1158,11 +1126,7 @@ export function ItemsPage() {
           <p className="mt-1 text-sm text-slate-600">
             Fill this form and submit to register missing rows. The app will retry order import automatically.
           </p>
-          <datalist id="resolver-category-options">
-            {uniqueCategoryOptions.map((value) => (
-              <option key={value} value={value} />
-            ))}
-          </datalist>
+
           <div className="mt-3 overflow-x-auto">
             <table className="min-w-[1400px] text-sm">
               <thead>
@@ -1216,7 +1180,7 @@ export function ItemsPage() {
                         className="input"
                         value={row.category}
                         onChange={(e) => updateMissingRow(idx, { category: e.target.value })}
-                        list="resolver-category-options"
+                        list="category-options"
                         disabled={row.resolution_type === "alias"}
                       />
                     </td>
@@ -1286,81 +1250,7 @@ export function ItemsPage() {
         </section>
       )}
 
-      <section className="grid gap-5 lg:grid-cols-2">
-        <form className="panel space-y-3 p-4" onSubmit={createOne}>
-          <h2 className="font-display text-lg font-semibold">Create Item / Alias</h2>
-          <select
-            className="input"
-            value={entryType}
-            onChange={(e) => setEntryType(e.target.value as ItemRowType)}
-          >
-            <option value="item">item</option>
-            <option value="alias">alias</option>
-          </select>
-          <input
-            className="input"
-            placeholder={entryType === "alias" ? "Ordered item number (alias)" : "Item number"}
-            value={itemNumber}
-            onChange={(e) => setItemNumber(e.target.value)}
-            required
-          />
-          <input
-            className="input"
-            placeholder="Manufacturer"
-            value={manufacturerName}
-            onChange={(e) => setManufacturerName(e.target.value)}
-            disabled={entryType === "alias"}
-            required={entryType === "item"}
-          />
-          <input
-            className="input"
-            placeholder="Supplier (alias only)"
-            value={aliasSupplier}
-            onChange={(e) => setAliasSupplier(e.target.value)}
-            disabled={entryType !== "alias"}
-            required={entryType === "alias"}
-          />
-          <select
-            className="input"
-            value={canonicalItemNumber}
-            onChange={(e) => setCanonicalItemNumber(e.target.value)}
-            disabled={entryType !== "alias"}
-          >
-            <option value="">Canonical item (alias only)</option>
-            {itemOptions.map((item) => (
-              <option key={item.item_id} value={item.item_number}>
-                {itemLabel(item)}
-              </option>
-            ))}
-          </select>
-          <input
-            className="input"
-            type="number"
-            min={1}
-            step={1}
-            placeholder="Units/Order (alias only)"
-            value={unitsPerOrder}
-            onChange={(e) => setUnitsPerOrder(e.target.value)}
-            disabled={entryType !== "alias"}
-          />
-          <input
-            className="input"
-            placeholder="Category (optional)"
-            value={category}
-            onChange={(e) => setCategory(e.target.value)}
-            disabled={entryType === "alias"}
-          />
-          <input
-            className="input"
-            placeholder="Description (optional)"
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            disabled={entryType === "alias"}
-          />
-          <button className="button w-full" disabled={submitting} type="submit">
-            {entryType === "alias" ? "Add Alias" : "Add Item"}
-          </button>
-        </form>
+      <section>
 
         <div className="panel space-y-3 p-4">
           <div className="flex items-center justify-between">
@@ -1464,6 +1354,7 @@ export function ItemsPage() {
                         onChange={(e) => updateBulkRow(idx, { category: e.target.value })}
                         placeholder="Lens"
                         disabled={row.row_type === "alias"}
+                        list="category-options"
                       />
                     </td>
                     <td className="px-2 py-2">
@@ -1932,7 +1823,7 @@ export function ItemsPage() {
                       className="input"
                       value={row.category}
                       onChange={(e) => updateMetadataRow(idx, { category: e.target.value })}
-                      list="resolver-category-options"
+                      list="category-options"
                     />
                   </td>
                   <td className="px-2 py-2">
