@@ -1282,19 +1282,24 @@ def _safe_workspace_relative(path: Path) -> str:
     return safe_workspace_relative(path)
 
 
-def _move_file_preserve_name(src: Path, dst_dir: Path) -> Path:
+def _target_path_preserve_name(dst_dir: Path, filename: str) -> Path:
     dst_dir.mkdir(parents=True, exist_ok=True)
-    target = dst_dir / src.name
+    safe_name = Path(filename).name or "items_import.csv"
+    target = dst_dir / safe_name
     if target.exists():
-        stem = src.stem
-        suffix = src.suffix
+        stem = target.stem
+        suffix = target.suffix
         idx = 1
         while True:
             candidate = dst_dir / f"{stem}_{idx}{suffix}"
             if not candidate.exists():
-                target = candidate
-                break
+                return candidate
             idx += 1
+    return target
+
+
+def _move_file_preserve_name(src: Path, dst_dir: Path) -> Path:
+    target = _target_path_preserve_name(dst_dir, src.name)
     shutil.move(str(src), str(target))
     return target
 
@@ -1303,6 +1308,35 @@ def _move_file_to_target(src: Path, target: Path) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(src), str(target))
     return target
+
+
+def _write_bytes_preserve_name(content: bytes, dst_dir: Path, filename: str) -> Path:
+    target = _target_path_preserve_name(dst_dir, filename)
+    temp_path = dst_dir / f".tmp_{target.name}.{uuid4().hex}"
+    try:
+        temp_path.write_bytes(content)
+        temp_path.replace(target)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+    return target
+
+
+def _archive_imported_items_csv(
+    content: bytes,
+    *,
+    source_name: str = "items_import.csv",
+    registered_root: str | Path | None = None,
+) -> dict[str, Any]:
+    root = Path(registered_root) if registered_root else ITEMS_IMPORT_REGISTERED_ROOT
+    month_dir = root / today_jst()[:7]
+    archived_path = _write_bytes_preserve_name(content, month_dir, source_name)
+    consolidation = consolidate_registered_item_csvs(root)
+    return {
+        "registered_root": str(root),
+        "archived_path": str(archived_path),
+        "consolidation": consolidation,
+    }
 
 
 def _execute_planned_file_moves(planned_moves: list[tuple[Path, Path]]) -> None:
@@ -2337,6 +2371,7 @@ def import_items_from_content_with_job(
     continue_on_error: bool = True,
     redo_of_job_id: int | None = None,
     row_overrides: dict[str | int, Any] | None = None,
+    archive_registered_csv: bool = True,
 ) -> dict[str, Any]:
     source_text = content.decode("utf-8-sig")
     import_job_id = _record_import_job(
@@ -2355,8 +2390,14 @@ def import_items_from_content_with_job(
         import_job_id=import_job_id,
         row_overrides=row_overrides,
     )
+    archive_info: dict[str, Any] | None = None
+    if archive_registered_csv and result["status"] != "error":
+        archive_info = _archive_imported_items_csv(content, source_name=source_name)
     _finalize_import_job(conn, import_job_id=import_job_id, result=result)
-    return {**result, "import_job_id": import_job_id}
+    payload = {**result, "import_job_id": import_job_id}
+    if archive_info is not None:
+        payload["archive"] = archive_info
+    return payload
 
 
 def preview_items_import_from_content(
@@ -2682,6 +2723,7 @@ def redo_items_import_job(conn: sqlite3.Connection, import_job_id: int) -> dict[
         source_name=str(job_row["source_name"]),
         continue_on_error=bool(job["continue_on_error"]),
         redo_of_job_id=import_job_id,
+        archive_registered_csv=False,
     )
     redo_job_id = int(result["import_job_id"])
     conn.execute(

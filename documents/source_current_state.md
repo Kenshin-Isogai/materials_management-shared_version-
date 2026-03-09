@@ -125,6 +125,8 @@ Last updated: 2026-03-09 (JST)
 - Items manual CSV import is now preview-first:
   - `POST /api/items/import-preview` classifies duplicate item rows, alias create/update rows, and unresolved canonical alias rows before commit
   - preview confirmation can send per-row `canonical_item_number` / `units_per_order` overrides back through `POST /api/items/import`
+  - the Items page can select multiple CSV files, preview them as one combined review set, then import them sequentially in one action
+  - successful or partially successful manual item CSV imports are archived into `imports/items/registered/<YYYY-MM>/` and folded into the monthly `items_YYYY-MM_NNN.csv` consolidation flow
 - Movements CSV import is now preview-first:
   - `POST /api/inventory/import-preview` validates operation/location rules, simulates inventory effects row-by-row, and flags unresolved item ids or stock shortages before commit
   - preview confirmation can send per-row `item_id` overrides back through `POST /api/inventory/import-csv`

@@ -11,6 +11,8 @@
 
 ### Fixed
 
+- Items manual CSV import now archives successful uploads into `imports/items/registered/<YYYY-MM>/` and reuses the monthly `items_YYYY-MM_NNN.csv` consolidation flow, so direct imports and batch registrations land in the same registered archive history.
+- Items page `Import Items CSV` now accepts multiple CSV selections and runs preview/import across the selected files in one UI pass.
 - Projects quick requirement unresolved-item CSV export now uses the reviewed preview snapshot when available, preventing preview/export drift if the textarea content changes before download.
 - `migrate_orders_import_layout()` now also rewrites stale `pdf_link` values inside registered order CSV archives, not just unregistered CSVs/DB rows, so historical quotation links stay aligned after the `imports/orders/` path migration.
 - `import_unregistered_order_csvs()` now rewrites each moved registered order CSV archive with the final registered `pdf_link` values, preserving the imported quantity/archive consistency for follow-up batch/retry workflows and avoiding stray fallback archive behavior.

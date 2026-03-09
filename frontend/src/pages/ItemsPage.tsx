@@ -30,6 +30,7 @@ type ItemImportRow = {
   canonical_item_number?: string;
   units_per_order?: number;
   error?: string;
+  source_name?: string;
 };
 
 type ItemImportResult = {
@@ -39,6 +40,7 @@ type ItemImportResult = {
   duplicate_count: number;
   failed_count: number;
   import_job_id?: number;
+  import_job_ids?: number[];
   rows: ItemImportRow[];
 };
 
@@ -66,6 +68,9 @@ type ItemImportPreviewRow = {
   allowed_entity_types: Array<"item">;
   suggested_match: ItemImportPreviewMatch | null;
   candidates: ItemImportPreviewMatch[];
+  source_name?: string;
+  source_index?: number;
+  preview_key?: string;
 };
 
 type ItemImportPreview = {
@@ -92,6 +97,84 @@ function itemPreviewMatchToCatalogResult(
     display_label: match.display_label,
     summary: match.summary,
     match_source: match.match_source,
+  };
+}
+
+function itemImportPreviewRowKey(row: ItemImportPreviewRow): string {
+  return row.preview_key ?? String(row.row);
+}
+
+function mergeItemImportPreviews(previews: ItemImportPreview[]): ItemImportPreview {
+  if (previews.length === 1) {
+    return {
+      ...previews[0],
+      rows: previews[0].rows.map((row) => ({
+        ...row,
+        source_name: previews[0].source_name,
+        source_index: 0,
+        preview_key: `0:${row.row}`
+      }))
+    };
+  }
+
+  return {
+    source_name: `${previews.length} files`,
+    summary: previews.reduce(
+      (summary, preview) => ({
+        total_rows: summary.total_rows + preview.summary.total_rows,
+        exact: summary.exact + preview.summary.exact,
+        high_confidence: summary.high_confidence + preview.summary.high_confidence,
+        needs_review: summary.needs_review + preview.summary.needs_review,
+        unresolved: summary.unresolved + preview.summary.unresolved
+      }),
+      {
+        total_rows: 0,
+        exact: 0,
+        high_confidence: 0,
+        needs_review: 0,
+        unresolved: 0
+      }
+    ),
+    blocking_errors: previews.flatMap((preview) =>
+      preview.blocking_errors.map((message) => `${preview.source_name}: ${message}`)
+    ),
+    can_auto_accept: previews.every((preview) => preview.can_auto_accept),
+    rows: previews.flatMap((preview, sourceIndex) =>
+      preview.rows.map((row) => ({
+        ...row,
+        source_name: preview.source_name,
+        source_index: sourceIndex,
+        preview_key: `${sourceIndex}:${row.row}`
+      }))
+    )
+  };
+}
+
+function mergeItemImportResults(
+  results: Array<{ sourceName: string; result: ItemImportResult }>
+): ItemImportResult {
+  const processed = results.reduce((sum, entry) => sum + entry.result.processed, 0);
+  const createdCount = results.reduce((sum, entry) => sum + entry.result.created_count, 0);
+  const duplicateCount = results.reduce((sum, entry) => sum + entry.result.duplicate_count, 0);
+  const failedCount = results.reduce((sum, entry) => sum + entry.result.failed_count, 0);
+  const importJobIds = results
+    .map((entry) => entry.result.import_job_id)
+    .filter((jobId): jobId is number => typeof jobId === "number");
+
+  return {
+    status: failedCount === 0 ? "ok" : createdCount > 0 || duplicateCount > 0 ? "partial" : "error",
+    processed,
+    created_count: createdCount,
+    duplicate_count: duplicateCount,
+    failed_count: failedCount,
+    import_job_id: importJobIds[importJobIds.length - 1],
+    import_job_ids: importJobIds,
+    rows: results.flatMap(({ sourceName, result }) =>
+      result.rows.map((row) => ({
+        ...row,
+        source_name: sourceName
+      }))
+    )
   };
 }
 
@@ -308,14 +391,14 @@ export function ItemsPage() {
 
   const [entryMessage, setEntryMessage] = useState("");
   const [bulkRows, setBulkRows] = useState<ItemEntryRow[]>([blankRow(), blankRow(), blankRow()]);
-  const [csvFile, setCsvFile] = useState<File | null>(null);
+  const [csvFiles, setCsvFiles] = useState<File[]>([]);
   const [csvMessage, setCsvMessage] = useState("");
   const [csvResult, setCsvResult] = useState<ItemImportResult | null>(null);
   const [csvPreview, setCsvPreview] = useState<ItemImportPreview | null>(null);
   const [csvPreviewSelections, setCsvPreviewSelections] = useState<
-    Record<number, CatalogSearchResult | null>
+    Record<string, CatalogSearchResult | null>
   >({});
-  const [csvPreviewUnits, setCsvPreviewUnits] = useState<Record<number, string>>({});
+  const [csvPreviewUnits, setCsvPreviewUnits] = useState<Record<string, string>>({});
   const [selectedImportJobId, setSelectedImportJobId] = useState<number | null>(null);
   const [importJobBusyId, setImportJobBusyId] = useState<number | null>(null);
   const [importJobsMessage, setImportJobsMessage] = useState("");
@@ -548,13 +631,14 @@ export function ItemsPage() {
   }
 
   function applyCsvPreview(preview: ItemImportPreview) {
-    const nextSelections: Record<number, CatalogSearchResult | null> = {};
-    const nextUnits: Record<number, string> = {};
+    const nextSelections: Record<string, CatalogSearchResult | null> = {};
+    const nextUnits: Record<string, string> = {};
     for (const row of preview.rows) {
-      nextSelections[row.row] = row.suggested_match
+      const rowKey = itemImportPreviewRowKey(row);
+      nextSelections[rowKey] = row.suggested_match
         ? itemPreviewMatchToCatalogResult(row.suggested_match)
         : null;
-      nextUnits[row.row] = row.units_per_order || "1";
+      nextUnits[rowKey] = row.units_per_order || "1";
     }
     setCsvPreview(preview);
     setCsvPreviewSelections(nextSelections);
@@ -566,13 +650,13 @@ export function ItemsPage() {
   ): CatalogSearchResult | null {
     return resolvePreviewSelection(
       csvPreviewSelections,
-      row.row,
+      itemImportPreviewRowKey(row),
       row.suggested_match ? itemPreviewMatchToCatalogResult(row.suggested_match) : null
     );
   }
 
   function previewUnitsValue(row: ItemImportPreviewRow): string {
-    return csvPreviewUnits[row.row] ?? row.units_per_order ?? "1";
+    return csvPreviewUnits[itemImportPreviewRowKey(row)] ?? row.units_per_order ?? "1";
   }
 
   function canConfirmPreviewRow(row: ItemImportPreviewRow): boolean {
@@ -592,21 +676,25 @@ export function ItemsPage() {
 
   async function previewItemsCsv(event: FormEvent) {
     event.preventDefault();
-    if (!csvFile) return;
+    if (csvFiles.length === 0) return;
     setSubmitting(true);
     setCsvMessage("");
     setCsvResult(null);
     setImportJobsMessage("");
     resetCsvPreview();
     try {
-      const form = new FormData();
-      form.append("file", csvFile);
-      const result = await apiSendForm<ItemImportPreview>("/items/import-preview", form);
+      const previews: ItemImportPreview[] = [];
+      for (const file of csvFiles) {
+        const form = new FormData();
+        form.append("file", file);
+        previews.push(await apiSendForm<ItemImportPreview>("/items/import-preview", form));
+      }
+      const result = mergeItemImportPreviews(previews);
       applyCsvPreview(result);
       setCsvMessage(
         result.can_auto_accept
-          ? `Preview ready: ${result.summary.total_rows} row(s) are ready to import.`
-          : `Preview ready: review=${result.summary.needs_review}, unresolved=${result.summary.unresolved}.`
+          ? `Preview ready: ${csvFiles.length} file(s), ${result.summary.total_rows} row(s) are ready to import.`
+          : `Preview ready: files=${csvFiles.length}, review=${result.summary.needs_review}, unresolved=${result.summary.unresolved}.`
       );
     } catch (error) {
       setCsvMessage(formatActionError("Preview failed", error));
@@ -616,7 +704,7 @@ export function ItemsPage() {
   }
 
   async function confirmItemsPreview() {
-    if (!csvFile || !csvPreview) return;
+    if (csvFiles.length === 0 || !csvPreview) return;
 
     for (const row of csvPreview.rows) {
       if (row.entry_type !== "alias") continue;
@@ -634,7 +722,7 @@ export function ItemsPage() {
     }
 
     const rowOverrides: Record<
-      number,
+      string,
       { canonical_item_number?: string; units_per_order?: number }
     > = {};
 
@@ -655,29 +743,48 @@ export function ItemsPage() {
       );
       const unitsChanged = String(unitsValue) !== String(row.units_per_order || "1");
       if (!canonicalChanged && !unitsChanged) continue;
-      rowOverrides[row.row] = {};
+      const rowKey = itemImportPreviewRowKey(row);
+      rowOverrides[rowKey] = {};
       if (canonicalChanged && selectedItemNumber) {
-        rowOverrides[row.row].canonical_item_number = selectedItemNumber;
+        rowOverrides[rowKey].canonical_item_number = selectedItemNumber;
       }
       if (unitsChanged) {
-        rowOverrides[row.row].units_per_order = unitsValue;
+        rowOverrides[rowKey].units_per_order = unitsValue;
       }
     }
 
     setSubmitting(true);
     setCsvMessage("");
     try {
-      const form = new FormData();
-      form.append("file", csvFile);
-      form.append("continue_on_error", "true");
-      if (Object.keys(rowOverrides).length > 0) {
-        form.append("row_overrides", JSON.stringify(rowOverrides));
+      const importResults: Array<{ sourceName: string; result: ItemImportResult }> = [];
+      for (const [sourceIndex, file] of csvFiles.entries()) {
+        const fileRowOverrides: Record<
+          number,
+          { canonical_item_number?: string; units_per_order?: number }
+        > = {};
+        for (const row of csvPreview.rows) {
+          if ((row.source_index ?? 0) !== sourceIndex) continue;
+          const rowKey = itemImportPreviewRowKey(row);
+          if (rowOverrides[rowKey] != null) {
+            fileRowOverrides[row.row] = rowOverrides[rowKey];
+          }
+        }
+        const form = new FormData();
+        form.append("file", file);
+        form.append("continue_on_error", "true");
+        if (Object.keys(fileRowOverrides).length > 0) {
+          form.append("row_overrides", JSON.stringify(fileRowOverrides));
+        }
+        importResults.push({
+          sourceName: file.name,
+          result: await apiSendForm<ItemImportResult>("/items/import", form)
+        });
       }
-      const result = await apiSendForm<ItemImportResult>("/items/import", form);
+      const result = mergeItemImportResults(importResults);
       setCsvResult(result);
       resetCsvPreview();
       setCsvMessage(
-        `CSV import: status=${result.status}, processed=${result.processed}, created=${result.created_count}, duplicates=${result.duplicate_count}, failed=${result.failed_count}`
+        `CSV import: files=${csvFiles.length}, status=${result.status}, processed=${result.processed}, created=${result.created_count}, duplicates=${result.duplicate_count}, failed=${result.failed_count}`
       );
       if (result.import_job_id != null) {
         setSelectedImportJobId(result.import_job_id);
@@ -1123,6 +1230,10 @@ export function ItemsPage() {
   }
 
   const csvIssues = (csvResult?.rows ?? []).filter((row) => row.status !== "created");
+  const showCsvSourceColumn = Boolean(
+    csvPreview?.rows.some((row) => Boolean(row.source_name)) ||
+      csvIssues.some((row) => Boolean(row.source_name))
+  );
   const metadataIssues = (metadataResult?.rows ?? []).filter((row) => row.status === "error");
   const selectedImportJob = selectedImportJobData?.job;
   const selectedImportJobIssues = (selectedImportJobData?.effects ?? []).filter(
@@ -1478,8 +1589,9 @@ export function ItemsPage() {
             className="input max-w-xl"
             type="file"
             accept=".csv,text/csv"
+            multiple
             onChange={(e) => {
-              setCsvFile(e.target.files?.[0] ?? null);
+              setCsvFiles(Array.from(e.target.files ?? []));
               setCsvResult(null);
               resetCsvPreview();
             }}
@@ -1489,6 +1601,10 @@ export function ItemsPage() {
             Preview Import
           </button>
         </form>
+        <p className="mt-2 text-xs text-slate-500">
+          You can select multiple CSV files; successful imports are archived under{" "}
+          <code>imports/items/registered/&lt;YYYY-MM&gt;/</code>.
+        </p>
         {csvMessage && <p className="mt-3 text-sm text-signal">{csvMessage}</p>}
         {csvPreview && (
           <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
@@ -1510,6 +1626,7 @@ export function ItemsPage() {
               <table className="min-w-[1260px] text-sm">
                 <thead>
                   <tr className="border-b border-slate-200 text-left text-slate-500">
+                    {showCsvSourceColumn && <th className="px-2 py-2">File</th>}
                     <th className="px-2 py-2">Row</th>
                     <th className="px-2 py-2">Type</th>
                     <th className="px-2 py-2">Input</th>
@@ -1520,7 +1637,8 @@ export function ItemsPage() {
                 </thead>
                 <tbody>
                   {csvPreview.rows.map((row) => (
-                    <tr key={row.row} className="border-b border-slate-100 align-top">
+                    <tr key={itemImportPreviewRowKey(row)} className="border-b border-slate-100 align-top">
+                      {showCsvSourceColumn && <td className="px-2 py-3">{row.source_name ?? "-"}</td>}
                       <td className="px-2 py-3 font-semibold">#{row.row}</td>
                       <td className="px-2 py-3">
                         <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-700">
@@ -1597,7 +1715,7 @@ export function ItemsPage() {
                                 onChange={(value) =>
                                   setCsvPreviewSelections((prev) => ({
                                     ...prev,
-                                    [row.row]: value,
+                                    [itemImportPreviewRowKey(row)]: value,
                                   }))
                                 }
                                 placeholder="Select canonical item"
@@ -1611,7 +1729,7 @@ export function ItemsPage() {
                                 onChange={(e) =>
                                   setCsvPreviewUnits((prev) => ({
                                     ...prev,
-                                    [row.row]: e.target.value,
+                                    [itemImportPreviewRowKey(row)]: e.target.value,
                                   }))
                                 }
                                 placeholder="Units per order"
@@ -1663,6 +1781,7 @@ export function ItemsPage() {
             <table className="min-w-[540px] text-sm">
               <thead>
                 <tr className="border-b border-amber-200 text-left text-amber-800">
+                  {showCsvSourceColumn && <th className="px-2 py-2">File</th>}
                   <th className="px-2 py-2">CSV Row</th>
                   <th className="px-2 py-2">Status</th>
                   <th className="px-2 py-2">Item Number</th>
@@ -1671,7 +1790,8 @@ export function ItemsPage() {
               </thead>
               <tbody>
                 {csvIssues.map((row, idx) => (
-                  <tr key={`${row.row}-${idx}`} className="border-b border-amber-100">
+                  <tr key={`${row.source_name ?? "csv"}-${row.row}-${idx}`} className="border-b border-amber-100">
+                    {showCsvSourceColumn && <td className="px-2 py-2">{row.source_name ?? "-"}</td>}
                     <td className="px-2 py-2">{row.row}</td>
                     <td className="px-2 py-2">{row.status}</td>
                     <td className="px-2 py-2 font-semibold">{row.item_number ?? "-"}</td>

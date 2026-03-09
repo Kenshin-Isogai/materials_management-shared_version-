@@ -823,6 +823,7 @@ Projected Available =
   - preview-confirmed BOM rows are then sent through the existing `POST /bom/analyze`, `POST /bom/reserve`, or `POST /purchase-candidates/from-bom` contracts; no separate BOM commit payload is required
 - Items preview:
   - `POST /items/import-preview` classifies item rows as create-vs-duplicate and alias rows as create/update/review/unresolved
+  - the Items page may batch one or more selected CSV files through the same preview/confirm workflow
   - preview confirmation may send optional per-row `row_overrides` (`canonical_item_number`, `units_per_order`) to `POST /items/import`
 - Inventory preview:
   - `POST /inventory/import-preview` validates operation/location requirements, simulates stock effects in CSV order, and flags unresolved `item_id` values or stock shortages before commit
@@ -965,7 +966,7 @@ Base URL: `http://localhost:8000/api`
 | GET | `/items/import-template` | Download header-only item import template CSV (UTF-8 with BOM) |
 | GET | `/items/import-reference` | Download live item/alias reference CSV |
 | POST | `/items/import-preview` | Preview item/alias CSV reconciliation before commit |
-| POST | `/items/import` | Import items and supplier-scoped aliases from CSV; accepts optional preview-confirmation `row_overrides` (`canonical_item_number`, `units_per_order`) with strict `422` validation for malformed or invalid override payloads |
+| POST | `/items/import` | Import items and supplier-scoped aliases from CSV; accepts optional preview-confirmation `row_overrides` (`canonical_item_number`, `units_per_order`) with strict `422` validation for malformed or invalid override payloads, and archives successful manual-import CSV content into `imports/items/registered/<YYYY-MM>/` for consolidation |
 | GET | `/items/{item_id}` | Get item details |
 | POST | `/items` | Create item |
 | PUT | `/items/{item_id}` | Update item |

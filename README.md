@@ -134,7 +134,8 @@ npm run build
 - Preview-first manual imports:
   - `POST /api/items/import-preview`
   - previews duplicate item rows, alias create/update behavior, and canonical-item reconciliation before final `POST /api/items/import`
-  - final item import accepts optional per-row `row_overrides` (`canonical_item_number`, `units_per_order`)
+  - the Items page can preview/import one or more CSV files in a single run
+  - final item import accepts optional per-row `row_overrides` (`canonical_item_number`, `units_per_order`) and archives successful manual-import CSV content into `imports/items/registered/<YYYY-MM>/` before monthly consolidation
   - `POST /api/inventory/import-preview`
   - validates movement rows, simulates stock balance changes, and allows per-row `item_id` correction before final `POST /api/inventory/import-csv`
   - `POST /api/orders/import-preview`

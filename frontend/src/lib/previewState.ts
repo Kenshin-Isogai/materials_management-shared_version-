@@ -1,6 +1,6 @@
 export function resolvePreviewSelection<T>(
-  selections: Record<number, T | null>,
-  rowNumber: number,
+  selections: Record<string | number, T | null>,
+  rowNumber: string | number,
   fallback: T | null
 ): T | null {
   return Object.prototype.hasOwnProperty.call(selections, rowNumber)

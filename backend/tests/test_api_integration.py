@@ -6,6 +6,7 @@ from io import StringIO
 from pathlib import Path
 
 from app import service
+from app.utils import today_jst
 
 FUTURE_TARGET_DATE = "2999-12-31"
 
@@ -1181,6 +1182,43 @@ def test_items_import_endpoint_supports_alias_rows_before_canonical_row(client):
     assert aliases[0]["ordered_item_number"] == "CSV-ALIAS-FIRST-P5"
     assert aliases[0]["canonical_item_number"] == "CSV-ALIAS-FIRST-CANONICAL"
     assert aliases[0]["units_per_order"] == 5
+
+
+def test_items_import_endpoint_archives_uploaded_csv_into_registered_month_folder(
+    client,
+    workspace_roots: dict[str, Path],
+):
+    csv_content = make_csv_bytes(
+        ["row_type", "item_number", "manufacturer_name", "category"],
+        [
+            {
+                "row_type": "item",
+                "item_number": "CSV-ARCHIVE-001",
+                "manufacturer_name": "CSV-ARCHIVE-MFG",
+                "category": "Lens",
+            }
+        ],
+    )
+
+    response = client.post(
+        "/api/items/import",
+        files={"file": ("items_archive.csv", csv_content, "text/csv")},
+        data={"continue_on_error": "true"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["status"] == "ok"
+    assert payload["archive"]["consolidation"]["consolidated"] == 1
+
+    month_dir = workspace_roots["items_registered_root"] / today_jst()[:7]
+    archived = month_dir / f"items_{today_jst()[:7]}_001.csv"
+    assert archived.exists()
+
+    rows = service._load_csv_rows_from_path(archived)
+    assert len(rows) == 1
+    assert rows[0]["item_number"] == "CSV-ARCHIVE-001"
+    assert not (month_dir / "items_archive.csv").exists()
 
 
 def test_items_import_preview_endpoint_classifies_duplicate_and_alias_resolution(client):
