@@ -7943,6 +7943,53 @@ def preview_project_requirement_bulk_text(
     }
 
 
+def export_project_requirement_unresolved_items_csv(
+    conn: sqlite3.Connection,
+    *,
+    text: str = "",
+    rows: list[dict[str, Any]] | None = None,
+) -> tuple[str, bytes]:
+    preview_rows = rows if rows is not None and len(rows) > 0 else preview_project_requirement_bulk_text(conn, text=text)["rows"]
+    export_rows: list[dict[str, Any]] = []
+    seen_item_numbers: set[str] = set()
+
+    for row in preview_rows:
+        if str(row.get("status") or "") != "unresolved":
+            continue
+        item_number = str(row.get("raw_target") or "").strip()
+        if not item_number:
+            continue
+        normalized_key = item_number.casefold()
+        if normalized_key in seen_item_numbers:
+            continue
+        seen_item_numbers.add(normalized_key)
+        export_rows.append(
+            {
+                "row_type": "item",
+                "item_number": item_number,
+                "manufacturer_name": "UNKNOWN",
+                "category": "",
+                "url": "",
+                "description": "",
+                "supplier": "",
+                "canonical_item_number": "",
+                "units_per_order": "1",
+            }
+        )
+
+    if not export_rows:
+        raise AppError(
+            code="NO_UNRESOLVED_PROJECT_ITEMS",
+            message="No unresolved project preview items are available to export.",
+            status_code=400,
+        )
+
+    spec = IMPORT_TEMPLATE_SPECS["items"]
+    filename = "project_requirements_unresolved_items_import.csv"
+    content = _csv_bytes(spec["fieldnames"], export_rows)
+    return filename, content
+
+
 def delete_project(conn: sqlite3.Connection, project_id: int) -> None:
     _get_entity_or_404(
         conn,

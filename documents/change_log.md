@@ -11,6 +11,7 @@
 
 ### Fixed
 
+- Projects quick requirement unresolved-item CSV export now uses the reviewed preview snapshot when available, preventing preview/export drift if the textarea content changes before download.
 - Hardened registered-item CSV consolidation safety.
   - `register_unregistered_item_csvs()` now skips automatic consolidation when any file in the batch fails, preventing partially failed runs from rewriting archives.
   - `consolidate_registered_item_csvs()` now stages replacement files and only swaps them into place after all chunk writes succeed, preserving existing consolidated archives when a write fails mid-run.
@@ -207,6 +208,7 @@
 - Added the next CR1 reconciliation slice for Projects quick-entry parsing.
   - Added `POST /api/projects/requirements/preview` for `item_number,quantity` bulk text parsing.
   - Projects page quick parser now previews exact/high-confidence/review/unresolved matches, uses `CatalogPicker` for manual correction, and then applies the result into editable project requirement rows.
+  - Projects page quick parser can now download unresolved rows as an Items import-compatible CSV for follow-up registration on the Items tab.
 - Completed the remaining CR1 reconciliation slice for BOM spreadsheet entry.
   - Added `POST /api/bom/preview` for supplier/item reconciliation before analyze, reserve, or shortage persistence.
   - BOM preview returns ranked supplier and item candidates plus projected canonical quantity, available stock, and shortage for the suggested item match.

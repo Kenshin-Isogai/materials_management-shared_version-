@@ -185,8 +185,12 @@ export async function apiSendForm<T>(
   return payload.data;
 }
 
-export async function apiDownload(path: string, fallbackFilename: string): Promise<void> {
-  const res = await fetchApi(path);
+export async function apiDownload(
+  path: string,
+  fallbackFilename: string,
+  init?: RequestInit
+): Promise<void> {
+  const res = await fetchApi(path, init);
   if (!res.ok) {
     const contentType = res.headers.get("content-type") ?? "";
     if (contentType.includes("application/json")) {

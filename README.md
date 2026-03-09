@@ -146,7 +146,7 @@ npm run build
   - preview-confirmation JSON fields are strict: malformed JSON, wrong top-level shapes, missing required keys, and override row numbers not present in the uploaded CSV return `422` instead of bubbling as server errors
 - Projects quick requirement parsing:
   - `POST /api/projects/requirements/preview`
-  - parses `item_number,quantity` lines, classifies exact/review/unresolved matches, and lets the UI apply corrected rows into project requirements
+  - parses `item_number,quantity` lines, classifies exact/review/unresolved matches, lets the UI apply corrected rows into project requirements, and can export unresolved rows as an Items import-compatible CSV
 - BOM spreadsheet reconciliation:
   - `POST /api/bom/preview`
   - classifies supplier/item matches as `exact`, `high_confidence`, `needs_review`, or `unresolved`

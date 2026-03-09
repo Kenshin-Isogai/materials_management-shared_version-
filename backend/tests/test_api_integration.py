@@ -3211,6 +3211,131 @@ def test_project_requirements_preview_endpoint_defaults_invalid_quantity_to_one(
     assert row["suggested_match"]["entity_id"] == item["item_id"]
 
 
+def test_project_requirements_unresolved_items_csv_endpoint_exports_items_import_rows(client):
+    client.post("/api/manufacturers", json={"name": "API-PROJECT-EXPORT-MFG"})
+    client.post(
+        "/api/items",
+        json={
+            "item_number": "API-PROJECT-EXPORT-EXACT",
+            "manufacturer_name": "API-PROJECT-EXPORT-MFG",
+            "category": "Lens",
+        },
+    )
+
+    response = client.post(
+        "/api/projects/requirements/preview/unresolved-items.csv",
+        json={
+            "text": "\n".join(
+                [
+                    "API-PROJECT-EXPORT-EXACT,2",
+                    "PROJECT-MISSING-001,3",
+                    "project-missing-001,4",
+                    ",5",
+                    "PROJECT-MISSING-002,1",
+                ]
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert response.headers["content-disposition"].endswith(
+        'filename="project_requirements_unresolved_items_import.csv"'
+    )
+
+    fieldnames, rows = read_csv_response(response)
+    assert fieldnames == [
+        "row_type",
+        "item_number",
+        "manufacturer_name",
+        "category",
+        "url",
+        "description",
+        "supplier",
+        "canonical_item_number",
+        "units_per_order",
+    ]
+    assert rows == [
+        {
+            "row_type": "item",
+            "item_number": "PROJECT-MISSING-001",
+            "manufacturer_name": "UNKNOWN",
+            "category": "",
+            "url": "",
+            "description": "",
+            "supplier": "",
+            "canonical_item_number": "",
+            "units_per_order": "1",
+        },
+        {
+            "row_type": "item",
+            "item_number": "PROJECT-MISSING-002",
+            "manufacturer_name": "UNKNOWN",
+            "category": "",
+            "url": "",
+            "description": "",
+            "supplier": "",
+            "canonical_item_number": "",
+            "units_per_order": "1",
+        },
+    ]
+
+
+def test_project_requirements_unresolved_items_csv_endpoint_accepts_preview_rows_snapshot(client):
+    response = client.post(
+        "/api/projects/requirements/preview/unresolved-items.csv",
+        json={
+            "text": "",
+            "rows": [
+                {"raw_target": "PROJECT-SNAPSHOT-001", "status": "unresolved"},
+                {"raw_target": "project-snapshot-001", "status": "unresolved"},
+                {"raw_target": "PROJECT-SNAPSHOT-EXACT", "status": "exact"},
+                {"raw_target": "", "status": "unresolved"},
+                {"raw_target": "PROJECT-SNAPSHOT-002", "status": "unresolved"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+
+    fieldnames, rows = read_csv_response(response)
+    assert fieldnames == [
+        "row_type",
+        "item_number",
+        "manufacturer_name",
+        "category",
+        "url",
+        "description",
+        "supplier",
+        "canonical_item_number",
+        "units_per_order",
+    ]
+    assert rows == [
+        {
+            "row_type": "item",
+            "item_number": "PROJECT-SNAPSHOT-001",
+            "manufacturer_name": "UNKNOWN",
+            "category": "",
+            "url": "",
+            "description": "",
+            "supplier": "",
+            "canonical_item_number": "",
+            "units_per_order": "1",
+        },
+        {
+            "row_type": "item",
+            "item_number": "PROJECT-SNAPSHOT-002",
+            "manufacturer_name": "UNKNOWN",
+            "category": "",
+            "url": "",
+            "description": "",
+            "supplier": "",
+            "canonical_item_number": "",
+            "units_per_order": "1",
+        },
+    ]
+
+
 def test_project_planning_analysis_endpoint_allows_started_committed_projects(client):
     client.post("/api/manufacturers", json={"name": "API-PLAN-INFLIGHT-MFG"})
     item = client.post(

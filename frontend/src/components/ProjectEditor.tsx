@@ -1,6 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
-import { apiGet, apiGetWithPagination, apiSend } from "../lib/api";
+import { apiDownload, apiGet, apiGetWithPagination, apiSend } from "../lib/api";
 import {
   blankRequirementDraft,
   normalizeRequirementDrafts,
@@ -345,6 +345,36 @@ export function ProjectEditor({
     }
   }
 
+  async function downloadUnresolvedItemsCsv() {
+    if (!entryPreview || entryPreview.summary.unresolved <= 0) return;
+    setSaving(true);
+    setMessage("");
+    try {
+      await apiDownload(
+        "/projects/requirements/preview/unresolved-items.csv",
+        "project_requirements_unresolved_items_import.csv",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            rows: entryPreview.rows.map((row) => ({
+              raw_target: row.raw_target,
+              status: row.status,
+            })),
+            text: entryListText,
+          }),
+        },
+      );
+      setMessage("Downloaded unresolved items CSV for the Items import flow.");
+    } catch (error) {
+      setMessage(formatActionError("CSV download failed", error));
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function applyEntryPreviewToRequirements() {
     if (!entryPreview) return;
     const nextRequirements = entryPreview.rows.map((row) => {
@@ -602,6 +632,11 @@ export function ProjectEditor({
                     <button className="button" type="button" onClick={applyEntryPreviewToRequirements}>
                       Apply To Requirements
                     </button>
+                    {entryPreview.summary.unresolved > 0 && (
+                      <button className="button-subtle" type="button" onClick={() => void downloadUnresolvedItemsCsv()}>
+                        Download Unresolved Items CSV
+                      </button>
+                    )}
                     <button className="button-subtle" type="button" onClick={resetPreviewState}>
                       Clear Preview
                     </button>

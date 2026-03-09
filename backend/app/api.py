@@ -38,6 +38,7 @@ from .schemas import (
     PurchaseCandidatesFromBomRequest,
     PurchaseCandidatesFromProjectRequest,
     ProjectCreate,
+    ProjectRequirementUnresolvedItemsCsvRequest,
     ProjectRequirementPreviewRequest,
     ProjectRfqBatchCreateRequest,
     ProjectUpdate,
@@ -803,6 +804,15 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.post("/api/projects/requirements/preview")
     def post_project_requirements_preview(body: ProjectRequirementPreviewRequest, conn= db):
         return ok(service.preview_project_requirement_bulk_text(conn, text=body.text))
+
+    @app.post("/api/projects/requirements/preview/unresolved-items.csv")
+    def post_project_requirements_unresolved_items_csv(body: ProjectRequirementUnresolvedItemsCsvRequest, conn= db):
+        filename, content = service.export_project_requirement_unresolved_items_csv(
+            conn,
+            text=body.text,
+            rows=[row.model_dump() for row in body.rows],
+        )
+        return csv_attachment(filename, content)
 
     @app.put("/api/projects/{project_id}")
     def put_project(project_id: int, body: ProjectUpdate, conn= db):

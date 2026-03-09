@@ -247,6 +247,16 @@ class ProjectRequirementPreviewRequest(BaseModel):
     text: str = ""
 
 
+class ProjectRequirementPreviewExportRow(BaseModel):
+    raw_target: str = ""
+    status: Literal["exact", "high_confidence", "needs_review", "unresolved"]
+
+
+class ProjectRequirementUnresolvedItemsCsvRequest(BaseModel):
+    text: str = ""
+    rows: list[ProjectRequirementPreviewExportRow] = Field(default_factory=list)
+
+
 class BomLineInput(BaseModel):
     supplier: str
     item_number: str
