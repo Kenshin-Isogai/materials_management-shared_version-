@@ -353,6 +353,10 @@ Format style: Keep a simple date-based log while repository versioning policy is
 
 ### Fixed
 
+- Missing-item upload parity:
+  - Fixed `POST /api/register-missing` so the content-based registration path now forwards `skip_unresolved`, matching path-based batch registration behavior.
+  - Added backend regression coverage for default rejection vs explicit skip behavior on unresolved upload rows.
+
 - Item flow stock delta accuracy:
   - Updated transaction-to-stock delta mapping so allocation-only `RESERVE` logs (with `from_location`/`to_location` as `NULL`) no longer appear as physical stock decreases in `GET /api/items/{item_id}/flow`.
   - Legacy reserve transactions that explicitly move into/out of `STOCK` are still reflected as stock deltas.

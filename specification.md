@@ -1214,6 +1214,7 @@ Base URL: `http://localhost:8000/api`
 Notes:
 - `supplier` here is the supplier namespace used for order-SKU resolution/alias mapping. It is not the same concept as item `manufacturer`.
 - `new_item` rows can optionally set `manufacturer_name` (or `manufacturer` alias header). When blank, manufacturer defaults to `UNKNOWN`.
+- Registrations still fail on unresolved `new_item` rows by default. Batch retry/file-upload flows may opt into skipping unresolved `new_item` rows instead, in which case those rows are counted as skipped and no placeholder item is created.
 
 For batch-generated consolidated register CSV, additional provenance columns may be prepended:
 

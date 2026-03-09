@@ -625,6 +625,25 @@ def test_register_missing_new_item_uses_manufacturer_from_csv(conn):
     assert row is not None
     assert row["manufacturer_name"] == "MFG-SPEC"
 
+def test_register_missing_content_skips_unresolved_when_requested(conn):
+    content = "\n".join(
+        [
+            "supplier,item_number,resolution_type,category,url,description",
+            "SupplierA,UNRESOLVED-CONTENT-001,new_item,,,",
+        ]
+    ).encode("utf-8")
+
+    result = service.register_missing_items_from_content(
+        conn,
+        content,
+        skip_unresolved=True,
+    )
+
+    assert result["created_items"] == 0
+    assert result["created_aliases"] == 0
+    assert result["skipped_unresolved"] == 1
+    assert result["is_completely_unresolved"] is True
+
 def test_import_orders_missing_items_csv_includes_manufacturer_column(conn, tmp_path: Path):
     supplier = service.create_supplier(conn, "SupplierA")
     rows = [

@@ -5950,11 +5950,20 @@ def register_unregistered_missing_items_csvs(
             savepoint = f"sp_register_missing_{uuid4().hex}"
             conn.execute(f"SAVEPOINT {savepoint}")
             try:
-                result = register_missing_items_from_csv_path(conn, csv_path)
-                moved_to = _move_file_preserve_name(
-                    csv_path,
-                    registered_csv_supplier_dir(roots, supplier_name),
-                )
+                result = register_missing_items_from_csv_path(conn, csv_path, skip_unresolved=True)
+                
+                if result.get("is_completely_unresolved") and csv_path.name.startswith("batch_missing_items_registration"):
+                    # For generated batch reports, if nothing was actually registered, we safely delete it.
+                    csv_path.unlink(missing_ok=True)
+                    status_text = "skipped_unresolved_batch_file"
+                    moved_to = None
+                else:
+                    moved_to = _move_file_preserve_name(
+                        csv_path,
+                        registered_csv_supplier_dir(roots, supplier_name),
+                    )
+                    status_text = "ok"
+
                 conn.execute(f"RELEASE {savepoint}")
             except Exception:
                 conn.execute(f"ROLLBACK TO {savepoint}")
@@ -5965,8 +5974,8 @@ def register_unregistered_missing_items_csvs(
                 {
                     "file": str(csv_path),
                     "supplier": supplier_name,
-                    "status": "ok",
-                    "moved_to": str(moved_to),
+                    "status": status_text,
+                    "moved_to": str(moved_to) if moved_to else None,
                     "result": result,
                     "warnings": file_warnings,
                     "normalizations": [],
@@ -6502,9 +6511,15 @@ def migrate_quotations_layout(
     }
 
 
-def register_missing_items_from_rows(conn: sqlite3.Connection, rows: list[dict[str, str]]) -> dict[str, Any]:
+def register_missing_items_from_rows(
+    conn: sqlite3.Connection,
+    rows: list[dict[str, str]],
+    *,
+    skip_unresolved: bool = False,
+) -> dict[str, Any]:
     created_items = 0
     created_aliases = 0
+    skipped_unresolved = 0
     local_item_map: dict[tuple[int, str], int] = {}
     deferred_alias_rows: list[dict[str, str]] = []
 
@@ -6522,6 +6537,9 @@ def register_missing_items_from_rows(conn: sqlite3.Connection, rows: list[dict[s
         url_value = str(row.get("url") or "").strip()
         description_value = str(row.get("description") or "").strip()
         if not any((category_value, url_value, description_value)):
+            if skip_unresolved:
+                skipped_unresolved += 1
+                continue
             raise AppError(
                 code="MISSING_ITEM_UNRESOLVED",
                 message=(
@@ -6612,15 +6630,38 @@ def register_missing_items_from_rows(conn: sqlite3.Connection, rows: list[dict[s
         )
         created_aliases += 1
 
-    return {"created_items": created_items, "created_aliases": created_aliases}
+    return {
+        "created_items": created_items,
+        "created_aliases": created_aliases,
+        "skipped_unresolved": skipped_unresolved,
+        "is_completely_unresolved": (created_items == 0 and created_aliases == 0 and skipped_unresolved > 0),
+    }
 
 
-def register_missing_items_from_content(conn: sqlite3.Connection, content: bytes) -> dict[str, Any]:
-    return register_missing_items_from_rows(conn, _load_csv_rows_from_content(content))
+def register_missing_items_from_content(
+    conn: sqlite3.Connection,
+    content: bytes,
+    *,
+    skip_unresolved: bool = False,
+) -> dict[str, Any]:
+    return register_missing_items_from_rows(
+        conn,
+        _load_csv_rows_from_content(content),
+        skip_unresolved=skip_unresolved,
+    )
 
 
-def register_missing_items_from_csv_path(conn: sqlite3.Connection, csv_path: str | Path) -> dict[str, Any]:
-    return register_missing_items_from_rows(conn, _load_csv_rows_from_path(csv_path))
+def register_missing_items_from_csv_path(
+    conn: sqlite3.Connection,
+    csv_path: str | Path,
+    *,
+    skip_unresolved: bool = False,
+) -> dict[str, Any]:
+    return register_missing_items_from_rows(
+        conn,
+        _load_csv_rows_from_path(csv_path),
+        skip_unresolved=skip_unresolved,
+    )
 
 
 def process_order_arrival(

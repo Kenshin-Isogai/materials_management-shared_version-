@@ -1783,6 +1783,65 @@ def test_register_missing_rows_endpoint_rejects_unresolved_new_item(client):
     assert payload["status"] == "error"
     assert payload["error"]["code"] == "MISSING_ITEM_UNRESOLVED"
 
+def test_register_missing_upload_endpoint_rejects_unresolved_new_item_by_default(client):
+    response = client.post(
+        "/api/register-missing",
+        files={
+            "file": (
+                "missing_items_registration.csv",
+                make_csv_bytes(
+                    ["supplier", "item_number", "resolution_type", "category", "url", "description"],
+                    [
+                        {
+                            "supplier": "SupplierResolver",
+                            "item_number": "MISS-ITEM-UPLOAD-UNRESOLVED",
+                            "resolution_type": "new_item",
+                            "category": "",
+                            "url": "",
+                            "description": "",
+                        }
+                    ],
+                ),
+                "text/csv",
+            )
+        },
+    )
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["error"]["code"] == "MISSING_ITEM_UNRESOLVED"
+
+def test_register_missing_upload_endpoint_accepts_skip_unresolved_form_flag(client):
+    response = client.post(
+        "/api/register-missing",
+        files={
+            "file": (
+                "missing_items_registration.csv",
+                make_csv_bytes(
+                    ["supplier", "item_number", "resolution_type", "category", "url", "description"],
+                    [
+                        {
+                            "supplier": "SupplierResolver",
+                            "item_number": "MISS-ITEM-UPLOAD-SKIP",
+                            "resolution_type": "new_item",
+                            "category": "",
+                            "url": "",
+                            "description": "",
+                        }
+                    ],
+                ),
+                "text/csv",
+            )
+        },
+        data={"skip_unresolved": "true"},
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["created_items"] == 0
+    assert data["created_aliases"] == 0
+    assert data["skipped_unresolved"] == 1
+    assert data["is_completely_unresolved"] is True
+
 def test_retry_unregistered_file_endpoint(client, tmp_path: Path):
     unregistered_root = tmp_path / "quotations" / "unregistered"
     registered_root = tmp_path / "quotations" / "registered"

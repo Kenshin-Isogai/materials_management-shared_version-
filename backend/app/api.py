@@ -1086,9 +1086,17 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return ok({"deleted": True})
 
     @app.post("/api/register-missing")
-    async def post_register_missing(file: UploadFile = File(...), conn= db):
+    async def post_register_missing(
+        file: UploadFile = File(...),
+        skip_unresolved: bool = Form(False),
+        conn= db,
+    ):
         content = await file.read()
-        result = service.register_missing_items_from_content(conn, content)
+        result = service.register_missing_items_from_content(
+            conn,
+            content,
+            skip_unresolved=skip_unresolved,
+        )
         conn.commit()
         return ok(result)
 

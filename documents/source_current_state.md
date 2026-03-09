@@ -219,6 +219,7 @@ Last updated: 2026-03-08 (JST)
 - Manual and unregistered batch order imports reject duplicate quotation re-import for the same supplier when existing orders already reference that quotation.
 - Missing-item batch registration now reads both `quotations/unregistered/csv_files/**/_missing_items_registration.csv` and consolidated registers under `quotations/unregistered/missing_item_registers/`.
 - `missing_items_registration.csv` uses `supplier` (not `manufacturer`) because rows are resolved in supplier alias scope; `new_item` rows may specify `manufacturer_name` (or `manufacturer`) and default to `UNKNOWN` when blank.
+- File-upload missing-item registration endpoint (`POST /api/register-missing`) accepts optional multipart form field `skip_unresolved=true` to skip unresolved `new_item` rows instead of failing the whole upload.
 - JSON missing-item registration endpoint (`/api/register-missing/rows`) accepts both `manufacturer_name` and `manufacturer` fields for `new_item` rows.
 - Missing-item registration payloads now also accept legacy `row_type` (`item`/`alias`) as an alias of `resolution_type` (`new_item`/`alias`); `item` is normalized to `new_item`.
 - Supplier resolution for order import and missing-item registration now falls back to case-insensitive lookup before creating a new supplier, preventing alias-scope mismatches from supplier name casing differences.
