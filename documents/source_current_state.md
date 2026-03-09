@@ -209,6 +209,7 @@ Last updated: 2026-03-09 (JST)
   - `imports/orders/registered/csv_files/<supplier>/`
   - `imports/orders/registered/pdf_files/<supplier>/`
 - Batch import functions normalize legacy/typo paths, move files safely, and emit warnings for unresolved paths.
+- `migrate_orders_import_layout()` now rewrites stale `pdf_link` values found in both unregistered and registered order CSV files, in addition to quotation DB rows, so archived registered CSVs stay aligned with the canonical `imports/orders/...` directory structure.
 - Unregistered batch order import writes missing-item rows into one consolidated register CSV per run under `imports/items/unregistered/`; source CSV/PDF files remain in place for unresolved quotations.
 - Consolidated missing-item registers de-duplicate repeated unresolved rows by `(supplier, manufacturer_name, item_number)` across all quotations in the same batch run.
 - Temporary per-file missing-item CSVs generated during batch consolidation are supplier-prefixed and only removed after consolidated register creation succeeds.

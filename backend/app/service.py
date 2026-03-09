@@ -1335,6 +1335,30 @@ def _supplier_name_from_unregistered_path(csv_path: Path, roots: OrderImportRoot
     return supplier_from_unregistered_csv_path(csv_path, roots=roots)
 
 
+def _supplier_name_from_registered_path(csv_path: Path, roots: OrderImportRoots) -> tuple[str, list[str]]:
+    resolved_csv = csv_path.resolve()
+    resolved_registered_csv_root = roots.registered_csv_root.resolve()
+    try:
+        relative = resolved_csv.relative_to(resolved_registered_csv_root)
+    except ValueError as exc:
+        raise AppError(
+            code="INVALID_REGISTERED_PATH",
+            message=f"{resolved_csv} is not under {resolved_registered_csv_root}",
+            status_code=422,
+        ) from exc
+    if len(relative.parts) < 2:
+        raise AppError(
+            code="INVALID_REGISTERED_LAYOUT",
+            message=(
+                "CSV must be placed under "
+                "<registered>/csv_files/<supplier>/<file>.csv: "
+                f"{resolved_csv}"
+            ),
+            status_code=422,
+        )
+    return relative.parts[0], []
+
+
 def _resolve_pdf_source_path(
     csv_path: Path,
     pdf_link: str,
@@ -6503,71 +6527,78 @@ def migrate_orders_import_layout(
                     moved_count += 1
                 move_entries.append(entry)
 
-    for csv_file in sorted(roots.unregistered_csv_root.rglob("*.csv"), key=lambda p: str(p).lower()):
-        try:
-            supplier_name, supplier_warnings = _supplier_name_from_unregistered_path(csv_file, roots)
-            for warning in supplier_warnings:
-                if warning not in warnings:
-                    warnings.append(warning)
-        except AppError as exc:
-            text = str(exc)
-            if text not in warnings:
-                warnings.append(text)
+    csv_rewrite_roots = [
+        (roots.unregistered_csv_root, _supplier_name_from_unregistered_path),
+        (roots.registered_csv_root, _supplier_name_from_registered_path),
+    ]
+    for csv_root, supplier_resolver in csv_rewrite_roots:
+        if not csv_root.exists():
             continue
-
-        with csv_file.open("r", encoding="utf-8-sig", newline="") as fp:
-            reader = csv.DictReader(fp)
-            fieldnames = list(reader.fieldnames or [])
-            rows = list(reader)
-
-        if "pdf_link" not in fieldnames:
-            continue
-
-        changed = False
-        for row_index, row in enumerate(rows, start=2):
-            raw_link = (row.get("pdf_link") or "").strip()
-            if not raw_link:
-                continue
-            source_pdf, normalized_link, link_normalizations, link_warnings = normalize_pdf_link(
-                pdf_link=raw_link,
-                supplier_name=supplier_name,
-                roots=roots,
-                csv_path=csv_file,
-            )
-            for warning in link_warnings:
-                if warning not in warnings:
-                    warnings.append(warning)
-            for item in link_normalizations:
-                norm = dict(item)
-                norm.setdefault("file", str(csv_file))
-                norm.setdefault("row", str(row_index))
-                if norm not in normalizations:
-                    normalizations.append(norm)
-
-            canonical_link = normalized_link
-            if source_pdf is not None and source_pdf.exists():
-                canonical_link = _safe_workspace_relative(source_pdf)
-            if canonical_link == raw_link:
+        for csv_file in sorted(csv_root.rglob("*.csv"), key=lambda p: str(p).lower()):
+            try:
+                supplier_name, supplier_warnings = supplier_resolver(csv_file, roots)
+                for warning in supplier_warnings:
+                    if warning not in warnings:
+                        warnings.append(warning)
+            except AppError as exc:
+                text = str(exc)
+                if text not in warnings:
+                    warnings.append(text)
                 continue
 
-            changed = True
-            row["pdf_link"] = canonical_link
-            csv_rewrite_entries.append(
-                {
-                    "file": str(csv_file),
-                    "row": str(row_index),
-                    "from": raw_link,
-                    "to": canonical_link,
-                    "status": "rewritten" if apply else "planned",
-                }
-            )
+            with csv_file.open("r", encoding="utf-8-sig", newline="") as fp:
+                reader = csv.DictReader(fp)
+                fieldnames = list(reader.fieldnames or [])
+                rows = list(reader)
 
-        if changed and apply:
-            with csv_file.open("w", encoding="utf-8", newline="") as fp:
-                writer = csv.DictWriter(fp, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(rows)
-            csv_apply_count += 1
+            if "pdf_link" not in fieldnames:
+                continue
+
+            changed = False
+            for row_index, row in enumerate(rows, start=2):
+                raw_link = (row.get("pdf_link") or "").strip()
+                if not raw_link:
+                    continue
+                source_pdf, normalized_link, link_normalizations, link_warnings = normalize_pdf_link(
+                    pdf_link=raw_link,
+                    supplier_name=supplier_name,
+                    roots=roots,
+                    csv_path=csv_file,
+                )
+                for warning in link_warnings:
+                    if warning not in warnings:
+                        warnings.append(warning)
+                for item in link_normalizations:
+                    norm = dict(item)
+                    norm.setdefault("file", str(csv_file))
+                    norm.setdefault("row", str(row_index))
+                    if norm not in normalizations:
+                        normalizations.append(norm)
+
+                canonical_link = normalized_link
+                if source_pdf is not None and source_pdf.exists():
+                    canonical_link = _safe_workspace_relative(source_pdf)
+                if canonical_link == raw_link:
+                    continue
+
+                changed = True
+                row["pdf_link"] = canonical_link
+                csv_rewrite_entries.append(
+                    {
+                        "file": str(csv_file),
+                        "row": str(row_index),
+                        "from": raw_link,
+                        "to": canonical_link,
+                        "status": "rewritten" if apply else "planned",
+                    }
+                )
+
+            if changed and apply:
+                with csv_file.open("w", encoding="utf-8", newline="") as fp:
+                    writer = csv.DictWriter(fp, fieldnames=fieldnames)
+                    writer.writeheader()
+                    writer.writerows(rows)
+                csv_apply_count += 1
 
     quotation_rows = conn.execute(
         """

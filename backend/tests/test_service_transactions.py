@@ -580,6 +580,100 @@ def test_migrate_quotations_layout_dry_run_apply_and_idempotent(conn, tmp_path: 
     assert rerun["planned_csv_rewrites"] == 0
     assert rerun["planned_db_rewrites"] == 0
 
+
+def test_migrate_orders_import_layout_rewrites_registered_csv_pdf_links(conn, tmp_path: Path):
+    unregistered_root = tmp_path / "imports" / "orders" / "unregistered"
+    registered_root = tmp_path / "imports" / "orders" / "registered"
+    registered_csv = registered_root / "csv_files" / "SupplierRegistered" / "Q-REG-100.csv"
+    registered_pdf = registered_root / "pdf_files" / "SupplierRegistered" / "Q-REG-100.pdf"
+    registered_csv.parent.mkdir(parents=True, exist_ok=True)
+    registered_pdf.parent.mkdir(parents=True, exist_ok=True)
+    registered_pdf.write_bytes(b"%PDF-1.4\n%registered\n")
+
+    with registered_csv.open("w", encoding="utf-8", newline="") as fp:
+        writer = csv.DictWriter(
+            fp,
+            fieldnames=[
+                "item_number",
+                "quantity",
+                "quotation_number",
+                "issue_date",
+                "order_date",
+                "expected_arrival",
+                "pdf_link",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "item_number": "REG-ITEM-001",
+                "quantity": "1",
+                "quotation_number": "Q-REG-100",
+                "issue_date": "2026-03-01",
+                "order_date": "2026-03-02",
+                "expected_arrival": "2026-03-10",
+                "pdf_link": "quotations/unregistered/pdf_files/supplierregistered/Q-REG-100.pdf",
+            }
+        )
+
+    supplier = service.create_supplier(conn, "SupplierRegistered")
+    conn.execute(
+        """
+        INSERT INTO quotations (supplier_id, quotation_number, issue_date, pdf_link)
+        VALUES (?, ?, ?, ?)
+        """,
+        (
+            supplier["supplier_id"],
+            "Q-REG-100",
+            "2026-03-01",
+            "quotations/unregistered/pdf_files/supplierregistered/Q-REG-100.pdf",
+        ),
+    )
+    conn.commit()
+
+    preview = service.migrate_orders_import_layout(
+        conn,
+        unregistered_root=unregistered_root,
+        registered_root=registered_root,
+        apply=False,
+    )
+    assert preview["mode"] == "dry_run"
+    assert preview["planned_moves"] == 0
+    assert preview["planned_csv_rewrites"] == 1
+    assert preview["planned_db_rewrites"] == 1
+
+    applied = service.migrate_orders_import_layout(
+        conn,
+        unregistered_root=unregistered_root,
+        registered_root=registered_root,
+        apply=True,
+    )
+    conn.commit()
+    assert applied["mode"] == "apply"
+    assert applied["planned_moves"] == 0
+    assert applied["csv_rewrites_applied"] == 1
+    assert applied["db_rewrites_applied"] == 1
+
+    with registered_csv.open("r", encoding="utf-8-sig", newline="") as fp:
+        reader = csv.DictReader(fp)
+        first = next(reader)
+    assert first is not None
+    assert "quotations/unregistered" not in str(first["pdf_link"])
+    assert str(first["pdf_link"]).endswith(
+        "imports/orders/registered/pdf_files/SupplierRegistered/Q-REG-100.pdf"
+    )
+
+    row = conn.execute(
+        "SELECT pdf_link FROM quotations WHERE quotation_number = ?",
+        ("Q-REG-100",),
+    ).fetchone()
+    assert row is not None
+    assert "quotations/unregistered" not in str(row["pdf_link"])
+    assert str(row["pdf_link"]).endswith(
+        "imports/orders/registered/pdf_files/SupplierRegistered/Q-REG-100.pdf"
+    )
+
+
 def test_register_missing_requires_details_for_new_item(conn):
     with pytest.raises(AppError) as exc_info:
         service.register_missing_items_from_rows(

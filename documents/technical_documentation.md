@@ -79,7 +79,8 @@ flowchart LR
 2. Current-state table + event log model.
    `inventory_ledger` gives fast current stock lookup, while `transaction_log` enables traceability and undo.
 3. Filesystem-aware order ingestion.
-   Orders are imported from CSV/PDF folders, then moved to canonical registered paths to preserve auditability.
+    Orders are imported from CSV/PDF folders, then moved to canonical registered paths to preserve auditability.
+   The order-layout migration also rewrites stale `pdf_link` values in both unregistered and registered order CSV archives, plus quotation DB rows, so historical links stay aligned after directory-layout changes.
 4. Reversible bulk imports.
    Item imports store job and row-level effects (`import_jobs`, `import_job_effects`) so undo/redo can be state-checked and safe.
 5. Migration-safe manual project assignment retention.
