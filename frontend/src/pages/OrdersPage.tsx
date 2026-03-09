@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import useSWR from "swr";
 import { CatalogPicker } from "../components/CatalogPicker";
-import { apiDownload, apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
+import { apiDownload, apiGetAllPages, apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
 import { formatActionError, resolvePreviewSelection } from "../lib/previewState";
 import type {
   CatalogSearchResult,
@@ -246,21 +246,21 @@ export function OrdersPage() {
   const [focusOrderId, setFocusOrderId] = useState<number | null>(null);
   const orderContextRef = useRef<HTMLElement | null>(null);
 
-  const { data, error, isLoading, mutate: mutateOrders } = useSWR("/orders", () =>
-    apiGetWithPagination<Order[]>("/orders?per_page=200")
+  const { data: ordersData, error, isLoading, mutate: mutateOrders } = useSWR("/orders", () =>
+    apiGetAllPages<Order>("/orders?per_page=200")
   );
   const {
     data: quotationsData,
     error: quotationsError,
     isLoading: quotationsLoading,
     mutate: mutateQuotations,
-  } = useSWR("/quotations", () => apiGetWithPagination<Quotation[]>("/quotations?per_page=200"));
+  } = useSWR("/quotations", () => apiGetAllPages<Quotation>("/quotations?per_page=200"));
   const { data: itemsData } = useSWR("/items-orders-context", () =>
     apiGetWithPagination<Item[]>("/items?per_page=500")
   );
 
   const sortedOrders = useMemo(() => {
-    const rows = [...(data?.data ?? [])];
+    const rows = [...(ordersData ?? [])];
     rows.sort((a, b) => {
       const left = a[sortKey];
       const right = b[sortKey];
@@ -275,12 +275,12 @@ export function OrdersPage() {
       return sortDirection === "asc" ? compare : -compare;
     });
     return rows;
-  }, [data?.data, sortDirection, sortKey]);
+  }, [ordersData, sortDirection, sortKey]);
 
   const filteredSortedQuotations = useMemo(() => {
     const numberQuery = quotationNumberSearch.trim().toLowerCase();
     const filterQuery = quotationFilter.trim().toLowerCase();
-    const rows = (quotationsData?.data ?? []).filter((row) => {
+    const rows = (quotationsData ?? []).filter((row) => {
       const quotationNumber = row.quotation_number.toLowerCase();
       const matchesNumber = !numberQuery || quotationNumber.includes(numberQuery);
       if (!matchesNumber) return false;
@@ -304,7 +304,7 @@ export function OrdersPage() {
       return quotationSortDirection === "asc" ? compare : -compare;
     });
     return rows;
-  }, [quotationsData?.data, quotationFilter, quotationNumberSearch, quotationSortDirection, quotationSortKey]);
+  }, [quotationsData, quotationFilter, quotationNumberSearch, quotationSortDirection, quotationSortKey]);
 
   const orderCountByQuotationId = useMemo(() => {
     const counts = new Map<number, number>();
@@ -333,8 +333,8 @@ export function OrdersPage() {
   const relatedQuotations = useMemo(() => {
     if (!relatedOrders.length) return [];
     const quotationNumbers = new Set(relatedOrders.map((row) => row.quotation_number));
-    return (quotationsData?.data ?? []).filter((row) => quotationNumbers.has(row.quotation_number));
-  }, [quotationsData?.data, relatedOrders]);
+    return (quotationsData ?? []).filter((row) => quotationNumbers.has(row.quotation_number));
+  }, [quotationsData, relatedOrders]);
 
   function focusOrderContext(orderId: number) {
     setFocusOrderId(orderId);
@@ -1371,7 +1371,7 @@ export function OrdersPage() {
           <>
             {isLoading && <p className="text-sm text-slate-500">Loading...</p>}
             {error && <p className="text-sm text-red-600">{String(error)}</p>}
-            {data?.data && (
+            {ordersData && (
               <div className="overflow-x-auto">
                 <table className="min-w-full text-sm">
                   <thead>
@@ -1580,9 +1580,9 @@ export function OrdersPage() {
         </div>
         {quotationsLoading && <p className="text-sm text-slate-500">Loading...</p>}
         {quotationsError && <p className="text-sm text-red-600">{String(quotationsError)}</p>}
-        {quotationsData?.data && (
+        {quotationsData && (
           <>
-            <p className="mb-2 text-xs text-slate-500">Showing {filteredSortedQuotations.length} / {quotationsData.data.length} quotations</p>
+            <p className="mb-2 text-xs text-slate-500">Showing {filteredSortedQuotations.length} / {quotationsData.length} quotations</p>
             <div className="overflow-x-auto">
               <table className="min-w-full text-sm">
                 <thead>

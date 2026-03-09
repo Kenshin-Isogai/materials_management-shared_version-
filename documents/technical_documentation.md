@@ -533,6 +533,7 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
   - `PUT /api/quotations/{quotation_id}` updates quotation metadata.
   - `DELETE /api/orders/{order_id}` deletes open (non-arrived) orders.
   - `DELETE /api/quotations/{quotation_id}` deletes quotation and linked orders only when no linked order is already arrived.
+- Orders-page read model note: the Orders screen now fetches all pages for `/orders` and `/quotations` before rendering `Imported Quotations` aggregates or opening quotation-driven `Order Context`, preventing older quotations from showing false zero counts because their linked orders were outside the first API page.
 - Consistency rule: when these operations mutate DB rows, matching order CSV records are rewritten/inserted/removed so CSV source files and database state do not diverge.
 - Reliability/scalability posture: order split/merge transitions are persisted in `order_lineage_events` so future analytics/audit screens can read durable lineage without inferring history from mutable order rows.
 - CSV row identity rule for order-level maintenance: `update_order`/`delete_order` must target exactly one CSV row by order identity (including duplicate `(supplier, quotation_number, item_number)` occurrences) to prevent fan-out edits/deletes when a quotation contains repeated item rows.

@@ -1,5 +1,11 @@
 ## 2026-03-12
 
+### Fixed
+
+- Orders page quotation review now loads the full `/orders` and `/quotations` datasets across API pages before computing `Imported Quotations` order counts or opening `Order Context`.
+  - Older quotations such as `オーテックス / 0000001809` and `ミスミ / AA116E19FB` no longer show `Orders = 0` just because their linked orders fall outside the first `/orders?per_page=200` page.
+  - `Imported Quotations -> Details` now opens `Order Context` reliably for those older quotations because the linked order row is present in the client-side dataset.
+
 ### Added
 
 - Automatic CSV consolidation for registered items imports: after each `register_unregistered_item_csvs()` batch run, small CSV files in `imports/items/registered/<YYYY-MM>/` subfolders are automatically merged into consolidated files via `consolidate_registered_item_csvs()`.
@@ -23,6 +29,10 @@
   - `consolidate_registered_item_csvs()` now removes header-only registered CSV inputs without creating empty `items_YYYY-MM_NNN.csv` archives.
 - Backend test fixtures now redirect workspace import/export roots into per-test temporary directories, preventing order-import/API test runs from contaminating `imports/items/unregistered/` with artifact CSVs.
 - Items page `Resolve Missing Items From Orders` now shows a manufacturer column in addition to alias supplier context, matching Bulk Item Entry for new-item registration while keeping alias-supplier edits available.
+
+### Tests
+
+- Added frontend regression coverage for Orders page quotation counts/context when the linked order is older than the first `/orders` API page.
 
 ## 2026-03-11
 

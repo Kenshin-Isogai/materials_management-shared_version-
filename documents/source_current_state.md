@@ -186,6 +186,7 @@ Last updated: 2026-03-09 (JST)
 - Orders page now also shows an `Imported Quotations` table sourced from `GET /api/quotations` (ID, supplier, quotation number, issue date, pdf_link) with client-side sorting and filtering controls.
 - Imported Quotations includes dedicated quotation-number search plus a secondary text filter for supplier/issue-date/PDF-link fields.
 - Imported Quotations now includes an `Orders` count column so each quotation row shows how many order rows currently reference that quotation.
+- Orders page now loads all pages of the orders/quotations APIs for this screen, so older quotations still show correct order counts and `Details` can always open `Order Context` even when the linked order would have fallen outside the first `/orders?per_page=200` page.
 - Orders page mutation flows (manual import, unregistered batch steps, arrival processing) revalidate both orders and quotations datasets to avoid stale `Imported Quotations` content after successful operations.
 - Order List panel now starts collapsed and can be expanded/collapsed inline, reducing scroll distance to the `Imported Quotations` section when reviewing quotations.
 - Orders page includes an `Order Context` panel (row-level Details action) that consolidates item metadata, related order arrivals, and related quotation metadata to reduce cross-tab lookup overhead.
