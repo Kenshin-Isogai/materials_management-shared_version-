@@ -237,14 +237,19 @@ export function OrdersPage() {
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
   const [quotationSortKey, setQuotationSortKey] = useState<"quotation_id" | "supplier_name" | "quotation_number" | "issue_date" | "pdf_link">("quotation_id");
   const [quotationSortDirection, setQuotationSortDirection] = useState<"asc" | "desc">("desc");
+  const [orderPrimarySearch, setOrderPrimarySearch] = useState("");
+  const [orderFilter, setOrderFilter] = useState("");
   const [quotationNumberSearch, setQuotationNumberSearch] = useState("");
   const [quotationFilter, setQuotationFilter] = useState("");
   const [isOrderListExpanded, setIsOrderListExpanded] = useState(false);
+  const [isImportedQuotationsExpanded, setIsImportedQuotationsExpanded] = useState(false);
   const [editingOrderId, setEditingOrderId] = useState<number | null>(null);
   const [editingOrderExpectedArrival, setEditingOrderExpectedArrival] = useState("");
   const [editingOrderSplitQuantity, setEditingOrderSplitQuantity] = useState("");
-  const [focusOrderId, setFocusOrderId] = useState<number | null>(null);
-  const orderContextRef = useRef<HTMLElement | null>(null);
+  const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
+  const [selectedQuotationId, setSelectedQuotationId] = useState<number | null>(null);
+  const orderDetailsRef = useRef<HTMLElement | null>(null);
+  const quotationDetailsRef = useRef<HTMLElement | null>(null);
 
   const { data: ordersData, error, isLoading, mutate: mutateOrders } = useSWR("/orders", () =>
     apiGetAllPages<Order>("/orders?per_page=200")
@@ -276,6 +281,30 @@ export function OrdersPage() {
     });
     return rows;
   }, [ordersData, sortDirection, sortKey]);
+
+  const filteredSortedOrders = useMemo(() => {
+    const primaryQuery = orderPrimarySearch.trim().toLowerCase();
+    const filterQuery = orderFilter.trim().toLowerCase();
+    return sortedOrders.filter((row) => {
+      const orderId = String(row.order_id);
+      const itemNumber = row.canonical_item_number.toLowerCase();
+      const quotationNumber = row.quotation_number.toLowerCase();
+      const matchesPrimary =
+        !primaryQuery ||
+        orderId.includes(primaryQuery) ||
+        itemNumber.includes(primaryQuery) ||
+        quotationNumber.includes(primaryQuery);
+      if (!matchesPrimary) return false;
+
+      if (!filterQuery) return true;
+      const projectName = row.project_name ?? "";
+      const expectedArrival = row.expected_arrival ?? "";
+      return [row.supplier_name, projectName, expectedArrival, row.status]
+        .join(" ")
+        .toLowerCase()
+        .includes(filterQuery);
+    });
+  }, [orderFilter, orderPrimarySearch, sortedOrders]);
 
   const filteredSortedQuotations = useMemo(() => {
     const numberQuery = quotationNumberSearch.trim().toLowerCase();
@@ -318,40 +347,51 @@ export function OrdersPage() {
     return new Map((itemsData?.data ?? []).map((item) => [item.item_number, item]));
   }, [itemsData?.data]);
 
-  const focusedOrder = useMemo(
-    () => sortedOrders.find((row) => row.order_id === focusOrderId) ?? null,
-    [focusOrderId, sortedOrders]
+  const selectedOrder = useMemo(
+    () => sortedOrders.find((row) => row.order_id === selectedOrderId) ?? null,
+    [selectedOrderId, sortedOrders]
   );
 
-  const focusedItem = focusedOrder ? itemByNumber.get(focusedOrder.canonical_item_number) ?? null : null;
+  const selectedOrderItem = selectedOrder ? itemByNumber.get(selectedOrder.canonical_item_number) ?? null : null;
 
-  const relatedOrders = useMemo(() => {
-    if (!focusedOrder) return [];
-    return sortedOrders.filter((row) => row.canonical_item_number === focusedOrder.canonical_item_number);
-  }, [focusedOrder, sortedOrders]);
+  const sameItemOrders = useMemo(() => {
+    if (!selectedOrder) return [];
+    return sortedOrders.filter((row) => row.canonical_item_number === selectedOrder.canonical_item_number);
+  }, [selectedOrder, sortedOrders]);
 
-  const relatedQuotations = useMemo(() => {
-    if (!relatedOrders.length) return [];
-    const quotationNumbers = new Set(relatedOrders.map((row) => row.quotation_number));
+  const sameItemQuotations = useMemo(() => {
+    if (!sameItemOrders.length) return [];
+    const quotationNumbers = new Set(sameItemOrders.map((row) => row.quotation_number));
     return (quotationsData ?? []).filter((row) => quotationNumbers.has(row.quotation_number));
-  }, [quotationsData, relatedOrders]);
+  }, [quotationsData, sameItemOrders]);
 
-  function focusOrderContext(orderId: number) {
-    setFocusOrderId(orderId);
-    setIsOrderListExpanded(false);
+  const selectedQuotation = useMemo(
+    () => (quotationsData ?? []).find((row) => row.quotation_id === selectedQuotationId) ?? null,
+    [quotationsData, selectedQuotationId]
+  );
+
+  const quotationOrders = useMemo(() => {
+    if (!selectedQuotationId) return [];
+    return sortedOrders.filter((row) => row.quotation_id === selectedQuotationId);
+  }, [selectedQuotationId, sortedOrders]);
+
+  function scrollToSection(ref: { current: HTMLElement | null }) {
     requestAnimationFrame(() => {
-      orderContextRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   }
 
-  function openQuotationContext(quotationId: number) {
-    const candidate = sortedOrders.find((row) => row.quotation_id === quotationId);
-    if (!candidate) {
-      setMessage(`No linked orders found for quotation #${quotationId}.`);
-      return;
-    }
+  function openOrderDetails(orderId: number) {
+    setSelectedOrderId(orderId);
+    setIsOrderListExpanded(false);
+    scrollToSection(orderDetailsRef);
+  }
+
+  function openQuotationDetails(quotationId: number) {
     setMessage("");
-    focusOrderContext(candidate.order_id);
+    setSelectedQuotationId(quotationId);
+    setIsImportedQuotationsExpanded(false);
+    scrollToSection(quotationDetailsRef);
   }
 
   function toggleSort(nextKey: typeof sortKey) {
@@ -1369,186 +1409,212 @@ export function OrdersPage() {
         </div>
         {isOrderListExpanded && (
           <>
+            <div className="mb-3 grid gap-2 md:grid-cols-2">
+              <input
+                className="input"
+                value={orderPrimarySearch}
+                onChange={(event) => setOrderPrimarySearch(event.target.value)}
+                placeholder="Search by order #, item, or quotation number"
+              />
+              <input
+                className="input"
+                value={orderFilter}
+                onChange={(event) => setOrderFilter(event.target.value)}
+                placeholder="Filter by supplier, project, expected date, or status"
+              />
+            </div>
             {isLoading && <p className="text-sm text-slate-500">Loading...</p>}
             {error && <p className="text-sm text-red-600">{String(error)}</p>}
             {ordersData && (
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-200 text-left text-slate-500">
-                      <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("order_id")}>Order {sortIndicator("order_id")}</button></th>
-                      <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("supplier_name")}>Supplier {sortIndicator("supplier_name")}</button></th>
-                      <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("project_name")}>Project {sortIndicator("project_name")}</button></th>
-                      <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("canonical_item_number")}>Item {sortIndicator("canonical_item_number")}</button></th>
-                      <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("order_amount")}>Qty {sortIndicator("order_amount")}</button></th>
-                      <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("expected_arrival")}>Expected {sortIndicator("expected_arrival")}</button></th>
-                      <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("status")}>Status {sortIndicator("status")}</button></th>
-                      <th className="px-2 py-2">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sortedOrders.map((row) => (
-                      <tr key={row.order_id} className="border-b border-slate-100">
-                        <td className="px-2 py-2">#{row.order_id}</td>
-                        <td className="px-2 py-2">{row.supplier_name}</td>
-                        <td className="px-2 py-2">{row.project_name ?? "-"}</td>
-                        <td className="px-2 py-2 font-semibold">{row.canonical_item_number}</td>
-                        <td className="px-2 py-2">{row.order_amount}</td>
-                        <td className="px-2 py-2">
-                          {editingOrderId === row.order_id ? (
-                            <div className="space-y-2">
-                              <input
-                                className="input"
-                                type="date"
-                                value={editingOrderExpectedArrival}
-                                onChange={(event) => setEditingOrderExpectedArrival(event.target.value)}
-                              />
-                              <input
-                                className="input"
-                                type="number"
-                                min={1}
-                                max={row.order_amount - 1}
-                                placeholder={`Split qty (1-${row.order_amount - 1})`}
-                                value={editingOrderSplitQuantity}
-                                onChange={(event) => setEditingOrderSplitQuantity(event.target.value)}
-                              />
-                            </div>
-                          ) : (
-                            row.expected_arrival ?? "-"
-                          )}
-                        </td>
-                        <td className="px-2 py-2">{row.status}</td>
-                        <td className="px-2 py-2">
-                          <div className="flex gap-2">
-                            {row.status === "Ordered" ? (
-                              <>
-                                <button
-                                  className="button-subtle"
-                                  onClick={() => markArrived(row.order_id)}
-                                  disabled={loading}
-                                >
-                                  Mark Arrived
-                                </button>
-                                {editingOrderId === row.order_id ? (
-                                  <>
-                                    <button
-                                      className="button-subtle"
-                                      onClick={() => saveOrderEdit(row.order_id)}
-                                      disabled={loading}
-                                    >
-                                      Save ETA / Split
-                                    </button>
-                                    <button className="button-subtle" onClick={cancelEditOrder} disabled={loading}>
-                                      Cancel
-                                    </button>
-                                  </>
-                                ) : (
+              <>
+                <p className="mb-2 text-xs text-slate-500">Showing {filteredSortedOrders.length} / {ordersData.length} orders</p>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-left text-slate-500">
+                        <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("order_id")}>Order {sortIndicator("order_id")}</button></th>
+                        <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("supplier_name")}>Supplier {sortIndicator("supplier_name")}</button></th>
+                        <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("project_name")}>Project {sortIndicator("project_name")}</button></th>
+                        <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("canonical_item_number")}>Item {sortIndicator("canonical_item_number")}</button></th>
+                        <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("order_amount")}>Qty {sortIndicator("order_amount")}</button></th>
+                        <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("expected_arrival")}>Expected {sortIndicator("expected_arrival")}</button></th>
+                        <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("status")}>Status {sortIndicator("status")}</button></th>
+                        <th className="px-2 py-2">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredSortedOrders.map((row) => (
+                        <tr key={row.order_id} className="border-b border-slate-100">
+                          <td className="px-2 py-2">#{row.order_id}</td>
+                          <td className="px-2 py-2">{row.supplier_name}</td>
+                          <td className="px-2 py-2">{row.project_name ?? "-"}</td>
+                          <td className="px-2 py-2 font-semibold">{row.canonical_item_number}</td>
+                          <td className="px-2 py-2">{row.order_amount}</td>
+                          <td className="px-2 py-2">
+                            {editingOrderId === row.order_id ? (
+                              <div className="space-y-2">
+                                <input
+                                  className="input"
+                                  type="date"
+                                  value={editingOrderExpectedArrival}
+                                  onChange={(event) => setEditingOrderExpectedArrival(event.target.value)}
+                                />
+                                <input
+                                  className="input"
+                                  type="number"
+                                  min={1}
+                                  max={row.order_amount - 1}
+                                  placeholder={`Split qty (1-${row.order_amount - 1})`}
+                                  value={editingOrderSplitQuantity}
+                                  onChange={(event) => setEditingOrderSplitQuantity(event.target.value)}
+                                />
+                              </div>
+                            ) : (
+                              row.expected_arrival ?? "-"
+                            )}
+                          </td>
+                          <td className="px-2 py-2">{row.status}</td>
+                          <td className="px-2 py-2">
+                            <div className="flex gap-2">
+                              {row.status === "Ordered" ? (
+                                <>
                                   <button
                                     className="button-subtle"
-                                    onClick={() => beginEditOrder(row)}
+                                    onClick={() => markArrived(row.order_id)}
                                     disabled={loading}
                                   >
-                                    Edit ETA
+                                    Mark Arrived
                                   </button>
-                                )}
-                              </>
-                            ) : (
-                              <span className="text-slate-400">-</span>
-                            )}
-                            <button
-                              className="button-subtle"
-                              onClick={() => focusOrderContext(row.order_id)}
-                              disabled={loading}
-                            >
-                              Details
-                            </button>
-                            <button
-                              className="button-subtle"
-                              onClick={() => deleteOrder(row.order_id)}
-                              disabled={loading || row.status === "Arrived"}
-                              title={row.status === "Arrived" ? "Arrived orders cannot be deleted" : "Delete this order"}
-                            >
-                              Delete
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                                  {editingOrderId === row.order_id ? (
+                                    <>
+                                      <button
+                                        className="button-subtle"
+                                        onClick={() => saveOrderEdit(row.order_id)}
+                                        disabled={loading}
+                                      >
+                                        Save ETA / Split
+                                      </button>
+                                      <button className="button-subtle" onClick={cancelEditOrder} disabled={loading}>
+                                        Cancel
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <button
+                                      className="button-subtle"
+                                      onClick={() => beginEditOrder(row)}
+                                      disabled={loading}
+                                    >
+                                      Edit ETA
+                                    </button>
+                                  )}
+                                </>
+                              ) : (
+                                <span className="text-slate-400">-</span>
+                              )}
+                              <button
+                                className="button-subtle"
+                                onClick={() => openOrderDetails(row.order_id)}
+                                disabled={loading}
+                              >
+                                Order Details
+                              </button>
+                              <button
+                                className="button-subtle"
+                                onClick={() => deleteOrder(row.order_id)}
+                                disabled={loading || row.status === "Arrived"}
+                                title={row.status === "Arrived" ? "Arrived orders cannot be deleted" : "Delete this order"}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </>
         )}
       </section>
 
-      <section className="panel p-4" ref={orderContextRef}>
+      <section className="panel p-4" ref={orderDetailsRef}>
         <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="font-display text-lg font-semibold">Order Context</h2>
-          {focusedOrder && (
-            <button type="button" className="button-subtle" onClick={() => setFocusOrderId(null)}>
+          <h2 className="font-display text-lg font-semibold">Order Details</h2>
+          {selectedOrder && (
+            <button type="button" className="button-subtle" onClick={() => setSelectedOrderId(null)}>
               Clear
             </button>
           )}
         </div>
-        {!focusedOrder && (
+        {!selectedOrder && (
           <p className="text-sm text-slate-500">
-            Select <strong>Details</strong> from any order row to view item metadata, related arrivals, and quotation links
-            in one place. Use <strong>Edit ETA</strong> to change the entire order date, or enter <strong>Split qty</strong>
-            to postpone only part of an open order.
+            Select <strong>Order Details</strong> from any order row to review the selected order, item metadata, and
+            same-item purchasing history. Use <strong>Edit ETA</strong> to change the entire order date, or enter{" "}
+            <strong>Split qty</strong> to postpone only part of an open order.
           </p>
         )}
-        {focusedOrder && (
+        {selectedOrder && (
           <div className="space-y-3 text-sm">
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
               <p>
-                <strong>Item:</strong> {focusedOrder.canonical_item_number}
+                <strong>Order:</strong> #{selectedOrder.order_id}
               </p>
               <p>
-                <strong>Supplier:</strong> {focusedOrder.supplier_name} / <strong>Quotation:</strong>{" "}
-                {focusedOrder.quotation_number}
+                <strong>Item:</strong> {selectedOrder.canonical_item_number}
               </p>
               <p>
-                <strong>Expected arrival:</strong> {focusedOrder.expected_arrival ?? "-"}
+                <strong>Supplier:</strong> {selectedOrder.supplier_name} / <strong>Quotation:</strong>{" "}
+                {selectedOrder.quotation_number}
               </p>
               <p>
-                <strong>Project:</strong> {focusedOrder.project_name ?? "-"}
+                <strong>Expected arrival:</strong> {selectedOrder.expected_arrival ?? "-"}
               </p>
               <p>
-                <strong>Category:</strong> {focusedItem?.category ?? "-"} / <strong>Description:</strong>{" "}
-                {focusedItem?.description ?? "-"}
+                <strong>Project:</strong> {selectedOrder.project_name ?? "-"} / <strong>Status:</strong>{" "}
+                {selectedOrder.status}
+              </p>
+              <p>
+                <strong>Category:</strong> {selectedOrderItem?.category ?? "-"} / <strong>Description:</strong>{" "}
+                {selectedOrderItem?.description ?? "-"}
               </p>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-200 text-left text-slate-500">
-                    <th className="px-2 py-2">Order</th>
-                    <th className="px-2 py-2">Supplier</th>
-                    <th className="px-2 py-2">Qty</th>
-                    <th className="px-2 py-2">Expected</th>
-                    <th className="px-2 py-2">Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {relatedOrders.map((row) => (
-                    <tr key={`related-${row.order_id}`} className="border-b border-slate-100">
-                      <td className="px-2 py-2">#{row.order_id}</td>
-                      <td className="px-2 py-2">{row.supplier_name}</td>
-                      <td className="px-2 py-2">{row.order_amount}</td>
-                      <td className="px-2 py-2">{row.expected_arrival ?? "-"}</td>
-                      <td className="px-2 py-2">{row.status}</td>
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Same-item orders</p>
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-left text-slate-500">
+                      <th className="px-2 py-2">Order</th>
+                      <th className="px-2 py-2">Supplier</th>
+                      <th className="px-2 py-2">Quotation</th>
+                      <th className="px-2 py-2">Qty</th>
+                      <th className="px-2 py-2">Expected</th>
+                      <th className="px-2 py-2">Status</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {sameItemOrders.map((row) => (
+                      <tr key={`related-${row.order_id}`} className="border-b border-slate-100">
+                        <td className="px-2 py-2">#{row.order_id}</td>
+                        <td className="px-2 py-2">{row.supplier_name}</td>
+                        <td className="px-2 py-2">{row.quotation_number}</td>
+                        <td className="px-2 py-2">{row.order_amount}</td>
+                        <td className="px-2 py-2">{row.expected_arrival ?? "-"}</td>
+                        <td className="px-2 py-2">{row.status}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
 
             <div className="space-y-1">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Related quotations</p>
-              {relatedQuotations.length ? (
-                relatedQuotations.map((row) => (
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Same-item quotations</p>
+              {sameItemQuotations.length ? (
+                sameItemQuotations.map((row) => (
                   <p key={`q-${row.quotation_id}`} className="text-sm text-slate-700">
                     #{row.quotation_id} {row.quotation_number} ({row.supplier_name}) / issue: {row.issue_date ?? "-"}
                     {row.pdf_link ? ` / ${row.pdf_link}` : ""}
@@ -1563,90 +1629,181 @@ export function OrdersPage() {
       </section>
 
       <section className="panel p-4">
-        <h2 className="mb-3 font-display text-lg font-semibold">Imported Quotations</h2>
-        <div className="mb-3 grid gap-2 md:grid-cols-2">
-          <input
-            className="input"
-            value={quotationNumberSearch}
-            onChange={(event) => setQuotationNumberSearch(event.target.value)}
-            placeholder="Search by quotation number"
-          />
-          <input
-            className="input"
-            value={quotationFilter}
-            onChange={(event) => setQuotationFilter(event.target.value)}
-            placeholder="Filter by supplier, issue date, or PDF link"
-          />
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="font-display text-lg font-semibold">Imported Quotations</h2>
+          <button
+            type="button"
+            className="button-subtle"
+            onClick={() => setIsImportedQuotationsExpanded((prev) => !prev)}
+            aria-expanded={isImportedQuotationsExpanded}
+          >
+            {isImportedQuotationsExpanded ? "Collapse" : "Expand"}
+          </button>
         </div>
-        {quotationsLoading && <p className="text-sm text-slate-500">Loading...</p>}
-        {quotationsError && <p className="text-sm text-red-600">{String(quotationsError)}</p>}
-        {quotationsData && (
+        {isImportedQuotationsExpanded && (
           <>
-            <p className="mb-2 text-xs text-slate-500">Showing {filteredSortedQuotations.length} / {quotationsData.length} quotations</p>
-            <div className="overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-200 text-left text-slate-500">
-                    <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("quotation_id")}>ID {quotationSortIndicator("quotation_id")}</button></th>
-                    <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("supplier_name")}>Supplier {quotationSortIndicator("supplier_name")}</button></th>
-                    <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("quotation_number")}>Quotation # {quotationSortIndicator("quotation_number")}</button></th>
-                    <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("issue_date")}>Issue Date {quotationSortIndicator("issue_date")}</button></th>
-                    <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("pdf_link")}>PDF Link {quotationSortIndicator("pdf_link")}</button></th>
-                    <th className="px-2 py-2">Orders</th>
-                    <th className="px-2 py-2">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {filteredSortedQuotations.map((row) => (
-                    <tr key={row.quotation_id} className="border-b border-slate-100">
-                      <td className="px-2 py-2">#{row.quotation_id}</td>
-                      <td className="px-2 py-2">{row.supplier_name}</td>
-                      <td className="px-2 py-2 font-semibold">{row.quotation_number}</td>
-                      <td className="px-2 py-2">
-                        {editingQuotationId === row.quotation_id ? (
-                          <input
-                            className="input"
-                            value={editingQuotationIssueDate}
-                            onChange={(event) => setEditingQuotationIssueDate(event.target.value)}
-                            placeholder="YYYY-MM-DD"
-                          />
-                        ) : (
-                          row.issue_date ?? "-"
-                        )}
-                      </td>
-                      <td className="px-2 py-2 text-slate-600">
-                        {editingQuotationId === row.quotation_id ? (
-                          <input
-                            className="input"
-                            value={editingQuotationPdfLink}
-                            onChange={(event) => setEditingQuotationPdfLink(event.target.value)}
-                            placeholder="imports/orders/registered/pdf_files/<supplier>/<file>.pdf"
-                          />
-                        ) : (
-                          row.pdf_link ?? "-"
-                        )}
-                      </td>
-                      <td className="px-2 py-2">{orderCountByQuotationId.get(row.quotation_id) ?? 0}</td>
-                      <td className="px-2 py-2">
-                        <div className="flex gap-2">
-                          <button className="button-subtle" onClick={() => openQuotationContext(row.quotation_id)} disabled={loading}>Details</button>
-                          {editingQuotationId === row.quotation_id ? (
-                            <>
-                              <button className="button-subtle" onClick={() => saveQuotationEdit(row.quotation_id)} disabled={loading}>Save</button>
-                              <button className="button-subtle" onClick={() => setEditingQuotationId(null)} disabled={loading}>Cancel</button>
-                            </>
-                          ) : (
-                            <button className="button-subtle" onClick={() => beginEditQuotation(row)} disabled={loading}>Edit</button>
-                          )}
-                          <button className="button-subtle" onClick={() => deleteQuotation(row.quotation_id)} disabled={loading}>Delete</button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="mb-3 grid gap-2 md:grid-cols-2">
+              <input
+                className="input"
+                value={quotationNumberSearch}
+                onChange={(event) => setQuotationNumberSearch(event.target.value)}
+                placeholder="Search by quotation number"
+              />
+              <input
+                className="input"
+                value={quotationFilter}
+                onChange={(event) => setQuotationFilter(event.target.value)}
+                placeholder="Filter by supplier, issue date, or PDF link"
+              />
             </div>
+            {quotationsLoading && <p className="text-sm text-slate-500">Loading...</p>}
+            {quotationsError && <p className="text-sm text-red-600">{String(quotationsError)}</p>}
+            {quotationsData && (
+              <>
+                <p className="mb-2 text-xs text-slate-500">Showing {filteredSortedQuotations.length} / {quotationsData.length} quotations</p>
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-200 text-left text-slate-500">
+                        <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("quotation_id")}>ID {quotationSortIndicator("quotation_id")}</button></th>
+                        <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("supplier_name")}>Supplier {quotationSortIndicator("supplier_name")}</button></th>
+                        <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("quotation_number")}>Quotation # {quotationSortIndicator("quotation_number")}</button></th>
+                        <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("issue_date")}>Issue Date {quotationSortIndicator("issue_date")}</button></th>
+                        <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("pdf_link")}>PDF Link {quotationSortIndicator("pdf_link")}</button></th>
+                        <th className="px-2 py-2">Orders</th>
+                        <th className="px-2 py-2">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredSortedQuotations.map((row) => (
+                        <tr key={row.quotation_id} className="border-b border-slate-100">
+                          <td className="px-2 py-2">#{row.quotation_id}</td>
+                          <td className="px-2 py-2">{row.supplier_name}</td>
+                          <td className="px-2 py-2 font-semibold">{row.quotation_number}</td>
+                          <td className="px-2 py-2">
+                            {editingQuotationId === row.quotation_id ? (
+                              <input
+                                className="input"
+                                value={editingQuotationIssueDate}
+                                onChange={(event) => setEditingQuotationIssueDate(event.target.value)}
+                                placeholder="YYYY-MM-DD"
+                              />
+                            ) : (
+                              row.issue_date ?? "-"
+                            )}
+                          </td>
+                          <td className="px-2 py-2 text-slate-600">
+                            {editingQuotationId === row.quotation_id ? (
+                              <input
+                                className="input"
+                                value={editingQuotationPdfLink}
+                                onChange={(event) => setEditingQuotationPdfLink(event.target.value)}
+                                placeholder="imports/orders/registered/pdf_files/<supplier>/<file>.pdf"
+                              />
+                            ) : (
+                              row.pdf_link ?? "-"
+                            )}
+                          </td>
+                          <td className="px-2 py-2">{orderCountByQuotationId.get(row.quotation_id) ?? 0}</td>
+                          <td className="px-2 py-2">
+                            <div className="flex gap-2">
+                              <button className="button-subtle" onClick={() => openQuotationDetails(row.quotation_id)} disabled={loading}>View Orders</button>
+                              {editingQuotationId === row.quotation_id ? (
+                                <>
+                                  <button className="button-subtle" onClick={() => saveQuotationEdit(row.quotation_id)} disabled={loading}>Save</button>
+                                  <button className="button-subtle" onClick={() => setEditingQuotationId(null)} disabled={loading}>Cancel</button>
+                                </>
+                              ) : (
+                                <button className="button-subtle" onClick={() => beginEditQuotation(row)} disabled={loading}>Edit</button>
+                              )}
+                              <button className="button-subtle" onClick={() => deleteQuotation(row.quotation_id)} disabled={loading}>Delete</button>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
           </>
+        )}
+      </section>
+
+      <section className="panel p-4" ref={quotationDetailsRef}>
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="font-display text-lg font-semibold">Quotation Details</h2>
+          {selectedQuotation && (
+            <button type="button" className="button-subtle" onClick={() => setSelectedQuotationId(null)}>
+              Clear
+            </button>
+          )}
+        </div>
+        {!selectedQuotation && (
+          <p className="text-sm text-slate-500">
+            Select <strong>View Orders</strong> from any quotation row to review the quotation metadata and every order
+            linked to that quotation.
+          </p>
+        )}
+        {selectedQuotation && (
+          <div className="space-y-3 text-sm">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <p>
+                <strong>Quotation:</strong> #{selectedQuotation.quotation_id} {selectedQuotation.quotation_number}
+              </p>
+              <p>
+                <strong>Supplier:</strong> {selectedQuotation.supplier_name}
+              </p>
+              <p>
+                <strong>Issue date:</strong> {selectedQuotation.issue_date ?? "-"}
+              </p>
+              <p>
+                <strong>PDF link:</strong> {selectedQuotation.pdf_link ?? "-"}
+              </p>
+              <p>
+                <strong>Linked orders:</strong> {quotationOrders.length}
+              </p>
+            </div>
+
+            {quotationOrders.length ? (
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-200 text-left text-slate-500">
+                      <th className="px-2 py-2">Order</th>
+                      <th className="px-2 py-2">Project</th>
+                      <th className="px-2 py-2">Supplier</th>
+                      <th className="px-2 py-2">Item</th>
+                      <th className="px-2 py-2">Qty</th>
+                      <th className="px-2 py-2">Expected</th>
+                      <th className="px-2 py-2">Status</th>
+                      <th className="px-2 py-2">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {quotationOrders.map((row) => (
+                      <tr key={`quotation-${row.order_id}`} className="border-b border-slate-100">
+                        <td className="px-2 py-2">#{row.order_id}</td>
+                        <td className="px-2 py-2">{row.project_name ?? "-"}</td>
+                        <td className="px-2 py-2">{row.supplier_name}</td>
+                        <td className="px-2 py-2 font-semibold">{row.canonical_item_number}</td>
+                        <td className="px-2 py-2">{row.order_amount}</td>
+                        <td className="px-2 py-2">{row.expected_arrival ?? "-"}</td>
+                        <td className="px-2 py-2">{row.status}</td>
+                        <td className="px-2 py-2">
+                          <button className="button-subtle" type="button" onClick={() => openOrderDetails(row.order_id)}>
+                            Order Details
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">No linked orders found for this quotation.</p>
+            )}
+          </div>
         )}
       </section>
     </div>

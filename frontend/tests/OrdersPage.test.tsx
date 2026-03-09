@@ -34,6 +34,10 @@ function renderPage() {
   );
 }
 
+function sectionByHeading(name: string) {
+  return screen.getByRole("heading", { name }).closest("section");
+}
+
 describe("OrdersPage", () => {
   beforeEach(() => {
     apiDownloadMock.mockReset();
@@ -57,6 +61,23 @@ describe("OrdersPage", () => {
             ordered_item_number: "AOMO3080-125",
             order_date: "2025-10-21",
             expected_arrival: "2025-11-30",
+            arrival_date: null,
+            status: "Ordered",
+            supplier_name: "オーテックス",
+            quotation_number: "0000001809",
+          },
+          {
+            order_id: 305,
+            item_id: 2,
+            quotation_id: 12,
+            project_id: 9,
+            project_name: "Project Lens",
+            canonical_item_number: "BETA-200",
+            order_amount: 8,
+            ordered_quantity: 8,
+            ordered_item_number: "BETA-200",
+            order_date: "2025-10-21",
+            expected_arrival: "2025-12-10",
             arrival_date: null,
             status: "Ordered",
             supplier_name: "オーテックス",
@@ -90,6 +111,14 @@ describe("OrdersPage", () => {
               category: "Optics",
               description: "Autex test optic",
             },
+            {
+              item_id: 2,
+              item_number: "BETA-200",
+              manufacturer_id: 8,
+              manufacturer_name: "BETACO",
+              category: "Mechanics",
+              description: "Beta support part",
+            },
           ],
           pagination: undefined,
         };
@@ -110,6 +139,7 @@ describe("OrdersPage", () => {
   });
 
   it("shows quotation order counts using all fetched order pages", async () => {
+    const user = userEvent.setup();
     renderPage();
 
     await waitFor(() => {
@@ -117,30 +147,98 @@ describe("OrdersPage", () => {
       expect(apiGetAllPagesMock).toHaveBeenCalledWith("/quotations?per_page=200");
     });
 
+    const quotationsSection = sectionByHeading("Imported Quotations");
+    expect(quotationsSection).toBeTruthy();
+    await user.click(within(quotationsSection as HTMLElement).getByRole("button", { name: "Expand" }));
+
     const quotationRow = await screen.findByText("0000001809");
     const tableRow = quotationRow.closest("tr");
     expect(tableRow).toBeTruthy();
-    expect(within(tableRow as HTMLElement).getByText("1")).toBeTruthy();
+    expect(within(tableRow as HTMLElement).getByText("2")).toBeTruthy();
   });
 
-  it("opens order context from quotation details when the linked order is older", async () => {
+  it("opens quotation details with every linked order", async () => {
     const user = userEvent.setup();
     renderPage();
+
+    const quotationsSection = sectionByHeading("Imported Quotations");
+    expect(quotationsSection).toBeTruthy();
+    await user.click(within(quotationsSection as HTMLElement).getByRole("button", { name: "Expand" }));
 
     const quotationCell = await screen.findByText("0000001809");
     const tableRow = quotationCell.closest("tr");
     expect(tableRow).toBeTruthy();
 
-    await user.click(within(tableRow as HTMLElement).getByRole("button", { name: "Details" }));
+    await user.click(within(tableRow as HTMLElement).getByRole("button", { name: "View Orders" }));
 
-    const orderContextSection = screen.getByRole("heading", { name: "Order Context" }).closest("section");
-    expect(orderContextSection).toBeTruthy();
+    const quotationDetailsSection = screen.getByRole("heading", { name: "Quotation Details" }).closest("section");
+    expect(quotationDetailsSection).toBeTruthy();
 
     await waitFor(() => {
-      expect(within(orderContextSection as HTMLElement).getByRole("button", { name: "Clear" })).toBeTruthy();
-      expect(within(orderContextSection as HTMLElement).getByText("AOMO3080-125")).toBeTruthy();
-      expect(within(orderContextSection as HTMLElement).getByText("Autex test optic", { exact: false })).toBeTruthy();
+      expect(within(quotationDetailsSection as HTMLElement).getByRole("button", { name: "Clear" })).toBeTruthy();
+      expect(within(quotationDetailsSection as HTMLElement).getByText("Linked orders:", { exact: false })).toBeTruthy();
+      expect(within(quotationDetailsSection as HTMLElement).getByText("#304")).toBeTruthy();
+      expect(within(quotationDetailsSection as HTMLElement).getByText("#305")).toBeTruthy();
+      expect(within(quotationDetailsSection as HTMLElement).getByText("AOMO3080-125")).toBeTruthy();
+      expect(within(quotationDetailsSection as HTMLElement).getByText("BETA-200")).toBeTruthy();
     });
-    expect(screen.queryByText("No linked orders found for quotation #12.")).toBeNull();
+  });
+
+  it("keeps order details separate from quotation details", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    const orderListSection = sectionByHeading("Order List");
+    expect(orderListSection).toBeTruthy();
+    await user.click(within(orderListSection as HTMLElement).getByRole("button", { name: "Expand" }));
+
+    const orderRow = (await screen.findByText("BETA-200")).closest("tr");
+    expect(orderRow).toBeTruthy();
+
+    await user.click(within(orderRow as HTMLElement).getByRole("button", { name: "Order Details" }));
+
+    const orderDetailsSection = screen.getByRole("heading", { name: "Order Details" }).closest("section");
+    const quotationDetailsSection = screen.getByRole("heading", { name: "Quotation Details" }).closest("section");
+    expect(orderDetailsSection).toBeTruthy();
+    expect(quotationDetailsSection).toBeTruthy();
+
+    await waitFor(() => {
+      expect(within(orderDetailsSection as HTMLElement).getByText("Beta support part", { exact: false })).toBeTruthy();
+    });
+    expect((orderDetailsSection as HTMLElement).textContent).toContain("#305");
+    expect((quotationDetailsSection as HTMLElement).textContent).toContain("Select");
+  });
+
+  it("filters the expanded order list with search inputs", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    const orderListSection = sectionByHeading("Order List");
+    expect(orderListSection).toBeTruthy();
+    await user.click(within(orderListSection as HTMLElement).getByRole("button", { name: "Expand" }));
+
+    await user.type(screen.getByPlaceholderText("Search by order #, item, or quotation number"), "BETA");
+
+    await waitFor(() => {
+      expect(within(orderListSection as HTMLElement).getByText("Showing 1 / 2 orders")).toBeTruthy();
+      expect(within(orderListSection as HTMLElement).getByText("BETA-200")).toBeTruthy();
+    });
+    expect(within(orderListSection as HTMLElement).queryByText("AOMO3080-125")).toBeNull();
+  });
+
+  it("supports collapsing imported quotations", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    const quotationsSection = sectionByHeading("Imported Quotations");
+    expect(quotationsSection).toBeTruthy();
+
+    expect(within(quotationsSection as HTMLElement).queryByPlaceholderText("Search by quotation number")).toBeNull();
+
+    await user.click(within(quotationsSection as HTMLElement).getByRole("button", { name: "Expand" }));
+    expect(within(quotationsSection as HTMLElement).getByPlaceholderText("Search by quotation number")).toBeTruthy();
+
+    await user.click(within(quotationsSection as HTMLElement).getByRole("button", { name: "Collapse" }));
+    expect(within(quotationsSection as HTMLElement).queryByPlaceholderText("Search by quotation number")).toBeNull();
   });
 });

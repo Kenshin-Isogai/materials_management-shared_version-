@@ -2,9 +2,15 @@
 
 ### Fixed
 
-- Orders page quotation review now loads the full `/orders` and `/quotations` datasets across API pages before computing `Imported Quotations` order counts or opening `Order Context`.
+- Orders page quotation review now loads the full `/orders` and `/quotations` datasets across API pages before computing `Imported Quotations` order counts or opening `Quotation Details`.
   - Older quotations such as `オーテックス / 0000001809` and `ミスミ / AA116E19FB` no longer show `Orders = 0` just because their linked orders fall outside the first `/orders?per_page=200` page.
-  - `Imported Quotations -> Details` now opens `Order Context` reliably for those older quotations because the linked order row is present in the client-side dataset.
+  - `Imported Quotations -> View Orders` now opens a dedicated quotation panel that lists every linked order for the selected quotation instead of only one linked order.
+- Rearranged Orders-page drill-down UX to separate quotation review from order drill-down.
+  - `Order List -> Order Details` now opens a dedicated `Order Details` panel with selected-order metadata and same-item purchasing history.
+  - `Imported Quotations -> View Orders` now opens a separate `Quotation Details` panel, removing the confusing shared `Order Context` behavior between the two tables.
+- Improved Orders-page browse ergonomics for larger datasets.
+  - `Imported Quotations` now supports the same inline collapse/expand pattern as `Order List` and starts collapsed to reduce long-scroll overhead.
+  - Expanded `Order List` now includes a primary search plus secondary filter controls, mirroring the quotation review workflow.
 
 ### Added
 
@@ -32,7 +38,7 @@
 
 ### Tests
 
-- Added frontend regression coverage for Orders page quotation counts/context when the linked order is older than the first `/orders` API page.
+- Added frontend regression coverage for Orders page quotation counts, quotation-wide order listing, separated order-vs-quotation detail panels, Order List filtering, and Imported Quotations collapse/expand behavior.
 
 ## 2026-03-11
 

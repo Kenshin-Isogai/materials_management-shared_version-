@@ -145,6 +145,7 @@ Last updated: 2026-03-09 (JST)
 - BOM analysis no longer creates missing suppliers as a side effect when a row references a direct canonical item number.
 - Purchase Candidates page provides persistent shortage tracking with status transitions (`OPEN`, `ORDERING`, `ORDERED`, `CANCELLED`) and project-gap candidate creation.
 - Orders page `Order List` supports client-side sorting by order id, supplier, item, quantity, expected arrival, and status.
+- Expanded `Order List` now also includes a primary search (`order #`, item, or quotation number) plus a secondary text filter for supplier/project/expected-date/status fields.
 - Orders page `Order List` now supports inline editing of `expected_arrival` (ETA) for open orders, backed by `PUT /api/orders/{order_id}`.
 - ETA edit flow supports partial postponement using split quantity (e.g., postpone 30 of 50), which creates a second open-order row with the new ETA while preserving traceability-safe quantities.
 - Backend now persists split/merge/partial-arrival order lineage in `order_lineage_events`; API exposes `POST /api/orders/merge` and `GET /api/orders/{order_id}/lineage` for durable traceability and future scale-out reporting.
@@ -186,12 +187,13 @@ Last updated: 2026-03-09 (JST)
 - Orders page now also shows an `Imported Quotations` table sourced from `GET /api/quotations` (ID, supplier, quotation number, issue date, pdf_link) with client-side sorting and filtering controls.
 - Imported Quotations includes dedicated quotation-number search plus a secondary text filter for supplier/issue-date/PDF-link fields.
 - Imported Quotations now includes an `Orders` count column so each quotation row shows how many order rows currently reference that quotation.
-- Orders page now loads all pages of the orders/quotations APIs for this screen, so older quotations still show correct order counts and `Details` can always open `Order Context` even when the linked order would have fallen outside the first `/orders?per_page=200` page.
+- Imported Quotations now starts collapsed and can be expanded/collapsed inline like `Order List`, reducing long-scroll pressure when quotation history grows.
+- Orders page now loads all pages of the orders/quotations APIs for this screen, so older quotations still show correct order counts and `View Orders` can always open `Quotation Details` even when the linked rows would have fallen outside the first `/orders?per_page=200` page.
 - Orders page mutation flows (manual import, unregistered batch steps, arrival processing) revalidate both orders and quotations datasets to avoid stale `Imported Quotations` content after successful operations.
 - Order List panel now starts collapsed and can be expanded/collapsed inline, reducing scroll distance to the `Imported Quotations` section when reviewing quotations.
-- Orders page includes an `Order Context` panel (row-level Details action) that consolidates item metadata, related order arrivals, and related quotation metadata to reduce cross-tab lookup overhead.
-- `Order List` row-level `Details` now auto-collapses the list and smooth-scrolls to `Order Context` to reduce manual navigation.
-- `Imported Quotations` now also includes a row-level `Details` action that directly opens `Order Context` using a linked order, so quotation review no longer requires expanding `Order List` first.
+- Orders page includes a dedicated `Order Details` panel for the `Order List` row action, focused on the selected order, its item metadata, and same-item purchasing history.
+- `Order List` row-level `Order Details` auto-collapses the list and smooth-scrolls to `Order Details` to reduce manual navigation.
+- `Imported Quotations` now includes a row-level `View Orders` action plus a dedicated `Quotation Details` panel that shows quotation metadata and every order linked to the selected quotation without reusing the order drill-down panel.
 - Item List now includes a row-level `Flow` action that opens an item-specific increase/decrease timeline (when/how many/why) combining transaction logs, expected order arrivals, and active reservation deadlines.
 - Items page `Item List` now supports expand/collapse and auto-collapses when `Flow` is opened, reducing scroll overhead to reach the timeline panel.
 - Items page `Item List` supports client-side sorting by ID, item number, manufacturer, category, and URL.
