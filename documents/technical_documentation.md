@@ -81,6 +81,7 @@ flowchart LR
 3. Filesystem-aware order ingestion.
     Orders are imported from CSV/PDF folders, then moved to canonical registered paths to preserve auditability.
    The order-layout migration also rewrites stale `pdf_link` values in both unregistered and registered order CSV archives, plus quotation DB rows, so historical links stay aligned after directory-layout changes.
+   The live unregistered batch import now also rewrites the moved registered CSV archive with its final registered `pdf_link` values, keeping the archive consistent with the post-move filesystem state.
 4. Reversible bulk imports.
    Item imports store job and row-level effects (`import_jobs`, `import_job_effects`) so undo/redo can be state-checked and safe.
    Backend pytest fixtures remap workspace import/export roots into per-test temporary directories so import-related tests cannot leak CSV artifacts into the real repository workspace.

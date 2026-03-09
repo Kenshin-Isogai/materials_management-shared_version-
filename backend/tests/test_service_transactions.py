@@ -298,7 +298,7 @@ def test_import_unregistered_orders_moves_csv_and_pdf(conn, tmp_path: Path):
         writer.writerow(
             {
                 "item_number": item["item_number"],
-                "quantity": "2",
+                "quantity": "15",
                 "quotation_number": "Q-001",
                 "issue_date": "2026-02-20",
                 "order_date": "2026-02-21",
@@ -318,20 +318,41 @@ def test_import_unregistered_orders_moves_csv_and_pdf(conn, tmp_path: Path):
     assert result["succeeded"] == 1
     assert not csv_path.exists()
     assert not pdf_path.exists()
-    assert (registered_root / "csv_files" / "SupplierA" / "Q-001.csv").exists()
-    assert (registered_root / "pdf_files" / "SupplierA" / "Q-001.pdf").exists()
+    registered_csv = registered_root / "csv_files" / "SupplierA" / "Q-001.csv"
+    registered_pdf = registered_root / "pdf_files" / "SupplierA" / "Q-001.pdf"
+    assert registered_csv.exists()
+    assert registered_pdf.exists()
+    assert not (registered_root / "csv_files" / "UNKNOWN").exists()
 
     row = conn.execute(
         """
-        SELECT q.pdf_link
+        SELECT o.order_amount, o.ordered_quantity, q.pdf_link
         FROM quotations q
+        JOIN orders o ON o.quotation_id = q.quotation_id
         JOIN suppliers s ON s.supplier_id = q.supplier_id
         WHERE s.name = ? AND q.quotation_number = ?
         """,
         ("SupplierA", "Q-001"),
     ).fetchone()
     assert row is not None
+    assert int(row["order_amount"]) == 15
+    assert int(row["ordered_quantity"]) == 15
     assert str(row["pdf_link"]).endswith("Q-001.pdf")
+
+    with registered_csv.open("r", encoding="utf-8-sig", newline="") as fp:
+        archived_rows = list(csv.DictReader(fp))
+
+    assert archived_rows == [
+        {
+            "item_number": item["item_number"],
+            "quantity": "15",
+            "quotation_number": "Q-001",
+            "issue_date": "2026-02-20",
+            "order_date": "2026-02-21",
+            "expected_arrival": "2026-02-28",
+            "pdf_link": str(row["pdf_link"]),
+        }
+    ]
 
 def test_import_unregistered_orders_missing_items_keeps_source_files(conn, tmp_path: Path):
     unregistered_root = tmp_path / "quotations" / "unregistered"

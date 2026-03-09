@@ -656,6 +656,14 @@ def _load_csv_rows_from_path(path: str | Path) -> list[dict[str, str]]:
         return [{k.strip(): (v.strip() if isinstance(v, str) else v) for k, v in row.items()} for row in reader]
 
 
+def _load_csv_rows_with_fieldnames_from_path(path: str | Path) -> tuple[list[str], list[dict[str, str]]]:
+    with Path(path).open("r", encoding="utf-8-sig", newline="") as fp:
+        reader = csv.DictReader(fp)
+        fieldnames = [str(name).strip() for name in (reader.fieldnames or [])]
+        rows = [{k.strip(): (v.strip() if isinstance(v, str) else v) for k, v in row.items()} for row in reader]
+    return fieldnames, rows
+
+
 IMPORT_TEMPLATE_SPECS: dict[str, dict[str, Any]] = {
     "items": {
         "filename": "items_import_template.csv",
@@ -6165,7 +6173,7 @@ def _import_unregistered_order_csv_file(
     items_unregistered_root: Path | None = None,
 ) -> dict[str, Any]:
     unregistered_items_root = items_unregistered_root if items_unregistered_root else ITEMS_IMPORT_UNREGISTERED_ROOT
-    rows = _load_csv_rows_from_path(csv_path)
+    fieldnames, rows = _load_csv_rows_with_fieldnames_from_path(csv_path)
     result = import_orders_from_rows(
         conn,
         supplier_name=supplier_name,
@@ -6192,6 +6200,7 @@ def _import_unregistered_order_csv_file(
 
     supplier_id = _get_or_create_supplier(conn, supplier_name)
     pdf_updates: list[dict[str, str]] = []
+    pdf_link_by_quotation: dict[str, str] = {}
     pdf_cache: dict[tuple[str, str], str] = {}
     planned_pdf_moves: list[tuple[Path, Path]] = []
     planned_pdf_target_by_source: dict[str, Path] = {}
@@ -6255,6 +6264,7 @@ def _import_unregistered_order_csv_file(
                 "pdf_link": normalized_pdf_link,
             }
         )
+        pdf_link_by_quotation[quotation_number] = normalized_pdf_link
 
     csv_source = csv_path.resolve()
     csv_dest, _ = _predict_move_target(
@@ -6263,6 +6273,16 @@ def _import_unregistered_order_csv_file(
         set(),
     )
     _execute_planned_file_moves([*planned_pdf_moves, (csv_source, csv_dest.resolve())])
+    if pdf_link_by_quotation and "pdf_link" in fieldnames:
+        rewritten_rows: list[dict[str, Any]] = []
+        for row in rows:
+            updated_row = dict(row)
+            quotation_number = str(updated_row.get("quotation_number") or "").strip()
+            canonical_pdf_link = pdf_link_by_quotation.get(quotation_number)
+            if canonical_pdf_link:
+                updated_row["pdf_link"] = canonical_pdf_link
+            rewritten_rows.append(updated_row)
+        csv_dest.write_bytes(_csv_bytes(fieldnames, rewritten_rows))
     return {
         "file": str(csv_path),
         "supplier": supplier_name,
@@ -6354,7 +6374,7 @@ def import_unregistered_order_csvs(
 
     for csv_path in files:
         processed += 1
-        supplier_name = "UNKNOWN"
+        supplier_name = ""
         supplier_warnings: list[str] = []
         try:
             supplier_name, supplier_warnings = _supplier_name_from_unregistered_path(csv_path, roots)
@@ -6404,7 +6424,7 @@ def import_unregistered_order_csvs(
             report.append(
                 {
                     "file": str(csv_path),
-                    "supplier": supplier_name,
+                    "supplier": supplier_name or "UNKNOWN",
                     "status": "error",
                     "error": str(exc),
                     "warnings": supplier_warnings,
