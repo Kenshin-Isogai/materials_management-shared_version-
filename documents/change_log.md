@@ -1,3 +1,22 @@
+## 2026-03-23 (batch item registration encoding fix)
+
+### Fixed
+
+- Batch item registration (`Run Unregistered Batch`) no longer fails when the batch CSV contains CP932-encoded Japanese supplier names mixed with otherwise UTF-8 content.
+  - Root cause: `batch_missing_items_registration_*.csv` files containing `光響` (and other Japanese supplier names) can end up with Shift-JIS/CP932 bytes in the supplier columns while the rest of the file is UTF-8 (e.g. when the file is edited or re-saved by a tool using the Windows system encoding).
+  - `_decode_csv_bytes()` helper added: tries UTF-8 first, falls back to CP932 on `UnicodeDecodeError`.
+  - `_load_csv_rows_from_path`, `_load_csv_rows_with_fieldnames_from_path`, and `_load_csv_rows_from_content` all now use `_decode_csv_bytes()` so the fallback is applied consistently across all CSV-reading paths.
+  - The existing corrupted CSV (`imports/items/unregistered/batch_missing_items_registration_20260323_193422.csv`) was repaired in-place by replacing the 8 CP932 `光響` byte sequences (`8C F5 8B BF`) with the correct UTF-8 encoding (`E5 85 89 E9 9F BF`).
+- `Run Unregistered Batch` result message now shows per-file error details when any file fails, instead of only showing the opaque `failed=N` count.
+  - The TypeScript response type was extended to include the `files` array.
+  - Failed file paths and their error messages are displayed below the summary line.
+  - The message element was changed from `<p>` to `<pre className="whitespace-pre-wrap">` so multi-line error output renders correctly.
+
+### Tests
+
+- Backend full suite: `161 passed`.
+- Frontend TypeScript compile: no errors (`npx tsc -b --noEmit`).
+
 ## 2026-03-23 (project planning assembly requirement expansion fix)
 
 ### Fixed

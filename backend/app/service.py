@@ -642,27 +642,42 @@ def _get_or_create_quotation(
     return int(cur.lastrowid)
 
 
+def _decode_csv_bytes(content: bytes) -> str:
+    """Decode CSV bytes, falling back to cp932 when the content is not valid UTF-8.
+
+    Batch-registration CSVs are always written as UTF-8 by this service, but
+    externally edited files (e.g. opened and re-saved on a Japanese Windows
+    machine) may contain CP932-encoded text for Japanese supplier names.
+    """
+    try:
+        return content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return content.decode("cp932")
+
+
 def _load_csv_rows_from_content(content: bytes) -> list[dict[str, str]]:
-    text = content.decode("utf-8-sig")
+    text = _decode_csv_bytes(content)
     reader = csv.DictReader(StringIO(text))
     return [{k.strip(): (v.strip() if isinstance(v, str) else v) for k, v in row.items() if k is not None} for row in reader]
 
 
 def _read_csv_text(content: bytes) -> str:
-    return content.decode("utf-8-sig")
+    return _decode_csv_bytes(content)
 
 
 def _load_csv_rows_from_path(path: str | Path) -> list[dict[str, str]]:
-    with Path(path).open("r", encoding="utf-8-sig", newline="") as fp:
-        reader = csv.DictReader(fp)
-        return [{k.strip(): (v.strip() if isinstance(v, str) else v) for k, v in row.items() if k is not None} for row in reader]
+    content = Path(path).read_bytes()
+    text = _decode_csv_bytes(content)
+    reader = csv.DictReader(StringIO(text))
+    return [{k.strip(): (v.strip() if isinstance(v, str) else v) for k, v in row.items() if k is not None} for row in reader]
 
 
 def _load_csv_rows_with_fieldnames_from_path(path: str | Path) -> tuple[list[str], list[dict[str, str]]]:
-    with Path(path).open("r", encoding="utf-8-sig", newline="") as fp:
-        reader = csv.DictReader(fp)
-        fieldnames = [str(name).strip() for name in (reader.fieldnames or []) if name is not None]
-        rows = [{k.strip(): (v.strip() if isinstance(v, str) else v) for k, v in row.items() if k is not None} for row in reader]
+    content = Path(path).read_bytes()
+    text = _decode_csv_bytes(content)
+    reader = csv.DictReader(StringIO(text))
+    fieldnames = [str(name).strip() for name in (reader.fieldnames or []) if name is not None]
+    rows = [{k.strip(): (v.strip() if isinstance(v, str) else v) for k, v in row.items() if k is not None} for row in reader]
     return fieldnames, rows
 
 

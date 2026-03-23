@@ -808,13 +808,22 @@ export function ItemsPage() {
         processed: number;
         succeeded: number;
         failed: number;
+        files: Array<{
+          file: string;
+          status: string;
+          error?: string;
+          result?: { created_items: number; created_aliases: number; skipped_unresolved: number };
+        }>;
       }>("/items/register-unregistered-batch", {
         method: "POST",
         body: JSON.stringify({ continue_on_error: true })
       });
-      setRegisterPendingMessage(
-        `Batch registration: status=${result.status}, processed=${result.processed}, succeeded=${result.succeeded}, failed=${result.failed}`
-      );
+      const summary = `Batch registration: status=${result.status}, processed=${result.processed}, succeeded=${result.succeeded}, failed=${result.failed}`;
+      const fileErrors = (result.files ?? [])
+        .filter(f => f.status === "error")
+        .map(f => `  ${f.file}: ${f.error ?? "unknown error"}`)
+        .join("\n");
+      setRegisterPendingMessage(fileErrors ? `${summary}\n${fileErrors}` : summary);
       await mutate();
       await mutateImportJobs();
     } catch (error) {
@@ -1819,7 +1828,9 @@ export function ItemsPage() {
             Run Unregistered Batch
           </button>
         </div>
-        {registerPendingMessage && <p className="mt-3 text-sm text-signal">{registerPendingMessage}</p>}
+        {registerPendingMessage && (
+          <pre className="mt-3 whitespace-pre-wrap text-sm text-signal">{registerPendingMessage}</pre>
+        )}
       </section>
 
       <section className="panel p-4">
