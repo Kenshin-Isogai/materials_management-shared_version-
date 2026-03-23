@@ -15,11 +15,10 @@ from .errors import AppError
 from . import service
 from .schemas import (
     AliasUpsertRequest,
-    AssemblyCreate,
-    AssemblyUpdate,
     BomAnalyzeRequest,
     BomReserveRequest,
     CategoryMergeRequest,
+    ConfirmProcurementLinksRequest,
     InventoryAdjustRequest,
     InventoryBatchRequest,
     InventoryConsumeRequest,
@@ -27,27 +26,25 @@ from .schemas import (
     ItemCreate,
     ItemMetadataBulkUpdateRequest,
     ItemUpdate,
-    LocationAssemblySetRequest,
     MissingItemRegistrationRequest,
     ManufacturerCreate,
     OrderMergeRequest,
     OrderUpdateRequest,
     PartialArrivalRequest,
+    ProcurementBatchAddLinesRequest,
+    ProcurementBatchCreateRequest,
+    ProcurementBatchUpdate,
+    ProcurementLineUpdate,
     UnregisteredItemBatchRequest,
-    PurchaseCandidateUpdate,
-    PurchaseCandidatesFromBomRequest,
-    PurchaseCandidatesFromProjectRequest,
     ProjectCreate,
     ProjectRequirementUnresolvedItemsCsvRequest,
     ProjectRequirementPreviewRequest,
-    ProjectRfqBatchCreateRequest,
     ProjectUpdate,
-    RfqBatchUpdate,
-    RfqLineUpdate,
     ReservationActionRequest,
     ReservationBatchRequest,
     ReservationCreate,
     ReservationUpdate,
+    ShortageInboxToProcurementRequest,
     SupplierCreate,
     TransactionUndoRequest,
     UnregisteredBatchRequest,
@@ -573,6 +570,15 @@ def create_app(db_path: str | None = None) -> FastAPI:
         conn.commit()
         return ok(result)
 
+    @app.post("/api/orders/import/confirm-procurement-links")
+    def post_confirm_procurement_links(body: ConfirmProcurementLinksRequest, conn= db):
+        result = service.confirm_procurement_links(
+            conn,
+            links=[row.model_dump() for row in body.links],
+        )
+        conn.commit()
+        return ok(result)
+
     @app.post("/api/orders/import-unregistered")
     def post_import_unregistered_orders(body: UnregisteredBatchRequest, conn= db):
         result = service.import_unregistered_order_csvs(
@@ -745,47 +751,6 @@ def create_app(db_path: str | None = None) -> FastAPI:
         conn.commit()
         return ok(result)
 
-    @app.get("/api/assemblies")
-    def get_assemblies(page: int = 1, per_page: int = 50, conn= db):
-        data, pagination = service.list_assemblies(conn, page=page, per_page=per_page)
-        return ok(data, pagination)
-
-    @app.get("/api/assemblies/{assembly_id}")
-    def get_one_assembly(assembly_id: int, conn= db):
-        return ok(service.get_assembly(conn, assembly_id))
-
-    @app.post("/api/assemblies")
-    def post_assembly(body: AssemblyCreate, conn= db):
-        result = service.create_assembly(conn, body.model_dump())
-        conn.commit()
-        return ok(result)
-
-    @app.put("/api/assemblies/{assembly_id}")
-    def put_assembly(assembly_id: int, body: AssemblyUpdate, conn= db):
-        result = service.update_assembly(conn, assembly_id, body.model_dump(exclude_unset=True))
-        conn.commit()
-        return ok(result)
-
-    @app.delete("/api/assemblies/{assembly_id}")
-    def delete_one_assembly(assembly_id: int, conn= db):
-        service.delete_assembly(conn, assembly_id)
-        conn.commit()
-        return ok({"deleted": True})
-
-    @app.get("/api/assemblies/{assembly_id}/locations")
-    def get_assembly_location_view(assembly_id: int, conn= db):
-        return ok(service.get_assembly_locations(conn, assembly_id))
-
-    @app.put("/api/locations/{location}/assemblies")
-    def put_location_assemblies(location: str, body: LocationAssemblySetRequest, conn= db):
-        result = service.set_location_assemblies(
-            conn,
-            location=location,
-            assignments=[entry.model_dump() for entry in body.assignments],
-        )
-        conn.commit()
-        return ok(result)
-
     @app.get("/api/projects")
     def get_projects(page: int = 1, per_page: int = 50, conn= db):
         data, pagination = service.list_projects(conn, page=page, per_page=per_page)
@@ -871,13 +836,14 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return ok(result)
 
     @app.post("/api/projects/{project_id}/rfq-batches")
-    def post_project_rfq_batch(project_id: int, body: ProjectRfqBatchCreateRequest, conn= db):
+    def post_project_rfq_batch(project_id: int, body: dict[str, Any] | None = None, conn= db):
+        payload = body or {}
         result = service.create_project_rfq_batch_from_analysis(
             conn,
             project_id,
-            title=body.title,
-            note=body.note,
-            target_date=body.target_date,
+            title=payload.get("title"),
+            note=payload.get("note"),
+            target_date=payload.get("target_date"),
         )
         conn.commit()
         return ok(result)
@@ -895,6 +861,74 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 target_date=target_date,
             )
         )
+
+    @app.get("/api/procurement-batches")
+    def get_procurement_batches(
+        status: str | None = None,
+        item_id: int | None = None,
+        project_id: int | None = None,
+        page: int = 1,
+        per_page: int = 50,
+        conn= db,
+    ):
+        data, pagination = service.list_procurement_batches(
+            conn,
+            status=status,
+            item_id=item_id,
+            project_id=project_id,
+            page=page,
+            per_page=per_page,
+        )
+        return ok(data, pagination)
+
+    @app.post("/api/procurement-batches")
+    def post_procurement_batch(body: ProcurementBatchCreateRequest, conn= db):
+        result = service.create_procurement_batch(conn, body.model_dump())
+        conn.commit()
+        return ok(result)
+
+    @app.get("/api/procurement-batches/{batch_id}")
+    def get_procurement_batch(batch_id: int, conn= db):
+        return ok(service.get_procurement_batch(conn, batch_id))
+
+    @app.put("/api/procurement-batches/{batch_id}")
+    def put_procurement_batch(batch_id: int, body: ProcurementBatchUpdate, conn= db):
+        result = service.update_procurement_batch(conn, batch_id, body.model_dump(exclude_unset=True))
+        conn.commit()
+        return ok(result)
+
+    @app.delete("/api/procurement-batches/{batch_id}")
+    def delete_procurement_batch(batch_id: int, conn= db):
+        result = service.delete_procurement_batch(conn, batch_id)
+        conn.commit()
+        return ok(result)
+
+    @app.get("/api/procurement-batches/{batch_id}/export.csv")
+    def get_procurement_batch_export(batch_id: int, conn= db):
+        filename, content = service.export_procurement_batch_csv(conn, batch_id)
+        return csv_attachment(filename, content)
+
+    @app.post("/api/procurement-batches/{batch_id}/lines")
+    def post_procurement_batch_lines(batch_id: int, body: ProcurementBatchAddLinesRequest, conn= db):
+        result = service.add_procurement_lines(
+            conn,
+            batch_id=batch_id,
+            lines=[row.model_dump() for row in body.lines],
+        )
+        conn.commit()
+        return ok(result)
+
+    @app.put("/api/procurement-lines/{line_id}")
+    def put_procurement_line(line_id: int, body: ProcurementLineUpdate, conn= db):
+        result = service.update_procurement_line(conn, line_id, body.model_dump(exclude_unset=True))
+        conn.commit()
+        return ok(result)
+
+    @app.delete("/api/procurement-lines/{line_id}")
+    def delete_procurement_line(line_id: int, conn= db):
+        result = service.delete_procurement_line(conn, line_id)
+        conn.commit()
+        return ok(result)
 
     @app.get("/api/rfq-batches")
     def get_rfq_batches(
@@ -918,14 +952,84 @@ def create_app(db_path: str | None = None) -> FastAPI:
         return ok(service.get_rfq_batch(conn, rfq_id))
 
     @app.put("/api/rfq-batches/{rfq_id}")
-    def put_rfq_batch(rfq_id: int, body: RfqBatchUpdate, conn= db):
-        result = service.update_rfq_batch(conn, rfq_id, body.model_dump(exclude_unset=True))
+    def put_rfq_batch(rfq_id: int, body: dict[str, Any], conn= db):
+        result = service.update_rfq_batch(conn, rfq_id, body)
         conn.commit()
         return ok(result)
 
     @app.put("/api/rfq-lines/{line_id}")
-    def put_rfq_line(line_id: int, body: RfqLineUpdate, conn= db):
-        result = service.update_rfq_line(conn, line_id, body.model_dump(exclude_unset=True))
+    def put_rfq_line(line_id: int, body: dict[str, Any], conn= db):
+        result = service.update_rfq_line(conn, line_id, body)
+        conn.commit()
+        return ok(result)
+
+    @app.get("/api/purchase-candidates")
+    def get_purchase_candidates(
+        status: str | None = None,
+        source_type: str | None = None,
+        project_id: int | None = None,
+        page: int = 1,
+        per_page: int = 50,
+        conn= db,
+    ):
+        data, pagination = service.list_purchase_candidates(
+            conn,
+            status=status,
+            source_type=source_type,
+            project_id=project_id,
+            page=page,
+            per_page=per_page,
+        )
+        return ok(data, pagination)
+
+    @app.get("/api/purchase-candidates/{candidate_id}")
+    def get_purchase_candidate(candidate_id: int, conn= db):
+        return ok(service.get_purchase_candidate(conn, candidate_id))
+
+    @app.post("/api/purchase-candidates/from-bom")
+    def post_purchase_candidates_from_bom(body: dict[str, Any], conn= db):
+        result = service.create_purchase_candidates_from_bom(
+            conn,
+            rows=list(body.get("rows") or []),
+            target_date=body.get("target_date"),
+            note=body.get("note"),
+        )
+        conn.commit()
+        return ok(result)
+
+    @app.post("/api/purchase-candidates/from-project/{project_id}")
+    def post_purchase_candidates_from_project(project_id: int, body: dict[str, Any] | None = None, conn= db):
+        payload = body or {}
+        result = service.create_purchase_candidates_from_project_gap(
+            conn,
+            project_id,
+            target_date=payload.get("target_date"),
+            note=payload.get("note"),
+        )
+        conn.commit()
+        return ok(result)
+
+    @app.put("/api/purchase-candidates/{candidate_id}")
+    def put_purchase_candidate(candidate_id: int, body: dict[str, Any], conn= db):
+        result = service.update_purchase_candidate(conn, candidate_id, body)
+        conn.commit()
+        return ok(result)
+
+    @app.get("/api/shortage-inbox")
+    def get_shortage_inbox(conn= db):
+        return ok(service.get_shortage_inbox(conn))
+
+    @app.post("/api/shortage-inbox/to-procurement")
+    def post_shortage_inbox_to_procurement(body: ShortageInboxToProcurementRequest, conn= db):
+        result = service.add_shortages_to_procurement(
+            conn,
+            batch_id=body.batch_id,
+            create_batch_title=body.create_batch_title,
+            create_batch_note=body.create_batch_note,
+            confirm_project_id=body.confirm_project_id,
+            confirm_target_date=body.confirm_target_date,
+            lines=[row.model_dump() for row in body.lines],
+        )
         conn.commit()
         return ok(result)
 
@@ -959,65 +1063,6 @@ def create_app(db_path: str | None = None) -> FastAPI:
         conn.commit()
         return ok(result)
 
-    @app.get("/api/purchase-candidates")
-    def get_purchase_candidates(
-        status: str | None = None,
-        source_type: str | None = None,
-        target_date: str | None = None,
-        page: int = 1,
-        per_page: int = 50,
-        conn= db,
-    ):
-        data, pagination = service.list_purchase_candidates(
-            conn,
-            status=status,
-            source_type=source_type,
-            target_date=target_date,
-            page=page,
-            per_page=per_page,
-        )
-        return ok(data, pagination)
-
-    @app.get("/api/purchase-candidates/{candidate_id}")
-    def get_purchase_candidate(candidate_id: int, conn= db):
-        return ok(service.get_purchase_candidate(conn, candidate_id))
-
-    @app.post("/api/purchase-candidates/from-bom")
-    def post_purchase_candidates_from_bom(body: PurchaseCandidatesFromBomRequest, conn= db):
-        result = service.create_purchase_candidates_from_bom(
-            conn,
-            rows=[row.model_dump() for row in body.rows],
-            target_date=body.target_date,
-            note=body.note,
-        )
-        conn.commit()
-        return ok(result)
-
-    @app.post("/api/purchase-candidates/from-project/{project_id}")
-    def post_purchase_candidates_from_project(
-        project_id: int,
-        body: PurchaseCandidatesFromProjectRequest,
-        conn= db,
-    ):
-        result = service.create_purchase_candidates_from_project_gap(
-            conn,
-            project_id,
-            target_date=body.target_date,
-            note=body.note,
-        )
-        conn.commit()
-        return ok(result)
-
-    @app.put("/api/purchase-candidates/{candidate_id}")
-    def put_purchase_candidate(candidate_id: int, body: PurchaseCandidateUpdate, conn= db):
-        result = service.update_purchase_candidate(
-            conn,
-            candidate_id,
-            body.model_dump(exclude_unset=True),
-        )
-        conn.commit()
-        return ok(result)
-
     @app.get("/api/locations")
     def get_locations(conn= db):
         return ok(service.list_locations(conn))
@@ -1029,6 +1074,47 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.post("/api/locations/{location}/disassemble")
     def post_location_disassemble(location: str, conn= db):
         result = service.disassemble_location(conn, location)
+        conn.commit()
+        return ok(result)
+
+    @app.get("/api/assemblies")
+    def get_assemblies(page: int = 1, per_page: int = 50, conn= db):
+        data, pagination = service.list_assemblies(conn, page=page, per_page=per_page)
+        return ok(data, pagination)
+
+    @app.post("/api/assemblies")
+    def post_assembly(body: dict[str, Any], conn= db):
+        result = service.create_assembly(conn, body)
+        conn.commit()
+        return ok(result)
+
+    @app.get("/api/assemblies/{assembly_id}")
+    def get_assembly(assembly_id: int, conn= db):
+        return ok(service.get_assembly(conn, assembly_id))
+
+    @app.put("/api/assemblies/{assembly_id}")
+    def put_assembly(assembly_id: int, body: dict[str, Any], conn= db):
+        result = service.update_assembly(conn, assembly_id, body)
+        conn.commit()
+        return ok(result)
+
+    @app.delete("/api/assemblies/{assembly_id}")
+    def delete_assembly(assembly_id: int, conn= db):
+        service.delete_assembly(conn, assembly_id)
+        conn.commit()
+        return ok({"deleted": True})
+
+    @app.get("/api/assemblies/{assembly_id}/locations")
+    def get_assembly_locations(assembly_id: int, conn= db):
+        return ok(service.get_assembly_locations(conn, assembly_id))
+
+    @app.put("/api/locations/{location}/assemblies")
+    def put_location_assemblies(location: str, body: dict[str, Any], conn= db):
+        result = service.set_location_assemblies(
+            conn,
+            location=location,
+            assignments=list(body.get("assignments") or []),
+        )
         conn.commit()
         return ok(result)
 

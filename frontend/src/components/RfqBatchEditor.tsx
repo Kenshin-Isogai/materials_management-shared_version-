@@ -150,7 +150,8 @@ export function RfqBatchEditor({
     }
     const serverLineDrafts = buildLineDraftMap(detailData.lines);
     const serverBatchBaseline = createRfqBatchBaseline(detailData);
-    if (loadedBatchId !== detailData.rfq_id) {
+    const serverBatchId = detailData.rfq_id ?? null;
+    if (loadedBatchId !== serverBatchId) {
       setBatchTitle(serverBatchBaseline.title);
       setBatchStatus(serverBatchBaseline.status);
       setBatchNote(serverBatchBaseline.note);
@@ -159,7 +160,7 @@ export function RfqBatchEditor({
       setLineDraftBaseline(serverLineDrafts);
       setPendingBatchRehydrate(false);
       setPendingLineRehydrateIds([]);
-      setLoadedBatchId(detailData.rfq_id);
+      setLoadedBatchId(serverBatchId);
       return;
     }
     if (!pendingBatchRehydrate && !pendingLineRehydrateIds.length) return;
@@ -181,7 +182,7 @@ export function RfqBatchEditor({
     }
     setPendingBatchRehydrate((c) => (c ? false : c));
     setPendingLineRehydrateIds((c) => (c.length ? [] : c));
-    setLoadedBatchId(detailData.rfq_id);
+    setLoadedBatchId(serverBatchId);
   }, [detailData, detailKey, loadedBatchId, pendingBatchRehydrate, pendingLineRehydrateIds]);
 
   function updateLineDraft(lineId: number, patch: Partial<RfqLineDraft>) {

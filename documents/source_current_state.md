@@ -1,6 +1,6 @@
 # Source Current State
 
-Last updated: 2026-03-09 (JST)
+Last updated: 2026-03-23 (JST)
 
 ## 1. System Snapshot
 
@@ -16,9 +16,9 @@ Last updated: 2026-03-09 (JST)
 
 - `backend/`
   - `main.py`: CLI entrypoint and command routing
-  - `app/api.py`: HTTP API routes (107 endpoints)
+- `app/api.py`: HTTP API routes, including temporary legacy compatibility aliases during redesign
   - `app/service.py`: domain logic (single business logic layer)
-  - `app/db.py`: schema + indexes + migration logic (18 tables)
+  - `app/db.py`: schema + indexes + migration logic, now including procurement-batch migration support
   - `tests/`: integration/service/path tests
 - `frontend/`
   - `src/pages/`: tab/page UI for dashboard, items, inventory, orders, reservations, assemblies, projects, purchase candidates, BOM, locations, snapshot, history, master data
@@ -47,10 +47,10 @@ Last updated: 2026-03-09 (JST)
 
 - SQLite with normalized core entities:
   - items, inventory ledger, orders/quotations, reservations
-  - assemblies/projects with requirements
+  - projects with item-based requirements
   - sequential planning pipeline summaries derived from project status + planned_start
-  - persistent `rfq_batches` / `rfq_lines` for project-dedicated shortage follow-up
-  - purchase candidate persistence for pre-PO shortages
+  - primary procurement persistence via `procurement_batches` / `procurement_lines`
+  - temporary legacy `rfq_batches` / `rfq_lines` and `purchase_candidates` compatibility remains during migration
   - supplier item aliases and category aliases
   - import jobs/effects for reversible item imports
   - transaction log with undo chain
@@ -131,16 +131,18 @@ Last updated: 2026-03-09 (JST)
   - `POST /api/inventory/import-preview` validates operation/location rules, simulates inventory effects row-by-row, and flags unresolved item ids or stock shortages before commit
   - preview confirmation can send per-row `item_id` overrides back through `POST /api/inventory/import-csv`
 - Projects page now supports editing an existing project (load details into form, then save via project update API) including requirement composition/quantities.
-- Planning page remains available as the detailed fallback future-demand screen.
+- Existing projects with legacy assembly-only requirements still load those rows from the backend; the current item-only editor preserves them on save and shows an inline warning that they remain non-editable in this form.
+- Planning page is being folded into `/workspace`; the frontend route now redirects and the procurement-first workflow is centered on `/workspace` plus `/procurement`.
   - Select a project and analyze it at its planned start (or an override date).
   - Later projects are netted against earlier committed projects (`CONFIRMED` / `ACTIVE`) instead of being analyzed in isolation, including committed work whose start date is already in the past.
   - On-time shortage rows can still be converted directly into RFQ batches, and RFQ creation reuses the planning date currently under review.
-- RFQ page remains the detailed project-shortage follow-up surface when the workspace drawer is not sufficient.
-  - RFQ batches persist project-specific shortage rows.
-  - RFQ lines capture supplier, finalized quantity, lead time, expected arrival, status, and an order link that is only retained while the line is `ORDERED`.
-  - An `ORDERED` linked order is synchronized into `orders.project_id`; draft/quoted lines do not pull the order out of the generic planning pool, and manual order project reassignment is blocked while an `ORDERED` RFQ line owns that assignment.
+- Procurement page now serves as the unified shortage follow-up surface.
+  - `/api/shortage-inbox` exposes current shortage rows.
+  - `/api/shortage-inbox/to-procurement` creates or extends procurement batches from shortage selections and can optionally confirm a draft project with the active planning date for workspace-driven procurement creation.
+  - `/api/procurement-batches/{id}/export.csv` produces supplier-facing CSV output.
+- Legacy location assembly assignment remains available through `PUT /api/locations/{location}/assemblies` for the Location page workflow.
 - BOM page now supports optional analysis date input and sends `target_date` to `POST /api/bom/analyze` for future-arrival-aware gap checks.
-- BOM page now supports `Save Shortages` to persist shortage/missing rows as purchase candidates before PO creation.
+- BOM page now sends shortage rows into procurement creation instead of purchase-candidate persistence in the primary UI flow.
 - BOM page `Save Shortages` now surfaces API errors in-page (message area) instead of failing silently on rejected inputs such as past `target_date`.
 - BOM analysis no longer creates missing suppliers as a side effect when a row references a direct canonical item number.
 - Purchase Candidates page provides persistent shortage tracking with status transitions (`OPEN`, `ORDERING`, `ORDERED`, `CANCELLED`) and project-gap candidate creation.
@@ -165,7 +167,8 @@ Last updated: 2026-03-09 (JST)
 - BOM analysis endpoint now supports optional `target_date` projection (`current net available + open orders arriving by date`) while BOM reserve remains current-availability execution behavior.
 - Project planning now has two layers:
   - `GET /api/projects/{id}/planning-analysis` for sequential multi-project netting with backlog carry-forward
-  - `GET /api/projects/{id}/gap-analysis` as a compatibility view over the same planning engine, returning the effective planning `target_date` used for the analysis
+  - `GET /api/projects/{id}/gap-analysis` as a compatibility view:
+    no `target_date` means current-stock-only shortage calculation, while explicit `target_date` uses the planning engine and future-arrival projection
 - The planning engine now also returns source-level explainability for workspace consumers.
   - planning rows expose `supply_sources_by_start` and `recovery_sources_after_start`
   - pipeline rows expose `generic_committed_total` and `cumulative_generic_consumed_before_total`

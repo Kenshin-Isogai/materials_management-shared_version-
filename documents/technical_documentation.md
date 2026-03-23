@@ -14,6 +14,15 @@ This document explains the implemented architecture of the Materials Management 
 
 ## Software Architecture
 
+### Redesign status (2026-03-23)
+
+- The active direction is procurement-first: legacy RFQ and purchase-candidate flows are being consolidated behind `procurement_batches` and `procurement_lines`.
+- Project requirements are item-only in the primary UI path. Assembly-based planning is no longer part of the target design.
+- The canonical navigation now favors `/workspace` for planning analysis and `/procurement` for shortage follow-up.
+- Temporary backend/API compatibility shims remain for some legacy RFQ, assembly, and purchase-candidate routes while the redesign settles.
+- Legacy assembly-backed project requirements are preserved on project update when the item-only editor does not send them back, and the editor warns that those preserved rows are not editable in the current item-only form.
+- Workspace procurement creation can explicitly confirm a `PLANNING` project and persist the active planning date so the procurement-first path keeps the prior project-confirmation behavior.
+
 ### Projects planning UX notes (frontend)
 
 - Added `/workspace` as the primary future-demand route.
@@ -22,10 +31,10 @@ This document explains the implemented architecture of the Materials Management 
   - deep-dive view: planning board with server-driven shortage rows and supply-source breakdowns
 - frontend routing now boots through a React Router data router (`createBrowserRouter` + `RouterProvider`)
 - workspace route-leave protection now uses `useBlocker` plus an explicit confirmation effect instead of `unstable_usePrompt`, avoiding stale blocked-navigation state after leaving workspace/RFQ flows
-  - right-side drawer infrastructure provides local breadcrumb navigation for project, item, and RFQ context without leaving the board
+  - right-side drawer infrastructure provides local breadcrumb navigation for project, item, and procurement context without leaving the board
   - project drawer now mounts the shared project editor, including preview-first bulk requirement entry
   - item drawer now combines inventory, incoming orders, item flow, and cross-project planning allocation context
-  - RFQ drawer now mounts the shared RFQ batch/line editor instead of a read-only summary
+  - legacy RFQ drawer paths are being reduced in favor of the dedicated `/procurement` page and procurement summary links
   - board date state re-syncs to the effective planning `target_date` when the same project refreshes and no local preview edit is pending
   - drawer close, breadcrumb back, route leave, and drawer-stack truncation flows now guard unsaved project/RFQ drafts
   - item-scoped RFQ drawers keep the full batch visible while surfacing the focused item rows first
@@ -466,8 +475,9 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
   - `cumulative_generic_consumed_before_total`: generic supply already absorbed by earlier committed projects before the current project row
 - Compatibility endpoint: `GET /api/projects/{project_id}/gap-analysis`
   - still returns `available_stock` / `shortage`
-  - internally reads from the sequential planning engine instead of the old isolated projection rule
-  - returns the effective `target_date` that the shared planning engine actually used
+  - no `target_date`: uses a current-stock compatibility rule and does not project pending arrivals
+  - with `target_date`: reads from the sequential planning engine and includes eligible arrivals up to that date
+  - returns the effective `target_date` used for the response (`today_jst()` when omitted)
 - `GET /api/workspace/summary` is intentionally aggregate-only:
   - committed rows include authoritative planning totals reused from the canonical pipeline snapshot
   - `PLANNING` rows return explicit `preview_required` semantics instead of unreliable inferred shortage numbers

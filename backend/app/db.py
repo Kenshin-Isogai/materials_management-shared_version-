@@ -200,6 +200,42 @@ SCHEMA_STATEMENTS = [
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS procurement_batches (
+        batch_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL CHECK (trim(title) <> ''),
+        status TEXT NOT NULL DEFAULT 'DRAFT'
+            CHECK (status IN ('DRAFT', 'SENT', 'QUOTED', 'ORDERED', 'CLOSED', 'CANCELLED')),
+        note TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS procurement_lines (
+        line_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        batch_id INTEGER NOT NULL,
+        item_id INTEGER NOT NULL,
+        source_type TEXT NOT NULL CHECK (source_type IN ('PROJECT', 'BOM', 'ADHOC')),
+        source_project_id INTEGER,
+        requested_quantity INTEGER NOT NULL CHECK (requested_quantity > 0),
+        finalized_quantity INTEGER NOT NULL CHECK (finalized_quantity > 0),
+        supplier_name TEXT,
+        expected_arrival TEXT,
+        linked_order_id INTEGER,
+        linked_quotation_id INTEGER,
+        status TEXT NOT NULL DEFAULT 'DRAFT'
+            CHECK (status IN ('DRAFT', 'SENT', 'QUOTED', 'ORDERED', 'CANCELLED')),
+        note TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (batch_id) REFERENCES procurement_batches (batch_id) ON DELETE CASCADE,
+        FOREIGN KEY (item_id) REFERENCES items_master (item_id),
+        FOREIGN KEY (source_project_id) REFERENCES projects (project_id) ON DELETE SET NULL,
+        FOREIGN KEY (linked_order_id) REFERENCES orders (order_id) ON DELETE SET NULL,
+        FOREIGN KEY (linked_quotation_id) REFERENCES quotations (quotation_id) ON DELETE SET NULL
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS rfq_batches (
         rfq_id INTEGER PRIMARY KEY AUTOINCREMENT,
         project_id INTEGER NOT NULL,
@@ -344,6 +380,11 @@ INDEX_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_project_requirements_project_id ON project_requirements (project_id)",
     "CREATE INDEX IF NOT EXISTS idx_project_requirements_assembly_id ON project_requirements (assembly_id)",
     "CREATE INDEX IF NOT EXISTS idx_project_requirements_item_id ON project_requirements (item_id)",
+    "CREATE INDEX IF NOT EXISTS idx_procurement_batches_status_updated ON procurement_batches (status, updated_at)",
+    "CREATE INDEX IF NOT EXISTS idx_procurement_lines_batch_id ON procurement_lines (batch_id)",
+    "CREATE INDEX IF NOT EXISTS idx_procurement_lines_item_status_expected_arrival ON procurement_lines (item_id, status, expected_arrival)",
+    "CREATE INDEX IF NOT EXISTS idx_procurement_lines_source_project_id ON procurement_lines (source_project_id)",
+    "CREATE INDEX IF NOT EXISTS idx_procurement_lines_linked_order_id ON procurement_lines (linked_order_id)",
     "CREATE INDEX IF NOT EXISTS idx_rfq_batches_project_id_status ON rfq_batches (project_id, status, target_date)",
     "CREATE INDEX IF NOT EXISTS idx_rfq_lines_rfq_id ON rfq_lines (rfq_id)",
     "CREATE INDEX IF NOT EXISTS idx_rfq_lines_item_id_status ON rfq_lines (item_id, status, expected_arrival)",
@@ -513,6 +554,162 @@ def _recreate_order_lineage_without_fk(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE order_lineage_events_new RENAME TO order_lineage_events")
 
 
+def _migrate_legacy_procurement_tables(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "procurement_batches") or not _table_exists(conn, "procurement_lines"):
+        return
+
+    batch_count = int(
+        conn.execute("SELECT COUNT(*) AS c FROM procurement_batches").fetchone()["c"] or 0
+    )
+    if batch_count > 0:
+        return
+
+    now = "1970-01-01T00:00:00+09:00"
+    rfq_batch_map: dict[int, int] = {}
+    if _table_exists(conn, "rfq_batches"):
+        rfq_batches = conn.execute(
+            """
+            SELECT rfq_id, project_id, title, status, note, created_at, updated_at
+            FROM rfq_batches
+            ORDER BY rfq_id
+            """
+        ).fetchall()
+        for row in rfq_batches:
+            legacy_status = str(row["status"] or "OPEN").upper()
+            batch_status = {
+                "OPEN": "DRAFT",
+                "CLOSED": "CLOSED",
+                "CANCELLED": "CANCELLED",
+            }.get(legacy_status, "DRAFT")
+            cur = conn.execute(
+                """
+                INSERT INTO procurement_batches (title, status, note, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    row["title"],
+                    batch_status,
+                    row["note"],
+                    row["created_at"] or now,
+                    row["updated_at"] or row["created_at"] or now,
+                ),
+            )
+            rfq_batch_map[int(row["rfq_id"])] = int(cur.lastrowid)
+
+    if _table_exists(conn, "rfq_lines") and rfq_batch_map:
+        rfq_lines = conn.execute(
+            """
+            SELECT rl.*, rb.project_id
+            FROM rfq_lines rl
+            JOIN rfq_batches rb ON rb.rfq_id = rl.rfq_id
+            ORDER BY rl.line_id
+            """
+        ).fetchall()
+        for row in rfq_lines:
+            batch_id = rfq_batch_map.get(int(row["rfq_id"]))
+            if batch_id is None:
+                continue
+            linked_quotation_id = None
+            if row["linked_order_id"] is not None:
+                linked_order = conn.execute(
+                    "SELECT quotation_id FROM orders WHERE order_id = ?",
+                    (int(row["linked_order_id"]),),
+                ).fetchone()
+                if linked_order is not None:
+                    linked_quotation_id = linked_order["quotation_id"]
+            conn.execute(
+                """
+                INSERT INTO procurement_lines (
+                    batch_id, item_id, source_type, source_project_id, requested_quantity,
+                    finalized_quantity, supplier_name, expected_arrival, linked_order_id,
+                    linked_quotation_id, status, note, created_at, updated_at
+                ) VALUES (?, ?, 'PROJECT', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    batch_id,
+                    row["item_id"],
+                    row["project_id"],
+                    row["requested_quantity"],
+                    (
+                        row["finalized_quantity"]
+                        if "finalized_quantity" in row.keys() and row["finalized_quantity"] is not None
+                        else row["requested_quantity"]
+                    ),
+                    row["supplier_name"] if "supplier_name" in row.keys() else None,
+                    row["expected_arrival"],
+                    row["linked_order_id"],
+                    linked_quotation_id,
+                    row["status"],
+                    row["note"] if "note" in row.keys() else None,
+                    row["created_at"] or now,
+                    row["updated_at"] or row["created_at"] or now,
+                ),
+            )
+
+    if _table_exists(conn, "purchase_candidates"):
+        candidate_rows = conn.execute(
+            """
+            SELECT *
+            FROM purchase_candidates
+            ORDER BY substr(COALESCE(created_at, ''), 1, 10), candidate_id
+            """
+        ).fetchall()
+        batch_by_group: dict[tuple[str, str], int] = {}
+        for row in candidate_rows:
+            created_date = str(row["created_at"] or now)[:10] or "unknown"
+            source_type = str(row["source_type"] or "ADHOC").upper()
+            batch_key = (created_date, source_type)
+            batch_id = batch_by_group.get(batch_key)
+            if batch_id is None:
+                cur = conn.execute(
+                    """
+                    INSERT INTO procurement_batches (title, status, note, created_at, updated_at)
+                    VALUES (?, 'DRAFT', ?, ?, ?)
+                    """,
+                    (
+                        f"Migrated from purchase_candidates - {created_date}",
+                        "Migrated legacy purchase candidates",
+                        row["created_at"] or now,
+                        row["updated_at"] or row["created_at"] or now,
+                    ),
+                )
+                batch_id = int(cur.lastrowid)
+                batch_by_group[batch_key] = batch_id
+            line_status = {
+                "OPEN": "DRAFT",
+                "ORDERING": "SENT",
+                "ORDERED": "ORDERED",
+                "CANCELLED": "CANCELLED",
+            }.get(str(row["status"] or "OPEN").upper(), "DRAFT")
+            requested_quantity = int(row["shortage_quantity"] or row["required_quantity"] or 0)
+            item_id = row["item_id"]
+            if not item_id or requested_quantity <= 0:
+                continue
+            conn.execute(
+                """
+                INSERT INTO procurement_lines (
+                    batch_id, item_id, source_type, source_project_id, requested_quantity,
+                    finalized_quantity, supplier_name, expected_arrival, linked_order_id,
+                    linked_quotation_id, status, note, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)
+                """,
+                (
+                    batch_id,
+                    item_id,
+                    "PROJECT" if source_type == "PROJECT" else "BOM",
+                    row["project_id"],
+                    requested_quantity,
+                    requested_quantity,
+                    row["supplier_name"],
+                    row["target_date"],
+                    line_status,
+                    row["note"],
+                    row["created_at"] or now,
+                    row["updated_at"] or row["created_at"] or now,
+                ),
+            )
+
+
 def _apply_schema(conn: sqlite3.Connection) -> None:
     for statement in SCHEMA_STATEMENTS:
         conn.execute(statement)
@@ -526,6 +723,7 @@ def migrate_db(conn: sqlite3.Connection) -> None:
     # Keep migration idempotent so startup can run this each time.
     _apply_schema(conn)
     _recreate_order_lineage_without_fk(conn)
+    _migrate_legacy_procurement_tables(conn)
     for statement in INDEX_STATEMENTS:
         conn.execute(statement)
     for definition in (
@@ -548,6 +746,12 @@ def migrate_db(conn: sqlite3.Connection) -> None:
         SET project_id_manual = 1
         WHERE project_id IS NOT NULL
           AND COALESCE(project_id_manual, 0) = 0
+          AND NOT EXISTS (
+              SELECT 1
+              FROM procurement_lines pl
+              WHERE pl.linked_order_id = orders.order_id
+                AND pl.status = 'ORDERED'
+          )
           AND NOT EXISTS (
               SELECT 1
               FROM rfq_lines rl
@@ -583,6 +787,7 @@ def migrate_db(conn: sqlite3.Connection) -> None:
     _normalize_date_column(conn, "quotations", "issue_date")
     _normalize_date_column(conn, "projects", "planned_start")
     _normalize_date_column(conn, "reservations", "deadline")
+    _normalize_date_column(conn, "procurement_lines", "expected_arrival")
     _normalize_date_column(conn, "rfq_batches", "target_date")
     _normalize_date_column(conn, "rfq_lines", "expected_arrival")
     _normalize_date_column(conn, "purchase_candidates", "target_date")

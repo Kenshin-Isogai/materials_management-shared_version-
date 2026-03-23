@@ -27,7 +27,7 @@ type ReservationImportPreviewRow = {
   message: string;
   blocking: boolean;
   requires_user_selection: boolean;
-  allowed_entity_types: Array<"item" | "assembly">;
+  allowed_entity_types: Array<"item">;
   suggested_match: CatalogSearchResult | null;
   generated_reservations: Array<{
     item_id: number;
@@ -318,7 +318,7 @@ export function ReservationsPage() {
       <section className="panel grid gap-3 p-4">
         <h2 className="font-display text-lg font-semibold">CSV Import (Reservations)</h2>
         <p className="text-xs text-slate-500">
-          Columns: item_id or assembly, quantity, assembly_quantity(optional), purpose, deadline, note, project_id(optional)
+          Columns: item_id, quantity, purpose, deadline, note, project_id(optional)
         </p>
         <div className="flex flex-wrap gap-2">
           <button
@@ -401,7 +401,6 @@ export function ReservationsPage() {
                           </p>
                           <p className="text-xs text-slate-500">
                             qty {row.quantity}
-                            {row.assembly ? ` | assembly qty ${row.assembly_quantity}` : ""}
                           </p>
                           {row.purpose && <p className="text-xs text-slate-500">{row.purpose}</p>}
                           {row.deadline && <p className="text-xs text-slate-500">deadline {row.deadline}</p>}
@@ -449,7 +448,7 @@ export function ReservationsPage() {
                                   [row.row]: value,
                                 }))
                               }
-                              placeholder="Select item or assembly"
+                              placeholder="Select item"
                               recentKey="reservations-import-preview-target"
                               value={selectedReservationPreviewMatch(row)}
                             />

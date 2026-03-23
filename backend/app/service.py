@@ -162,9 +162,11 @@ def _item_reference_queries() -> dict[str, str]:
         "orders": "SELECT 1 FROM orders WHERE item_id = ? LIMIT 1",
         "inventory": "SELECT 1 FROM inventory_ledger WHERE item_id = ? LIMIT 1",
         "reservations": "SELECT 1 FROM reservations WHERE item_id = ? LIMIT 1",
-        "assembly_components": "SELECT 1 FROM assembly_components WHERE item_id = ? LIMIT 1",
         "project_requirements": "SELECT 1 FROM project_requirements WHERE item_id = ? LIMIT 1",
+        "assembly_components": "SELECT 1 FROM assembly_components WHERE item_id = ? LIMIT 1",
+        "rfq_lines": "SELECT 1 FROM rfq_lines WHERE item_id = ? LIMIT 1",
         "purchase_candidates": "SELECT 1 FROM purchase_candidates WHERE item_id = ? LIMIT 1",
+        "procurement_lines": "SELECT 1 FROM procurement_lines WHERE item_id = ? LIMIT 1",
         "aliases": "SELECT 1 FROM supplier_item_aliases WHERE canonical_item_id = ? LIMIT 1",
     }
 
@@ -940,18 +942,18 @@ def get_reservations_import_reference_csv(conn: sqlite3.Connection) -> tuple[str
         ORDER BY im.item_number, im.item_id
         """
     ).fetchall()
-    assembly_rows = conn.execute(
-        """
-        SELECT assembly_id, name
-        FROM assemblies
-        ORDER BY name, assembly_id
-        """
-    ).fetchall()
     project_rows = conn.execute(
         """
         SELECT project_id, name, status
         FROM projects
         ORDER BY name, project_id
+        """
+    ).fetchall()
+    assembly_rows = conn.execute(
+        """
+        SELECT assembly_id, name AS assembly_name
+        FROM assemblies
+        ORDER BY assembly_name, assembly_id
         """
     ).fetchall()
     rows = [
@@ -975,7 +977,7 @@ def get_reservations_import_reference_csv(conn: sqlite3.Connection) -> tuple[str
             "item_number": "",
             "manufacturer_name": "",
             "assembly_id": int(row["assembly_id"]),
-            "assembly_name": row["name"],
+            "assembly_name": row["assembly_name"],
             "project_id": "",
             "project_name": "",
             "project_status": "",
@@ -3858,10 +3860,10 @@ def preview_reservations_from_rows(
     source_name: str = "reservations_import.csv",
 ) -> dict[str, Any]:
     item_rows = _load_item_preview_catalog_rows(conn)
-    item_by_id = {int(row["item_id"]): row for row in item_rows}
     assembly_rows = _load_assembly_preview_catalog_rows(conn)
+    item_by_id = {int(row["item_id"]): row for row in item_rows}
     assembly_by_id = {int(row["assembly_id"]): row for row in assembly_rows}
-    assembly_map = _assembly_lookup_map(conn)
+    assembly_lookup = _assembly_lookup_map(conn)
     available_by_item = {
         int(row["item_id"]): _get_total_available_inventory(conn, int(row["item_id"]))
         for row in item_rows
@@ -3993,10 +3995,10 @@ def preview_reservations_from_rows(
             except AppError:
                 item_id = None
             if item_id is None or item_id not in item_by_id:
-                preview_row["message"] = f"row {idx}: choose a valid item or assembly for this reservation row"
+                preview_row["message"] = f"row {idx}: choose a valid item for this reservation row"
                 preview_row["blocking"] = True
                 preview_row["requires_user_selection"] = True
-                preview_row["allowed_entity_types"] = ["item", "assembly"]
+                preview_row["allowed_entity_types"] = ["item"]
                 preview_rows.append(preview_row)
                 summary["unresolved"] += 1
                 blocking_errors.append(f"row {idx}: {preview_row['message']}")
@@ -4011,57 +4013,54 @@ def preview_reservations_from_rows(
                     "quantity": quantity,
                 }
             )
-        else:
-            if not assembly_ref:
-                preview_row["message"] = f"row {idx}: either item_id or assembly is required"
-                preview_row["blocking"] = True
-                preview_row["requires_user_selection"] = True
-                preview_row["allowed_entity_types"] = ["item", "assembly"]
-                preview_rows.append(preview_row)
-                summary["unresolved"] += 1
-                blocking_errors.append(f"row {idx}: {preview_row['message']}")
-                continue
-            assembly_id = assembly_map.get(assembly_ref.casefold())
-            if assembly_id is None:
-                candidate_matches = _rank_assembly_preview_candidates(assembly_rows, assembly_ref)
-                suggested_match = candidate_matches[0] if candidate_matches else None
-                preview_status = _classify_ranked_preview_status(
-                    confidence_score=int(suggested_match["confidence_score"]) if suggested_match else None,
-                    match_reason=str(suggested_match["match_reason"]) if suggested_match else None,
-                )
-                preview_row["status"] = preview_status
+        elif assembly_ref:
+            assembly_id = assembly_lookup.get(assembly_ref.casefold())
+            if assembly_id is None or assembly_id not in assembly_by_id:
                 preview_row["message"] = f"row {idx}: choose a valid item or assembly for this reservation row"
                 preview_row["blocking"] = True
                 preview_row["requires_user_selection"] = True
                 preview_row["allowed_entity_types"] = ["item", "assembly"]
-                preview_row["suggested_match"] = suggested_match
-                preview_row["candidates"] = candidate_matches
+                candidates = _rank_assembly_preview_candidates(assembly_rows, assembly_ref)
+                preview_row["candidates"] = candidates
+                preview_row["suggested_match"] = candidates[0] if candidates else None
                 preview_rows.append(preview_row)
-                summary[str(preview_status)] += 1
+                summary["unresolved"] += 1
                 blocking_errors.append(f"row {idx}: {preview_row['message']}")
                 continue
-            assembly = get_assembly(conn, assembly_id)
             preview_row["suggested_match"] = _build_assembly_preview_match(assembly_by_id[assembly_id])
-            for component in assembly.get("components", []):
-                item_id = int(component["item_id"])
-                item_row = item_by_id.get(item_id)
-                if item_row is None:
-                    preview_row["message"] = f"row {idx}: assembly component item {item_id} not found"
-                    preview_row["blocking"] = True
-                    preview_rows.append(preview_row)
-                    summary["unresolved"] += 1
-                    blocking_errors.append(f"row {idx}: {preview_row['message']}")
-                    break
+            component_rows = conn.execute(
+                """
+                SELECT
+                    ac.item_id,
+                    ac.quantity,
+                    im.item_number,
+                    m.name AS manufacturer_name
+                FROM assembly_components ac
+                JOIN items_master im ON im.item_id = ac.item_id
+                JOIN manufacturers m ON m.manufacturer_id = im.manufacturer_id
+                WHERE ac.assembly_id = ?
+                ORDER BY im.item_number, ac.item_id
+                """,
+                (assembly_id,),
+            ).fetchall()
+            for component in component_rows:
                 generated_rows.append(
                     {
-                        "item_id": item_id,
-                        "item_number": item_row["item_number"],
-                        "manufacturer_name": item_row["manufacturer_name"],
-                        "quantity": int(component["quantity"]) * quantity * assembly_quantity,
+                        "item_id": int(component["item_id"]),
+                        "item_number": component["item_number"],
+                        "manufacturer_name": component["manufacturer_name"],
+                        "quantity": quantity * assembly_quantity * int(component["quantity"]),
                     }
                 )
-            if preview_row["blocking"]:
-                continue
+        else:
+            preview_row["message"] = f"row {idx}: item_id or assembly is required"
+            preview_row["blocking"] = True
+            preview_row["requires_user_selection"] = True
+            preview_row["allowed_entity_types"] = ["item", "assembly"]
+            preview_rows.append(preview_row)
+            summary["unresolved"] += 1
+            blocking_errors.append(f"row {idx}: {preview_row['message']}")
+            continue
 
         shortages = [
             generated
@@ -4104,7 +4103,6 @@ def import_reservations_from_rows(
     row_overrides: dict[str | int, Any] | None = None,
 ) -> list[dict[str, Any]]:
     created: list[dict[str, Any]] = []
-    assembly_map = _assembly_lookup_map(conn)
     normalized_overrides = _normalize_reservations_import_overrides(row_overrides)
     _validate_import_override_rows(
         normalized_overrides,
@@ -4134,21 +4132,11 @@ def import_reservations_from_rows(
         override = normalized_overrides.get(idx, {})
         item_id_override = override.get("item_id")
         assembly_id_override = override.get("assembly_id")
-
-        assembly_id: int | None = None
-        if assembly_id_override is not None:
-            item_id_raw = None
-            assembly_id = int(assembly_id_override)
-            assembly_ref = str(assembly_id_override)
-        else:
-            item_id_raw = item_id_override if item_id_override is not None else row.get("item_id")
-            assembly_ref = (
-                ""
-                if item_id_override is not None
-                else str(row.get("assembly") or row.get("assembly_name") or "").strip()
-            )
-        assembly_qty_raw = row.get("assembly_quantity")
-
+        item_id_raw = (
+            None
+            if assembly_id_override is not None
+            else (item_id_override if item_id_override is not None else row.get("item_id"))
+        )
         if item_id_raw not in (None, ""):
             created.append(
                 create_reservation(
@@ -4164,41 +4152,62 @@ def import_reservations_from_rows(
                 )
             )
             continue
-
-        if assembly_id is None:
-            if not assembly_ref:
-                raise AppError(code="INVALID_ITEM", message=f"row {idx}: either item_id or assembly is required", status_code=422)
-            assembly_id = assembly_map.get(assembly_ref.casefold())
-        if not assembly_ref:
-            assembly_ref = str(assembly_id)
-        if assembly_id is None:
-            raise AppError(code="ASSEMBLY_NOT_FOUND", message=f"row {idx}: assembly '{assembly_ref}' not found", status_code=404)
-        assembly_quantity = (
-            _parse_csv_int_field(
-                value=assembly_qty_raw,
-                row_index=idx,
-                field_name="assembly_quantity",
-                code="INVALID_QUANTITY",
-            )
-            if assembly_qty_raw not in (None, "")
-            else 1
-        )
-        assembly_quantity = require_positive_int(assembly_quantity, f"row {idx} assembly_quantity")
-        assembly = get_assembly(conn, assembly_id)
-        for component in assembly.get("components", []):
-            created.append(
-                create_reservation(
-                    conn,
-                    {
-                        "item_id": int(component["item_id"]),
-                        "quantity": int(component["quantity"]) * quantity * assembly_quantity,
-                        "purpose": purpose or f"Assembly:{assembly['name']}",
-                        "deadline": deadline,
-                        "note": note,
-                        "project_id": project_id,
-                    },
+        assembly_ref = assembly_id_override if assembly_id_override is not None else row.get("assembly") or row.get("assembly_name")
+        if assembly_ref not in (None, ""):
+            assembly_quantity_raw = row.get("assembly_quantity")
+            assembly_quantity = (
+                require_positive_int(
+                    _parse_csv_int_field(
+                        value=assembly_quantity_raw,
+                        row_index=idx,
+                        field_name="assembly_quantity",
+                        code="INVALID_QUANTITY",
+                    ),
+                    f"row {idx} assembly_quantity",
                 )
+                if assembly_quantity_raw not in (None, "")
+                else 1
             )
+            assembly_id = (
+                int(assembly_ref)
+                if assembly_id_override is not None
+                else _assembly_lookup_map(conn).get(str(assembly_ref).strip().casefold())
+            )
+            if assembly_id is None:
+                raise AppError(
+                    code="ASSEMBLY_NOT_FOUND",
+                    message=f"row {idx}: assembly '{assembly_ref}' not found",
+                    status_code=422,
+                )
+            component_rows = conn.execute(
+                """
+                SELECT item_id, quantity
+                FROM assembly_components
+                WHERE assembly_id = ?
+                ORDER BY item_id
+                """,
+                (assembly_id,),
+            ).fetchall()
+            for component in component_rows:
+                created.append(
+                    create_reservation(
+                        conn,
+                        {
+                            "item_id": int(component["item_id"]),
+                            "quantity": quantity * assembly_quantity * int(component["quantity"]),
+                            "purpose": purpose,
+                            "deadline": deadline,
+                            "note": note,
+                            "project_id": project_id,
+                        },
+                    )
+                )
+            continue
+        raise AppError(
+            code="INVALID_ITEM",
+            message=f"row {idx}: item_id or assembly is required",
+            status_code=422,
+        )
     if not rows:
         raise AppError(code="EMPTY_CSV", message="No reservation rows found in CSV", status_code=422)
     return created
@@ -4393,11 +4402,21 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
         )
     rfq_project_id: int | None = None
     if "project_id" in payload:
+        procurement_project_id = _ordered_procurement_project_for_order(conn, order_id)
         rfq_project_id = _ordered_rfq_project_for_order(conn, order_id)
-        if rfq_project_id is not None and project_id != rfq_project_id:
+        managed_project_id = procurement_project_id if procurement_project_id is not None else rfq_project_id
+        if managed_project_id is not None and project_id != managed_project_id:
             raise AppError(
-                code="ORDER_PROJECT_MANAGED_BY_RFQ",
-                message="project_id is managed by the ORDERED RFQ line linked to this order",
+                code=(
+                    "ORDER_PROJECT_MANAGED_BY_PROCUREMENT"
+                    if procurement_project_id is not None
+                    else "ORDER_PROJECT_MANAGED_BY_RFQ"
+                ),
+                message=(
+                    "project_id is managed by the ORDERED procurement line linked to this order"
+                    if procurement_project_id is not None
+                    else "project_id is managed by the ORDERED RFQ line linked to this order"
+                ),
                 status_code=409,
             )
 
@@ -4486,6 +4505,8 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
         )
     if rfq_project_id is None:
         rfq_project_id = _ordered_rfq_project_for_order(conn, order_id)
+    if rfq_project_id is None:
+        rfq_project_id = _ordered_procurement_project_for_order(conn, order_id)
 
     split_updates = ["order_amount = ?", "ordered_quantity = ?", "status = COALESCE(?, status)"]
     split_params: list[Any] = [remaining_order_amount, remaining_ordered, status]
@@ -5965,11 +5986,62 @@ def import_orders_from_rows(
             ),
         )
         order_ids.append(int(cur.lastrowid))
+    suggested_procurement_links: list[dict[str, Any]] = []
+    if order_ids:
+        placeholders = ",".join("?" for _ in order_ids)
+        imported_orders = conn.execute(
+            f"""
+            SELECT o.order_id, o.item_id, o.quotation_id, im.item_number, q.quotation_number
+            FROM orders o
+            JOIN items_master im ON im.item_id = o.item_id
+            JOIN quotations q ON q.quotation_id = o.quotation_id
+            WHERE o.order_id IN ({placeholders})
+            """,
+            tuple(order_ids),
+        ).fetchall()
+        for order in imported_orders:
+            candidate_rows = conn.execute(
+                """
+                SELECT
+                    pl.line_id,
+                    pl.batch_id,
+                    pb.title AS batch_title,
+                    pl.status,
+                    pl.source_project_id
+                FROM procurement_lines pl
+                JOIN procurement_batches pb ON pb.batch_id = pl.batch_id
+                WHERE pl.item_id = ?
+                  AND pl.status IN ('SENT', 'QUOTED')
+                  AND pl.linked_order_id IS NULL
+                ORDER BY
+                    CASE pl.status WHEN 'QUOTED' THEN 0 ELSE 1 END,
+                    pl.updated_at DESC,
+                    pl.line_id DESC
+                """,
+                (int(order["item_id"]),),
+            ).fetchall()
+            for candidate in candidate_rows:
+                suggested_procurement_links.append(
+                    {
+                        "order_id": int(order["order_id"]),
+                        "quotation_id": int(order["quotation_id"]),
+                        "quotation_number": order["quotation_number"],
+                        "item_id": int(order["item_id"]),
+                        "item_number": order["item_number"],
+                        "line_id": int(candidate["line_id"]),
+                        "batch_id": int(candidate["batch_id"]),
+                        "batch_title": candidate["batch_title"],
+                        "line_status": candidate["status"],
+                        "source_project_id": candidate["source_project_id"],
+                        "default_selected": True,
+                    }
+                )
     return {
         "status": "ok",
         "imported_count": len(order_ids),
         "order_ids": order_ids,
         "saved_alias_count": saved_alias_count,
+        "suggested_procurement_links": suggested_procurement_links,
     }
 
 
@@ -7878,13 +7950,31 @@ def _list_project_requirements(conn: sqlite3.Connection, project_id: int) -> lis
         """
         SELECT
             pr.*,
-            a.name AS assembly_name,
-            im.item_number
+            im.item_number,
+            a.name AS assembly_name
         FROM project_requirements pr
-        LEFT JOIN assemblies a ON a.assembly_id = pr.assembly_id
         LEFT JOIN items_master im ON im.item_id = pr.item_id
+        LEFT JOIN assemblies a ON a.assembly_id = pr.assembly_id
         WHERE pr.project_id = ?
         ORDER BY pr.requirement_id
+        """,
+        (project_id,),
+    ).fetchall()
+    return _rows_to_dict(rows)
+
+
+def _load_legacy_assembly_project_requirements(
+    conn: sqlite3.Connection,
+    project_id: int,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT assembly_id, quantity, requirement_type, note, created_at
+        FROM project_requirements
+        WHERE project_id = ?
+          AND assembly_id IS NOT NULL
+          AND item_id IS NULL
+        ORDER BY requirement_id
         """,
         (project_id,),
     ).fetchall()
@@ -7909,9 +7999,20 @@ def _replace_project_requirements(
     conn: sqlite3.Connection,
     project_id: int,
     requirements: list[dict[str, Any]],
+    *,
+    preserve_legacy_assembly_rows: bool = False,
 ) -> None:
+    legacy_assembly_rows = (
+        _load_legacy_assembly_project_requirements(conn, project_id)
+        if preserve_legacy_assembly_rows
+        else []
+    )
     conn.execute("DELETE FROM project_requirements WHERE project_id = ?", (project_id,))
     for req in requirements:
+        item_id = req.get("item_id")
+        assembly_id = req.get("assembly_id")
+        if item_id is None and assembly_id is None:
+            continue
         conn.execute(
             """
             INSERT INTO project_requirements (
@@ -7920,12 +8021,28 @@ def _replace_project_requirements(
             """,
             (
                 project_id,
-                req.get("assembly_id"),
-                req.get("item_id"),
+                assembly_id,
+                item_id,
                 require_positive_int(int(req["quantity"]), "quantity"),
                 req.get("requirement_type", "INITIAL"),
                 req.get("note"),
                 now_jst_iso(),
+            ),
+        )
+    for req in legacy_assembly_rows:
+        conn.execute(
+            """
+            INSERT INTO project_requirements (
+                project_id, assembly_id, item_id, quantity, requirement_type, note, created_at
+            ) VALUES (?, ?, NULL, ?, ?, ?, ?)
+            """,
+            (
+                project_id,
+                int(req["assembly_id"]),
+                require_positive_int(int(req["quantity"]), "quantity"),
+                req.get("requirement_type", "INITIAL"),
+                req.get("note"),
+                req.get("created_at") or now_jst_iso(),
             ),
         )
 
@@ -7977,7 +8094,16 @@ def update_project(conn: sqlite3.Connection, project_id: int, payload: dict[str,
             (*params, project_id),
         )
     if "requirements" in payload and payload["requirements"] is not None:
-        _replace_project_requirements(conn, project_id, payload["requirements"])
+        preserve_legacy_assembly_rows = not any(
+            req.get("assembly_id") is not None and req.get("item_id") is None
+            for req in payload["requirements"]
+        )
+        _replace_project_requirements(
+            conn,
+            project_id,
+            payload["requirements"],
+            preserve_legacy_assembly_rows=preserve_legacy_assembly_rows,
+        )
     return get_project(conn, project_id)
 
 
@@ -8147,28 +8273,11 @@ def delete_project(conn: sqlite3.Connection, project_id: int) -> None:
         f"Project with id {project_id} not found",
     )
     conn.execute("DELETE FROM projects WHERE project_id = ?", (project_id,))
-
-
-def _expand_requirement_to_items(conn: sqlite3.Connection, requirement: dict[str, Any]) -> list[tuple[int, int]]:
-    quantity = int(requirement["quantity"])
-    if requirement.get("item_id"):
-        return [(int(requirement["item_id"]), quantity)]
-    assembly_id = int(requirement["assembly_id"])
-    components = conn.execute(
-        """
-        SELECT item_id, quantity
-        FROM assembly_components
-        WHERE assembly_id = ?
-        """,
-        (assembly_id,),
-    ).fetchall()
-    return [(int(row["item_id"]), int(row["quantity"]) * quantity) for row in components]
-
-
 PLANNING_COMMITTED_PROJECT_STATUSES = {"CONFIRMED", "ACTIVE"}
 RFQ_BATCH_STATUSES = {"OPEN", "CLOSED", "CANCELLED"}
-RFQ_LINE_STATUSES = {"DRAFT", "SENT", "QUOTED", "ORDERED", "CANCELLED"}
-RFQ_LINE_SUPPLY_STATUSES = {"QUOTED"}
+RFQ_LINE_STATUSES = {"DRAFT", "QUOTED", "ORDERED", "CANCELLED"}
+PROCUREMENT_BATCH_STATUSES = {"DRAFT", "SENT", "QUOTED", "ORDERED", "CLOSED", "CANCELLED"}
+PROCUREMENT_LINE_STATUSES = {"DRAFT", "SENT", "QUOTED", "ORDERED", "CANCELLED"}
 
 
 def _validate_rfq_batch_status(value: str) -> str:
@@ -8193,61 +8302,43 @@ def _validate_rfq_line_status(value: str) -> str:
     return normalized
 
 
+def _validate_procurement_batch_status(value: str) -> str:
+    normalized = require_non_empty(value, "status").upper()
+    if normalized not in PROCUREMENT_BATCH_STATUSES:
+        raise AppError(
+            code="INVALID_PROCUREMENT_BATCH_STATUS",
+            message=f"status must be one of: {', '.join(sorted(PROCUREMENT_BATCH_STATUSES))}",
+            status_code=422,
+        )
+    return normalized
+
+
+def _validate_procurement_line_status(value: str) -> str:
+    normalized = require_non_empty(value, "status").upper()
+    if normalized not in PROCUREMENT_LINE_STATUSES:
+        raise AppError(
+            code="INVALID_PROCUREMENT_LINE_STATUS",
+            message=f"status must be one of: {', '.join(sorted(PROCUREMENT_LINE_STATUSES))}",
+            status_code=422,
+        )
+    return normalized
+
+
 def _aggregate_project_required_by_item(
     conn: sqlite3.Connection,
     project: dict[str, Any],
     *,
-    assembly_components_by_id: dict[int, list[tuple[int, int]]] | None = None,
     focus_item_id: int | None = None,
 ) -> dict[int, int]:
     required_by_item: dict[int, int] = {}
     for requirement in project["requirements"]:
-        if requirement.get("item_id"):
-            item_id = int(requirement["item_id"])
-            if focus_item_id is not None and item_id != focus_item_id:
-                continue
-            required_by_item[item_id] = required_by_item.get(item_id, 0) + int(requirement["quantity"])
+        if not requirement.get("item_id"):
             continue
-
-        assembly_id = int(requirement["assembly_id"])
-        if assembly_components_by_id is None:
-            expanded_rows = _expand_requirement_to_items(conn, requirement)
-        else:
-            expanded_rows = [
-                (item_id, component_quantity * int(requirement["quantity"]))
-                for item_id, component_quantity in assembly_components_by_id.get(assembly_id, [])
-            ]
-        for item_id, quantity in expanded_rows:
-            if focus_item_id is not None and item_id != focus_item_id:
-                continue
-            required_by_item[item_id] = required_by_item.get(item_id, 0) + quantity
+        item_id = int(requirement["item_id"])
+        if focus_item_id is not None and item_id != focus_item_id:
+            continue
+        required_by_item[item_id] = required_by_item.get(item_id, 0) + int(requirement["quantity"])
     return required_by_item
-
-
-def _load_assembly_components_by_assembly(
-    conn: sqlite3.Connection,
-    assembly_ids: list[int],
-) -> dict[int, list[tuple[int, int]]]:
-    if not assembly_ids:
-        return {}
-    placeholders = ",".join("?" for _ in assembly_ids)
-    rows = conn.execute(
-        f"""
-        SELECT assembly_id, item_id, quantity
-        FROM assembly_components
-        WHERE assembly_id IN ({placeholders})
-        ORDER BY assembly_id, item_id
-        """,
-        tuple(assembly_ids),
-    ).fetchall()
-    components_by_assembly: dict[int, list[tuple[int, int]]] = {
-        assembly_id: [] for assembly_id in assembly_ids
-    }
-    for row in rows:
-        components_by_assembly.setdefault(int(row["assembly_id"]), []).append(
-            (int(row["item_id"]), int(row["quantity"]))
-        )
-    return components_by_assembly
 
 
 def _load_projects_with_requirements(
@@ -8266,11 +8357,11 @@ def _load_projects_with_requirements(
         f"""
         SELECT
             pr.*,
-            a.name AS assembly_name,
-            im.item_number
+            im.item_number,
+            a.name AS assembly_name
         FROM project_requirements pr
-        LEFT JOIN assemblies a ON a.assembly_id = pr.assembly_id
         LEFT JOIN items_master im ON im.item_id = pr.item_id
+        LEFT JOIN assemblies a ON a.assembly_id = pr.assembly_id
         WHERE pr.project_id IN ({placeholders})
         ORDER BY pr.project_id, pr.requirement_id
         """,
@@ -8489,23 +8580,12 @@ def _build_project_planning_snapshot(
     project_sequence = [int(project["project_id"]) for project in planning_projects]
     project_rank = {project_id: idx for idx, project_id in enumerate(project_sequence)}
 
-    assembly_ids = sorted(
-        {
-            int(requirement["assembly_id"])
-            for project in planning_projects
-            for requirement in project["requirements"]
-            if requirement.get("assembly_id")
-        }
-    )
-    assembly_components_by_id = _load_assembly_components_by_assembly(conn, assembly_ids)
-
     required_by_project: dict[int, dict[int, int]] = {}
     item_ids: set[int] = set()
     for project in planning_projects:
         project_required = _aggregate_project_required_by_item(
             conn,
             project,
-            assembly_components_by_id=assembly_components_by_id,
             focus_item_id=focus_item_id,
         )
         required_by_project[int(project["project_id"])] = project_required
@@ -8517,7 +8597,7 @@ def _build_project_planning_snapshot(
 
     generic_order_events: dict[int, list[dict[str, Any]]] = {item_id: [] for item_id in item_ids_sorted}
     project_order_events: dict[int, list[dict[str, Any]]] = {item_id: [] for item_id in item_ids_sorted}
-    rfq_supply_events: dict[int, list[dict[str, Any]]] = {item_id: [] for item_id in item_ids_sorted}
+    procurement_supply_events: dict[int, list[dict[str, Any]]] = {item_id: [] for item_id in item_ids_sorted}
 
     if item_ids_sorted:
         item_placeholders = ",".join("?" for _ in item_ids_sorted)
@@ -8567,33 +8647,64 @@ def _build_project_planning_snapshot(
                     }
                 )
 
-            rfq_rows = conn.execute(
+            procurement_rows = conn.execute(
+                f"""
+                SELECT
+                    pl.line_id,
+                    pl.item_id,
+                    pl.source_project_id AS project_id,
+                    pl.finalized_quantity AS quantity,
+                    pl.expected_arrival
+                FROM procurement_lines pl
+                JOIN procurement_batches pb ON pb.batch_id = pl.batch_id
+                WHERE pb.status <> 'CANCELLED'
+                  AND pl.status = 'QUOTED'
+                  AND pl.linked_order_id IS NULL
+                  AND pl.expected_arrival IS NOT NULL
+                  AND pl.item_id IN ({item_placeholders})
+                  AND (pl.source_project_id IS NULL OR pl.source_project_id IN ({project_placeholders}))
+                ORDER BY pl.expected_arrival ASC, pl.line_id ASC
+                """,
+                tuple(item_ids_sorted) + tuple(project_sequence),
+            ).fetchall()
+            for row in procurement_rows:
+                procurement_supply_events[int(row["item_id"])].append(
+                    {
+                        "ref_id": int(row["line_id"]),
+                        "date": str(row["expected_arrival"]),
+                        "quantity": int(row["quantity"]),
+                        "project_id": int(row["project_id"]) if row["project_id"] is not None else None,
+                        "source_type": "quoted_procurement",
+                    }
+                )
+            legacy_rfq_rows = conn.execute(
                 f"""
                 SELECT
                     rl.line_id,
                     rl.item_id,
                     rb.project_id,
-                    rl.finalized_quantity AS quantity,
+                    COALESCE(rl.finalized_quantity, rl.requested_quantity) AS quantity,
                     rl.expected_arrival
                 FROM rfq_lines rl
                 JOIN rfq_batches rb ON rb.rfq_id = rl.rfq_id
-                WHERE rb.project_id IN ({project_placeholders})
-                  AND rb.status <> 'CANCELLED'
+                WHERE rb.status <> 'CANCELLED'
                   AND rl.status = 'QUOTED'
                   AND rl.linked_order_id IS NULL
                   AND rl.expected_arrival IS NOT NULL
                   AND rl.item_id IN ({item_placeholders})
+                  AND rb.project_id IN ({project_placeholders})
                 ORDER BY rl.expected_arrival ASC, rl.line_id ASC
                 """,
-                tuple(project_sequence) + tuple(item_ids_sorted),
+                tuple(item_ids_sorted) + tuple(project_sequence),
             ).fetchall()
-            for row in rfq_rows:
-                rfq_supply_events[int(row["item_id"])].append(
+            for row in legacy_rfq_rows:
+                procurement_supply_events[int(row["item_id"])].append(
                     {
                         "ref_id": int(row["line_id"]),
                         "date": str(row["expected_arrival"]),
                         "quantity": int(row["quantity"]),
                         "project_id": int(row["project_id"]),
+                        "source_type": "quoted_rfq",
                     }
                 )
 
@@ -8669,24 +8780,28 @@ def _build_project_planning_snapshot(
                     "project_rank": project_rank.get(int(row["project_id"]), 0),
                 }
             )
-        for row in rfq_supply_events.get(item_id, []):
+        for row in procurement_supply_events.get(item_id, []):
             events.append(
                 {
-                    "kind": "dedicated_supply",
+                    "kind": "generic_supply" if row.get("project_id") is None else "dedicated_supply",
                     "date": row["date"],
-                    "priority": 0,
+                    "priority": 1 if row.get("project_id") is None else 0,
                     "source": _build_planning_source(
-                        "quoted_rfq",
+                        str(row.get("source_type") or "quoted_procurement"),
                         quantity=int(row["quantity"]),
-                        label=f"RFQ Line #{int(row['ref_id'])} [QUOTED]",
+                        label=(
+                            f"RFQ Line #{int(row['ref_id'])} [QUOTED]"
+                            if row.get("source_type") == "quoted_rfq"
+                            else f"Procurement Line #{int(row['ref_id'])} [QUOTED]"
+                        ),
                         ref_id=int(row["ref_id"]),
-                        project_id=int(row["project_id"]),
+                        project_id=int(row["project_id"]) if row.get("project_id") is not None else None,
                         date=str(row["date"]),
                         status="QUOTED",
                     ),
                     "project_id": row["project_id"],
                     "ref_id": row["ref_id"],
-                    "project_rank": project_rank.get(int(row["project_id"]), 0),
+                    "project_rank": project_rank.get(int(row["project_id"]), 0) if row.get("project_id") is not None else -1,
                 }
             )
         for project in planning_projects:
@@ -8848,23 +8963,23 @@ def _build_project_planning_snapshot(
     }
 
 
-def _load_project_rfq_summary(conn: sqlite3.Connection) -> dict[int, dict[str, Any]]:
+def _load_project_procurement_summary(conn: sqlite3.Connection) -> dict[int, dict[str, Any]]:
     rows = conn.execute(
         """
         SELECT
             p.project_id,
-            COUNT(DISTINCT rb.rfq_id) AS total_batches,
-            COUNT(DISTINCT CASE WHEN rb.status = 'OPEN' THEN rb.rfq_id END) AS open_batch_count,
-            COUNT(DISTINCT CASE WHEN rb.status = 'CLOSED' THEN rb.rfq_id END) AS closed_batch_count,
-            COUNT(DISTINCT CASE WHEN rb.status = 'CANCELLED' THEN rb.rfq_id END) AS cancelled_batch_count,
-            COALESCE(SUM(CASE WHEN rl.status = 'DRAFT' THEN 1 ELSE 0 END), 0) AS draft_line_count,
-            COALESCE(SUM(CASE WHEN rl.status = 'SENT' THEN 1 ELSE 0 END), 0) AS sent_line_count,
-            COALESCE(SUM(CASE WHEN rl.status = 'QUOTED' THEN 1 ELSE 0 END), 0) AS quoted_line_count,
-            COALESCE(SUM(CASE WHEN rl.status = 'ORDERED' THEN 1 ELSE 0 END), 0) AS ordered_line_count,
-            MAX(rb.target_date) AS latest_target_date
+            COUNT(DISTINCT pb.batch_id) AS total_batches,
+            COUNT(DISTINCT CASE WHEN pb.status IN ('DRAFT', 'SENT', 'QUOTED', 'ORDERED') THEN pb.batch_id END) AS open_batch_count,
+            COUNT(DISTINCT CASE WHEN pb.status = 'CLOSED' THEN pb.batch_id END) AS closed_batch_count,
+            COUNT(DISTINCT CASE WHEN pb.status = 'CANCELLED' THEN pb.batch_id END) AS cancelled_batch_count,
+            COALESCE(SUM(CASE WHEN pl.status = 'DRAFT' THEN 1 ELSE 0 END), 0) AS draft_line_count,
+            COALESCE(SUM(CASE WHEN pl.status = 'SENT' THEN 1 ELSE 0 END), 0) AS sent_line_count,
+            COALESCE(SUM(CASE WHEN pl.status = 'QUOTED' THEN 1 ELSE 0 END), 0) AS quoted_line_count,
+            COALESCE(SUM(CASE WHEN pl.status = 'ORDERED' THEN 1 ELSE 0 END), 0) AS ordered_line_count,
+            MAX(pl.expected_arrival) AS latest_target_date
         FROM projects p
-        LEFT JOIN rfq_batches rb ON rb.project_id = p.project_id
-        LEFT JOIN rfq_lines rl ON rl.rfq_id = rb.rfq_id
+        LEFT JOIN procurement_lines pl ON pl.source_project_id = p.project_id
+        LEFT JOIN procurement_batches pb ON pb.batch_id = pl.batch_id
         GROUP BY p.project_id
         """
     ).fetchall()
@@ -8913,7 +9028,7 @@ def get_workspace_summary(conn: sqlite3.Connection) -> dict[str, Any]:
     ).fetchall()
     pipeline = list_planning_pipeline(conn)
     pipeline_lookup = {int(row["project_id"]): row for row in pipeline}
-    rfq_lookup = _load_project_rfq_summary(conn)
+    procurement_lookup = _load_project_procurement_summary(conn)
 
     projects: list[dict[str, Any]] = []
     for row in project_rows:
@@ -8929,6 +9044,50 @@ def get_workspace_summary(conn: sqlite3.Connection) -> dict[str, Any]:
         else:
             summary_mode = "not_plannable"
             summary_message = "Completed and cancelled projects are excluded from planning analysis."
+        procurement_summary = procurement_lookup.get(
+            project_id_value,
+            {
+                "total_batches": 0,
+                "open_batch_count": 0,
+                "closed_batch_count": 0,
+                "cancelled_batch_count": 0,
+                "draft_line_count": 0,
+                "sent_line_count": 0,
+                "quoted_line_count": 0,
+                "ordered_line_count": 0,
+                "latest_target_date": None,
+            },
+        )
+        legacy_rfq_row = conn.execute(
+            """
+            SELECT
+                COUNT(DISTINCT rb.rfq_id) AS total_batches,
+                COUNT(DISTINCT CASE WHEN rb.status = 'OPEN' THEN rb.rfq_id END) AS open_batch_count,
+                COUNT(DISTINCT CASE WHEN rb.status = 'CLOSED' THEN rb.rfq_id END) AS closed_batch_count,
+                COUNT(DISTINCT CASE WHEN rb.status = 'CANCELLED' THEN rb.rfq_id END) AS cancelled_batch_count,
+                COALESCE(SUM(CASE WHEN rl.status = 'DRAFT' THEN 1 ELSE 0 END), 0) AS draft_line_count,
+                COALESCE(SUM(CASE WHEN rl.status = 'QUOTED' THEN 1 ELSE 0 END), 0) AS quoted_line_count,
+                COALESCE(SUM(CASE WHEN rl.status = 'ORDERED' THEN 1 ELSE 0 END), 0) AS ordered_line_count,
+                MAX(rb.target_date) AS latest_target_date
+            FROM rfq_batches rb
+            LEFT JOIN rfq_lines rl ON rl.rfq_id = rb.rfq_id
+            WHERE rb.project_id = ?
+            """,
+            (project_id_value,),
+        ).fetchone()
+        rfq_summary = procurement_summary
+        if legacy_rfq_row is not None and int(legacy_rfq_row["total_batches"] or 0) > 0:
+            rfq_summary = {
+                "total_batches": int(legacy_rfq_row["total_batches"] or 0),
+                "open_batch_count": int(legacy_rfq_row["open_batch_count"] or 0),
+                "closed_batch_count": int(legacy_rfq_row["closed_batch_count"] or 0),
+                "cancelled_batch_count": int(legacy_rfq_row["cancelled_batch_count"] or 0),
+                "draft_line_count": int(legacy_rfq_row["draft_line_count"] or 0),
+                "sent_line_count": 0,
+                "quoted_line_count": int(legacy_rfq_row["quoted_line_count"] or 0),
+                "ordered_line_count": int(legacy_rfq_row["ordered_line_count"] or 0),
+                "latest_target_date": legacy_rfq_row["latest_target_date"],
+            }
         projects.append(
             {
                 "project_id": project_id_value,
@@ -8940,20 +9099,8 @@ def get_workspace_summary(conn: sqlite3.Connection) -> dict[str, Any]:
                 "summary_mode": summary_mode,
                 "summary_message": summary_message,
                 "planning_summary": planning_summary,
-                "rfq_summary": rfq_lookup.get(
-                    project_id_value,
-                    {
-                        "total_batches": 0,
-                        "open_batch_count": 0,
-                        "closed_batch_count": 0,
-                        "cancelled_batch_count": 0,
-                        "draft_line_count": 0,
-                        "sent_line_count": 0,
-                        "quoted_line_count": 0,
-                        "ordered_line_count": 0,
-                        "latest_target_date": None,
-                    },
-                ),
+                "procurement_summary": procurement_summary,
+                "rfq_summary": rfq_summary,
             }
         )
 
@@ -9038,7 +9185,7 @@ def export_workspace_planning_csv(
     target_date: str | None = None,
 ) -> tuple[str, bytes]:
     analysis = project_planning_analysis(conn, project_id, target_date=target_date)
-    rfq_lookup = _load_project_rfq_summary(conn)
+    procurement_lookup = _load_project_procurement_summary(conn)
     fieldnames = [
         "section",
         "project_id",
@@ -9046,9 +9193,9 @@ def export_workspace_planning_csv(
         "project_status",
         "planned_start",
         "target_date",
-        "rfq_open_batches",
-        "rfq_quoted_lines",
-        "rfq_ordered_lines",
+        "procurement_open_batches",
+        "procurement_quoted_lines",
+        "procurement_ordered_lines",
         "item_id",
         "item_number",
         "manufacturer_name",
@@ -9066,7 +9213,7 @@ def export_workspace_planning_csv(
     ]
     rows: list[dict[str, Any]] = []
 
-    selected_rfq = rfq_lookup.get(int(analysis["project"]["project_id"]), {})
+    selected_procurement = procurement_lookup.get(int(analysis["project"]["project_id"]), {})
     selected_recovered_total = sum(
         int(row["recovered_after_start_quantity"]) for row in analysis["rows"]
     )
@@ -9078,9 +9225,9 @@ def export_workspace_planning_csv(
             "project_status": analysis["project"]["status"],
             "planned_start": analysis["project"]["planned_start"],
             "target_date": analysis["target_date"],
-            "rfq_open_batches": int(selected_rfq.get("open_batch_count") or 0),
-            "rfq_quoted_lines": int(selected_rfq.get("quoted_line_count") or 0),
-            "rfq_ordered_lines": int(selected_rfq.get("ordered_line_count") or 0),
+            "procurement_open_batches": int(selected_procurement.get("open_batch_count") or 0),
+            "procurement_quoted_lines": int(selected_procurement.get("quoted_line_count") or 0),
+            "procurement_ordered_lines": int(selected_procurement.get("ordered_line_count") or 0),
             "item_id": "",
             "item_number": "",
             "manufacturer_name": "",
@@ -9101,7 +9248,7 @@ def export_workspace_planning_csv(
     )
 
     for summary in analysis["pipeline"]:
-        rfq_summary = rfq_lookup.get(int(summary["project_id"]), {})
+        procurement_summary = procurement_lookup.get(int(summary["project_id"]), {})
         rows.append(
             {
                 "section": "pipeline",
@@ -9110,9 +9257,9 @@ def export_workspace_planning_csv(
                 "project_status": summary["status"],
                 "planned_start": summary["planned_start"],
                 "target_date": analysis["target_date"],
-                "rfq_open_batches": int(rfq_summary.get("open_batch_count") or 0),
-                "rfq_quoted_lines": int(rfq_summary.get("quoted_line_count") or 0),
-                "rfq_ordered_lines": int(rfq_summary.get("ordered_line_count") or 0),
+                "procurement_open_batches": int(procurement_summary.get("open_batch_count") or 0),
+                "procurement_quoted_lines": int(procurement_summary.get("quoted_line_count") or 0),
+                "procurement_ordered_lines": int(procurement_summary.get("ordered_line_count") or 0),
                 "item_id": "",
                 "item_number": "",
                 "manufacturer_name": "",
@@ -9141,9 +9288,9 @@ def export_workspace_planning_csv(
                 "project_status": analysis["project"]["status"],
                 "planned_start": analysis["project"]["planned_start"],
                 "target_date": analysis["target_date"],
-                "rfq_open_batches": int(selected_rfq.get("open_batch_count") or 0),
-                "rfq_quoted_lines": int(selected_rfq.get("quoted_line_count") or 0),
-                "rfq_ordered_lines": int(selected_rfq.get("ordered_line_count") or 0),
+                "procurement_open_batches": int(selected_procurement.get("open_batch_count") or 0),
+                "procurement_quoted_lines": int(selected_procurement.get("quoted_line_count") or 0),
+                "procurement_ordered_lines": int(selected_procurement.get("ordered_line_count") or 0),
                 "item_id": int(row["item_id"]),
                 "item_number": row["item_number"],
                 "manufacturer_name": row["manufacturer_name"],
@@ -9182,7 +9329,7 @@ def export_workspace_planning_multi_csv(
         project_id=project_id,
         target_date=target_date,
     )
-    rfq_lookup = _load_project_rfq_summary(conn)
+    procurement_lookup = _load_project_procurement_summary(conn)
     export_target_date = snapshot["selected_target_date"] or ""
     fieldnames = [
         "section",
@@ -9193,9 +9340,9 @@ def export_workspace_planning_multi_csv(
         "is_planning_preview",
         "planned_start",
         "target_date",
-        "rfq_open_batches",
-        "rfq_quoted_lines",
-        "rfq_ordered_lines",
+        "procurement_open_batches",
+        "procurement_quoted_lines",
+        "procurement_ordered_lines",
         "item_id",
         "item_number",
         "manufacturer_name",
@@ -9216,7 +9363,7 @@ def export_workspace_planning_multi_csv(
     for project_rank, summary in enumerate(snapshot["project_summaries"], start=1):
         pid = int(summary["project_id"])
         project_rows = snapshot["project_rows"].get(pid, [])
-        rfq_summary = rfq_lookup.get(pid, {})
+        procurement_summary = procurement_lookup.get(pid, {})
         recovered_total = sum(
             int(row["recovered_after_start_quantity"]) for row in project_rows
         )
@@ -9230,9 +9377,9 @@ def export_workspace_planning_multi_csv(
                 "is_planning_preview": bool(summary["is_planning_preview"]),
                 "planned_start": summary["planned_start"],
                 "target_date": export_target_date,
-                "rfq_open_batches": int(rfq_summary.get("open_batch_count") or 0),
-                "rfq_quoted_lines": int(rfq_summary.get("quoted_line_count") or 0),
-                "rfq_ordered_lines": int(rfq_summary.get("ordered_line_count") or 0),
+                "procurement_open_batches": int(procurement_summary.get("open_batch_count") or 0),
+                "procurement_quoted_lines": int(procurement_summary.get("quoted_line_count") or 0),
+                "procurement_ordered_lines": int(procurement_summary.get("ordered_line_count") or 0),
                 "item_id": "",
                 "item_number": "",
                 "manufacturer_name": "",
@@ -9262,9 +9409,9 @@ def export_workspace_planning_multi_csv(
                     "is_planning_preview": bool(summary["is_planning_preview"]),
                     "planned_start": summary["planned_start"],
                     "target_date": export_target_date,
-                    "rfq_open_batches": int(rfq_summary.get("open_batch_count") or 0),
-                    "rfq_quoted_lines": int(rfq_summary.get("quoted_line_count") or 0),
-                    "rfq_ordered_lines": int(rfq_summary.get("ordered_line_count") or 0),
+                    "procurement_open_batches": int(procurement_summary.get("open_batch_count") or 0),
+                    "procurement_quoted_lines": int(procurement_summary.get("quoted_line_count") or 0),
+                    "procurement_ordered_lines": int(procurement_summary.get("ordered_line_count") or 0),
                     "item_id": int(row["item_id"]),
                     "item_number": row["item_number"],
                     "manufacturer_name": row["manufacturer_name"],
@@ -9355,6 +9502,56 @@ def project_planning_analysis(
 def project_gap_analysis(
     conn: sqlite3.Connection, project_id: int, *, target_date: str | None = None
 ) -> dict[str, Any]:
+    if target_date is None:
+        project = get_project(conn, project_id)
+        effective_date = today_jst()
+        project = dict(project)
+        project["planned_start"] = effective_date
+        required_by_item = _aggregate_project_required_by_item(conn, project)
+        rows: list[dict[str, Any]] = []
+        required_total = 0
+        covered_total = 0
+        shortage_total = 0
+        for item_id in sorted(required_by_item):
+            item = get_item(conn, item_id)
+            required_quantity = int(required_by_item[item_id])
+            available_stock = _get_total_available_inventory(conn, item_id)
+            shortage = max(0, required_quantity - available_stock)
+            covered = min(required_quantity, available_stock)
+            rows.append(
+                {
+                    "item_id": item_id,
+                    "item_number": item["item_number"],
+                    "required_quantity": required_quantity,
+                    "available_stock": available_stock,
+                    "shortage": shortage,
+                    "dedicated_supply_by_start": 0,
+                    "generic_allocated_quantity": covered,
+                    "remaining_shortage_quantity": shortage,
+                }
+            )
+            required_total += required_quantity
+            covered_total += covered
+            shortage_total += shortage
+        return {
+            "project": project,
+            "target_date": effective_date,
+            "summary": {
+                "project_id": int(project["project_id"]),
+                "name": project["name"],
+                "status": project["status"],
+                "planned_start": project.get("planned_start"),
+                "is_planning_preview": bool(project.get("status") not in PLANNING_COMMITTED_PROJECT_STATUSES),
+                "item_count": len(rows),
+                "required_total": required_total,
+                "covered_on_time_total": covered_total,
+                "shortage_at_start_total": shortage_total,
+                "remaining_shortage_total": shortage_total,
+                "generic_committed_total": covered_total,
+                "cumulative_generic_consumed_before_total": 0,
+            },
+            "rows": rows,
+        }
     planning = project_planning_analysis(conn, project_id, target_date=target_date)
     rows = [
         {
@@ -9376,6 +9573,30 @@ def project_gap_analysis(
         "summary": planning["summary"],
         "rows": rows,
     }
+
+
+def confirm_project_for_procurement(
+    conn: sqlite3.Connection,
+    project_id: int,
+    *,
+    target_date: str | None = None,
+) -> dict[str, Any]:
+    project = get_project(conn, project_id)
+    if str(project["status"]) != "PLANNING":
+        return project
+    effective_target_date = _normalize_project_planning_date(project, target_date=target_date)
+    now = now_jst_iso()
+    conn.execute(
+        """
+        UPDATE projects
+        SET status = 'CONFIRMED',
+            planned_start = ?,
+            updated_at = ?
+        WHERE project_id = ?
+        """,
+        (effective_target_date, now, project_id),
+    )
+    return get_project(conn, project_id)
 
 
 def reserve_project_requirements(conn: sqlite3.Connection, project_id: int) -> dict[str, Any]:
@@ -9555,16 +9776,7 @@ def create_project_rfq_batch_from_analysis(
             ),
         )
     if project["status"] == "PLANNING":
-        conn.execute(
-            """
-            UPDATE projects
-            SET status = 'CONFIRMED',
-                planned_start = ?,
-                updated_at = ?
-            WHERE project_id = ?
-            """,
-            (analysis["target_date"], now, project_id),
-        )
+        confirm_project_for_procurement(conn, project_id, target_date=analysis["target_date"])
     return get_rfq_batch(conn, rfq_id)
 
 
@@ -9780,6 +9992,493 @@ def update_rfq_line(
             row for row in _rfq_line_detail_rows(conn, int(updated_row["rfq_id"])) if int(row["line_id"]) == line_id
         ),
     }
+
+
+def _procurement_batch_row(conn: sqlite3.Connection, batch_id: int) -> sqlite3.Row:
+    row = conn.execute(
+        """
+        SELECT
+            pb.*,
+            COUNT(pl.line_id) AS line_count,
+            COALESCE(SUM(pl.finalized_quantity), 0) AS finalized_quantity_total,
+            COALESCE(SUM(CASE WHEN pl.status = 'QUOTED' THEN 1 ELSE 0 END), 0) AS quoted_line_count,
+            COALESCE(SUM(CASE WHEN pl.status = 'ORDERED' THEN 1 ELSE 0 END), 0) AS ordered_line_count
+        FROM procurement_batches pb
+        LEFT JOIN procurement_lines pl ON pl.batch_id = pb.batch_id
+        WHERE pb.batch_id = ?
+        GROUP BY pb.batch_id
+        """,
+        (batch_id,),
+    ).fetchone()
+    if row is None:
+        raise AppError(
+            code="PROCUREMENT_BATCH_NOT_FOUND",
+            message=f"Procurement batch with id {batch_id} not found",
+            status_code=404,
+        )
+    return row
+
+
+def _procurement_line_detail_rows(conn: sqlite3.Connection, batch_id: int) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT
+            pl.*,
+            im.item_number,
+            im.category,
+            im.description,
+            m.name AS manufacturer_name,
+            p.name AS source_project_name,
+            o.project_id AS linked_order_project_id,
+            o.expected_arrival AS linked_order_expected_arrival,
+            q.quotation_number AS linked_quotation_number,
+            s.name AS linked_order_supplier_name
+        FROM procurement_lines pl
+        JOIN items_master im ON im.item_id = pl.item_id
+        JOIN manufacturers m ON m.manufacturer_id = im.manufacturer_id
+        LEFT JOIN projects p ON p.project_id = pl.source_project_id
+        LEFT JOIN orders o ON o.order_id = pl.linked_order_id
+        LEFT JOIN quotations q ON q.quotation_id = COALESCE(pl.linked_quotation_id, o.quotation_id)
+        LEFT JOIN suppliers s ON s.supplier_id = q.supplier_id
+        WHERE pl.batch_id = ?
+        ORDER BY
+            CASE pl.status
+                WHEN 'ORDERED' THEN 0
+                WHEN 'QUOTED' THEN 1
+                WHEN 'SENT' THEN 2
+                ELSE 3
+            END,
+            pl.line_id
+        """,
+        (batch_id,),
+    ).fetchall()
+    return _rows_to_dict(rows)
+
+
+def get_procurement_batch(conn: sqlite3.Connection, batch_id: int) -> dict[str, Any]:
+    data = dict(_procurement_batch_row(conn, batch_id))
+    data["lines"] = _procurement_line_detail_rows(conn, batch_id)
+    return data
+
+
+def list_procurement_batches(
+    conn: sqlite3.Connection,
+    *,
+    status: str | None = None,
+    item_id: int | None = None,
+    project_id: int | None = None,
+    page: int = 1,
+    per_page: int = 50,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if status:
+        clauses.append("pb.status = ?")
+        params.append(_validate_procurement_batch_status(status))
+    if item_id is not None:
+        clauses.append("pl.item_id = ?")
+        params.append(int(item_id))
+    if project_id is not None:
+        clauses.append("pl.source_project_id = ?")
+        params.append(int(project_id))
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = f"""
+        SELECT
+            pb.*,
+            COUNT(pl.line_id) AS line_count,
+            COALESCE(SUM(pl.finalized_quantity), 0) AS finalized_quantity_total,
+            COALESCE(SUM(CASE WHEN pl.status = 'QUOTED' THEN 1 ELSE 0 END), 0) AS quoted_line_count,
+            COALESCE(SUM(CASE WHEN pl.status = 'ORDERED' THEN 1 ELSE 0 END), 0) AS ordered_line_count
+        FROM procurement_batches pb
+        LEFT JOIN procurement_lines pl ON pl.batch_id = pb.batch_id
+        {where}
+        GROUP BY pb.batch_id
+        ORDER BY pb.updated_at DESC, pb.batch_id DESC
+    """
+    return _paginate(conn, sql, tuple(params), page, per_page)
+
+
+def create_procurement_batch(conn: sqlite3.Connection, payload: dict[str, Any]) -> dict[str, Any]:
+    now = now_jst_iso()
+    cur = conn.execute(
+        """
+        INSERT INTO procurement_batches (title, status, note, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            require_non_empty(str(payload.get("title") or ""), "title"),
+            _validate_procurement_batch_status(str(payload.get("status") or "DRAFT")),
+            payload.get("note"),
+            now,
+            now,
+        ),
+    )
+    return get_procurement_batch(conn, int(cur.lastrowid))
+
+
+def update_procurement_batch(conn: sqlite3.Connection, batch_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+    _procurement_batch_row(conn, batch_id)
+    updates: list[str] = []
+    params: list[Any] = []
+    if "title" in payload:
+        updates.append("title = ?")
+        params.append(require_non_empty(str(payload.get("title") or ""), "title"))
+    if "status" in payload and payload.get("status") is not None:
+        updates.append("status = ?")
+        params.append(_validate_procurement_batch_status(str(payload["status"])))
+    if "note" in payload:
+        updates.append("note = ?")
+        params.append(payload.get("note"))
+    if updates:
+        updates.append("updated_at = ?")
+        params.append(now_jst_iso())
+        conn.execute(
+            f"UPDATE procurement_batches SET {', '.join(updates)} WHERE batch_id = ?",
+            (*params, batch_id),
+        )
+    return get_procurement_batch(conn, batch_id)
+
+
+def delete_procurement_batch(conn: sqlite3.Connection, batch_id: int) -> dict[str, Any]:
+    batch = dict(_procurement_batch_row(conn, batch_id))
+    if str(batch["status"]) != "DRAFT":
+        raise AppError(
+            code="PROCUREMENT_BATCH_NOT_DRAFT",
+            message="Only DRAFT procurement batches can be deleted",
+            status_code=409,
+        )
+    conn.execute("DELETE FROM procurement_batches WHERE batch_id = ?", (batch_id,))
+    return {"deleted": True, "batch_id": batch_id}
+
+
+def _ordered_procurement_project_for_order(conn: sqlite3.Connection, order_id: int) -> int | None:
+    rows = conn.execute(
+        """
+        SELECT DISTINCT source_project_id AS project_id
+        FROM procurement_lines
+        WHERE linked_order_id = ?
+          AND status = 'ORDERED'
+          AND source_project_id IS NOT NULL
+        """,
+        (order_id,),
+    ).fetchall()
+    if not rows:
+        return None
+    project_ids = {int(row["project_id"]) for row in rows}
+    if len(project_ids) > 1:
+        raise AppError(
+            code="PROCUREMENT_ORDER_PROJECT_CONFLICT",
+            message="Linked order is attached to multiple projects via ordered procurement lines",
+            status_code=409,
+        )
+    return next(iter(project_ids))
+
+
+def _sync_order_project_assignment_from_procurement(conn: sqlite3.Connection, order_id: int) -> None:
+    project_id = _ordered_procurement_project_for_order(conn, order_id)
+    if project_id is not None:
+        conn.execute("UPDATE orders SET project_id = ? WHERE order_id = ?", (project_id, order_id))
+    else:
+        rfq_project_id = _ordered_rfq_project_for_order(conn, order_id)
+        if rfq_project_id is not None:
+            conn.execute("UPDATE orders SET project_id = ? WHERE order_id = ?", (rfq_project_id, order_id))
+            return
+        conn.execute(
+            "UPDATE orders SET project_id = NULL WHERE order_id = ? AND project_id_manual = 0",
+            (order_id,),
+        )
+
+
+def add_procurement_lines(
+    conn: sqlite3.Connection,
+    *,
+    batch_id: int,
+    lines: list[dict[str, Any]],
+) -> dict[str, Any]:
+    _procurement_batch_row(conn, batch_id)
+    now = now_jst_iso()
+    for line in lines:
+        requested_quantity = require_positive_int(int(line["requested_quantity"]), "requested_quantity")
+        finalized_quantity = require_positive_int(
+            int(line.get("finalized_quantity") or requested_quantity),
+            "finalized_quantity",
+        )
+        conn.execute(
+            """
+            INSERT INTO procurement_lines (
+                batch_id, item_id, source_type, source_project_id, requested_quantity, finalized_quantity,
+                supplier_name, expected_arrival, linked_order_id, linked_quotation_id, status, note, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                batch_id,
+                int(line["item_id"]),
+                str(line.get("source_type") or "ADHOC").upper(),
+                line.get("source_project_id"),
+                requested_quantity,
+                finalized_quantity,
+                line.get("supplier_name"),
+                normalize_optional_date(line.get("expected_arrival"), "expected_arrival"),
+                line.get("linked_order_id"),
+                line.get("linked_quotation_id"),
+                _validate_procurement_line_status(str(line.get("status") or "DRAFT")),
+                line.get("note"),
+                now,
+                now,
+            ),
+        )
+    conn.execute("UPDATE procurement_batches SET updated_at = ? WHERE batch_id = ?", (now, batch_id))
+    return get_procurement_batch(conn, batch_id)
+
+
+def _procurement_line_row(conn: sqlite3.Connection, line_id: int) -> sqlite3.Row:
+    row = conn.execute(
+        """
+        SELECT pl.*, pb.status AS batch_status
+        FROM procurement_lines pl
+        JOIN procurement_batches pb ON pb.batch_id = pl.batch_id
+        WHERE pl.line_id = ?
+        """,
+        (line_id,),
+    ).fetchone()
+    if row is None:
+        raise AppError(
+            code="PROCUREMENT_LINE_NOT_FOUND",
+            message=f"Procurement line with id {line_id} not found",
+            status_code=404,
+        )
+    return row
+
+
+def update_procurement_line(conn: sqlite3.Connection, line_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+    current = _procurement_line_row(conn, line_id)
+    current_linked_order_id = int(current["linked_order_id"]) if current["linked_order_id"] is not None else None
+    updates: list[str] = []
+    params: list[Any] = []
+
+    if "requested_quantity" in payload and payload.get("requested_quantity") is not None:
+        updates.append("requested_quantity = ?")
+        params.append(require_positive_int(int(payload["requested_quantity"]), "requested_quantity"))
+    if "finalized_quantity" in payload and payload.get("finalized_quantity") is not None:
+        updates.append("finalized_quantity = ?")
+        params.append(require_positive_int(int(payload["finalized_quantity"]), "finalized_quantity"))
+    if "supplier_name" in payload:
+        supplier_name = payload.get("supplier_name")
+        updates.append("supplier_name = ?")
+        params.append(require_non_empty(str(supplier_name), "supplier_name") if supplier_name else None)
+    normalized_expected_arrival = (
+        normalize_optional_date(payload.get("expected_arrival"), "expected_arrival")
+        if "expected_arrival" in payload
+        else current["expected_arrival"]
+    )
+    if "expected_arrival" in payload:
+        updates.append("expected_arrival = ?")
+        params.append(normalized_expected_arrival)
+
+    final_status = str(current["status"])
+    if "status" in payload:
+        final_status = _validate_procurement_line_status(str(payload["status"]))
+
+    final_linked_order_id = current_linked_order_id
+    if "linked_order_id" in payload:
+        final_linked_order_id = payload.get("linked_order_id")
+        final_linked_order_id = None if final_linked_order_id is None else int(final_linked_order_id)
+    if "linked_order_id" in payload and final_linked_order_id is not None and "status" not in payload:
+        final_status = "ORDERED"
+    if final_status != "ORDERED":
+        final_linked_order_id = None
+
+    if final_status == "QUOTED" and normalized_expected_arrival is None:
+        raise AppError(
+            code="PROCUREMENT_EXPECTED_ARRIVAL_REQUIRED",
+            message="expected_arrival is required before a procurement line can be marked QUOTED",
+            status_code=422,
+        )
+    if final_status == "ORDERED" and final_linked_order_id is None:
+        raise AppError(
+            code="PROCUREMENT_LINKED_ORDER_REQUIRED",
+            message="linked_order_id is required before a procurement line can be marked ORDERED",
+            status_code=422,
+        )
+    if final_status == "ORDERED":
+        order = get_order(conn, final_linked_order_id)
+        if int(order["item_id"]) != int(current["item_id"]):
+            raise AppError(
+                code="PROCUREMENT_ORDER_ITEM_MISMATCH",
+                message="Linked order item_id must match procurement line item_id",
+                status_code=409,
+            )
+        source_project_id = int(current["source_project_id"]) if current["source_project_id"] is not None else None
+        linked_project_id = _ordered_procurement_project_for_order(conn, final_linked_order_id)
+        if source_project_id is not None and linked_project_id is not None and linked_project_id != source_project_id:
+            raise AppError(
+                code="PROCUREMENT_ORDER_PROJECT_CONFLICT",
+                message="Linked order already belongs to another project",
+                status_code=409,
+            )
+        if source_project_id is not None and order.get("project_id") is not None and int(order["project_id"]) != source_project_id:
+            raise AppError(
+                code="PROCUREMENT_ORDER_PROJECT_CONFLICT",
+                message="Linked order already belongs to another project",
+                status_code=409,
+            )
+
+    if "linked_quotation_id" in payload:
+        updates.append("linked_quotation_id = ?")
+        params.append(payload.get("linked_quotation_id"))
+    if final_linked_order_id != current_linked_order_id:
+        updates.append("linked_order_id = ?")
+        params.append(final_linked_order_id)
+    if final_status != str(current["status"]):
+        updates.append("status = ?")
+        params.append(final_status)
+    if "note" in payload:
+        updates.append("note = ?")
+        params.append(payload.get("note"))
+
+    should_sync_orders = final_linked_order_id != current_linked_order_id or final_status != str(current["status"])
+    impacted_order_ids = {order_id for order_id in (current_linked_order_id, final_linked_order_id) if order_id is not None}
+    if updates:
+        now = now_jst_iso()
+        updates.append("updated_at = ?")
+        params.append(now)
+        conn.execute(f"UPDATE procurement_lines SET {', '.join(updates)} WHERE line_id = ?", (*params, line_id))
+        conn.execute("UPDATE procurement_batches SET updated_at = ? WHERE batch_id = ?", (now, int(current["batch_id"])))
+        if should_sync_orders:
+            for impacted_order_id in sorted(impacted_order_ids):
+                _sync_order_project_assignment_from_procurement(conn, impacted_order_id)
+
+    updated_row = _procurement_line_row(conn, line_id)
+    return {
+        "batch": dict(_procurement_batch_row(conn, int(updated_row["batch_id"]))),
+        "line": next(
+            row
+            for row in _procurement_line_detail_rows(conn, int(updated_row["batch_id"]))
+            if int(row["line_id"]) == line_id
+        ),
+    }
+
+
+def delete_procurement_line(conn: sqlite3.Connection, line_id: int) -> dict[str, Any]:
+    current = _procurement_line_row(conn, line_id)
+    if str(current["status"]) != "DRAFT":
+        raise AppError(
+            code="PROCUREMENT_LINE_NOT_DRAFT",
+            message="Only DRAFT procurement lines can be deleted",
+            status_code=409,
+        )
+    batch_id = int(current["batch_id"])
+    conn.execute("DELETE FROM procurement_lines WHERE line_id = ?", (line_id,))
+    conn.execute("UPDATE procurement_batches SET updated_at = ? WHERE batch_id = ?", (now_jst_iso(), batch_id))
+    return {"deleted": True, "line_id": line_id, "batch_id": batch_id}
+
+
+def export_procurement_batch_csv(conn: sqlite3.Connection, batch_id: int) -> tuple[str, bytes]:
+    batch = get_procurement_batch(conn, batch_id)
+    fieldnames = [
+        "batch_title",
+        "item_id",
+        "item_number",
+        "manufacturer",
+        "description",
+        "category",
+        "supplier_name",
+        "finalized_quantity",
+        "expected_arrival",
+        "source_type",
+        "source_project_name",
+        "note",
+    ]
+    rows = [
+        {
+            "batch_title": batch["title"],
+            "item_id": line["item_id"],
+            "item_number": line["item_number"],
+            "manufacturer": line["manufacturer_name"],
+            "description": line.get("description") or "",
+            "category": line.get("category") or "",
+            "supplier_name": line.get("supplier_name") or "",
+            "finalized_quantity": line["finalized_quantity"],
+            "expected_arrival": line.get("expected_arrival") or "",
+            "source_type": line["source_type"],
+            "source_project_name": line.get("source_project_name") or "",
+            "note": line.get("note") or "",
+        }
+        for line in batch["lines"]
+    ]
+    return f"procurement_batch_{batch_id}.csv", _csv_bytes(fieldnames, rows)
+
+
+def add_shortages_to_procurement(
+    conn: sqlite3.Connection,
+    *,
+    batch_id: int | None,
+    create_batch_title: str | None,
+    create_batch_note: str | None,
+    confirm_project_id: int | None = None,
+    confirm_target_date: str | None = None,
+    lines: list[dict[str, Any]],
+) -> dict[str, Any]:
+    target_batch_id = batch_id
+    if target_batch_id is None:
+        created = create_procurement_batch(
+            conn,
+            {
+                "title": (create_batch_title or "").strip() or f"Procurement Batch {today_jst()}",
+                "note": create_batch_note,
+                "status": "DRAFT",
+            },
+        )
+        target_batch_id = int(created["batch_id"])
+    batch = add_procurement_lines(conn, batch_id=target_batch_id, lines=lines)
+    if confirm_project_id is not None:
+        confirm_project_for_procurement(
+            conn,
+            int(confirm_project_id),
+            target_date=confirm_target_date,
+        )
+    return batch
+
+
+def get_shortage_inbox(conn: sqlite3.Connection) -> dict[str, Any]:
+    snapshot = _build_project_planning_snapshot(conn)
+    rows: list[dict[str, Any]] = []
+    for summary in snapshot["project_summaries"]:
+        pid = int(summary["project_id"])
+        for row in snapshot["project_rows"].get(pid, []):
+            shortage = int(row["shortage_at_start"])
+            if shortage <= 0:
+                continue
+            rows.append(
+                {
+                    "item_id": int(row["item_id"]),
+                    "item_number": row["item_number"],
+                    "manufacturer_name": row["manufacturer_name"],
+                    "requested_quantity": shortage,
+                    "source_type": "PROJECT",
+                    "source_project_id": pid,
+                    "source_project_name": summary["name"],
+                    "suggested_supplier": None,
+                    "expected_arrival": summary["planned_start"],
+                    "note": f"Shortage at project start {summary['planned_start']}",
+                }
+            )
+    rows.sort(key=lambda row: (-int(row["requested_quantity"]), str(row["item_number"] or "")))
+    return {"generated_at": now_jst_iso(), "rows": rows}
+
+
+def confirm_procurement_links(conn: sqlite3.Connection, *, links: list[dict[str, Any]]) -> dict[str, Any]:
+    confirmed_count = 0
+    for link in links:
+        if not link.get("confirmed", True):
+            continue
+        update_procurement_line(
+            conn,
+            int(link["line_id"]),
+            {"linked_order_id": int(link["order_id"]), "status": "ORDERED"},
+        )
+        confirmed_count += 1
+    return {"confirmed_count": confirmed_count}
 
 
 def preview_bom_rows(
@@ -10057,6 +10756,7 @@ def list_purchase_candidates(
     *,
     status: str | None = None,
     source_type: str | None = None,
+    project_id: int | None = None,
     target_date: str | None = None,
     page: int = 1,
     per_page: int = 50,
@@ -10069,6 +10769,9 @@ def list_purchase_candidates(
     if source_type:
         clauses.append("pc.source_type = ?")
         params.append(_validate_purchase_candidate_source_type(source_type))
+    if project_id is not None:
+        clauses.append("pc.project_id = ?")
+        params.append(int(project_id))
     if target_date:
         clauses.append("pc.target_date = ?")
         params.append(normalize_optional_date(target_date, "target_date"))
@@ -10892,48 +11595,6 @@ def catalog_search(
             ]
         )
 
-    if "assembly" in requested_types:
-        assembly_rows = conn.execute(
-            """
-            SELECT
-                a.assembly_id,
-                a.name,
-                a.description,
-                COUNT(ac.item_id) AS component_count
-            FROM assemblies a
-            LEFT JOIN assembly_components ac ON ac.assembly_id = a.assembly_id
-            WHERE a.name LIKE ? OR COALESCE(a.description, '') LIKE ?
-            GROUP BY a.assembly_id
-            ORDER BY a.name, a.assembly_id
-            """,
-            (wildcard, wildcard),
-        ).fetchall()
-        assembly_results: list[dict[str, Any]] = []
-        for row in assembly_rows:
-            score, source_idx = _catalog_rank_text(normalized_query, row["name"], row["description"])
-            if score == 999:
-                continue
-            match_source = "name" if source_idx == "0" else "description"
-            summary = f"{int(row['component_count'])} component(s) | #{int(row['assembly_id'])}"
-            if row["description"]:
-                summary = f"{summary} | {row['description']}"
-            assembly_results.append(
-                {
-                    "entity_type": "assembly",
-                    "entity_id": int(row["assembly_id"]),
-                    "value_text": str(row["name"]),
-                    "display_label": f"{row['name']} #{int(row['assembly_id'])}",
-                    "summary": summary,
-                    "match_source": match_source,
-                    "_score": score,
-                }
-            )
-        results.extend(
-            sorted(assembly_results, key=lambda row: (int(row["_score"]), str(row["display_label"]).casefold()))[
-                :limit_per_type
-            ]
-        )
-
     if "supplier" in requested_types:
         supplier_rows = conn.execute(
             """
@@ -10967,6 +11628,36 @@ def catalog_search(
             )
         results.extend(
             sorted(supplier_results, key=lambda row: (int(row["_score"]), str(row["display_label"]).casefold()))[
+                :limit_per_type
+            ]
+        )
+
+    if "assembly" in requested_types:
+        assembly_results: list[dict[str, Any]] = []
+        for row in _load_assembly_preview_catalog_rows(conn):
+            score, source_idx = _catalog_rank_text(normalized_query, row["name"], row["description"])
+            if score == 999:
+                continue
+            assembly_results.append(
+                {
+                    "entity_type": "assembly",
+                    "entity_id": int(row["assembly_id"]),
+                    "value_text": str(row["name"]),
+                    "display_label": f"{row['name']} #{int(row['assembly_id'])}",
+                    "summary": " | ".join(
+                        part
+                        for part in [
+                            f"{int(row.get('component_count') or 0)} component(s)",
+                            str(row["description"]) if row.get("description") else "",
+                        ]
+                        if part
+                    ),
+                    "match_source": "name" if source_idx == "0" else "description",
+                    "_score": score,
+                }
+            )
+        results.extend(
+            sorted(assembly_results, key=lambda row: (int(row["_score"]), str(row["display_label"]).casefold()))[
                 :limit_per_type
             ]
         )

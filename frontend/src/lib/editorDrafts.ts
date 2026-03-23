@@ -1,7 +1,7 @@
-import type { ProjectRequirementType, RfqLine, RfqLineStatus } from "./types";
+import type { ProcurementLine, ProcurementLineStatus, ProjectRequirementType } from "./types";
 
 export type RequirementDraft = {
-  target_type: "ITEM" | "ASSEMBLY";
+  target_type: "ITEM";
   target_id: string;
   quantity: string;
   requirement_type: ProjectRequirementType;
@@ -17,7 +17,8 @@ export type RfqLineDraft = {
   lead_time_days: string;
   expected_arrival: string;
   linked_order_id: string;
-  status: RfqLineStatus;
+  linked_quotation_id: string;
+  status: ProcurementLineStatus;
   note: string;
 };
 
@@ -46,7 +47,7 @@ export function isRequirementDraftBlank(row: RequirementDraft): boolean {
 }
 
 export function normalizeRequirementDrafts(rows: RequirementDraft[]): Array<{
-  target_type: "ITEM" | "ASSEMBLY";
+  target_type: "ITEM";
   target_id: string;
   quantity: string;
   requirement_type: ProjectRequirementType;
@@ -72,7 +73,7 @@ export function normalizeRequirementDrafts(rows: RequirementDraft[]): Array<{
   return normalized.slice(0, trimIndex);
 }
 
-export function createRfqLineDraft(line: RfqLine): RfqLineDraft {
+export function createRfqLineDraft(line: ProcurementLine): RfqLineDraft {
   return {
     requested_quantity: String(line.requested_quantity),
     finalized_quantity: String(line.finalized_quantity),
@@ -80,6 +81,7 @@ export function createRfqLineDraft(line: RfqLine): RfqLineDraft {
     lead_time_days: line.lead_time_days == null ? "" : String(line.lead_time_days),
     expected_arrival: line.expected_arrival ?? "",
     linked_order_id: line.linked_order_id == null ? "" : String(line.linked_order_id),
+    linked_quotation_id: line.linked_quotation_id == null ? "" : String(line.linked_quotation_id),
     status: line.status,
     note: line.note ?? "",
   };
@@ -97,6 +99,7 @@ export function areRfqLineDraftsEqual(
     left.lead_time_days === right.lead_time_days &&
     left.expected_arrival === right.expected_arrival &&
     left.linked_order_id === right.linked_order_id &&
+    left.linked_quotation_id === right.linked_quotation_id &&
     left.status === right.status &&
     left.note === right.note
   );
