@@ -3,20 +3,19 @@ import { RouteErrorBoundary } from "./RouteErrorBoundary";
 
 const nav = [
   { to: "/", label: "Dashboard" },
-  { to: "/items", label: "Items" },
-  { to: "/inventory", label: "Movements" },
-  { to: "/orders", label: "Orders" },
-  { to: "/reservations", label: "Reservations" },
-  { to: "/assemblies", label: "Assemblies" },
-  { to: "/projects", label: "Projects" },
   { to: "/workspace", label: "Workspace" },
-  { to: "/purchase-candidates", label: "Purchase Candidates" },
-  { to: "/planning", label: "Planning" },
-  { to: "/rfq", label: "RFQ" },
+  { to: "/search", label: "Search" },
+  { to: "/location", label: "Location" },
+  { to: "/projects", label: "Projects" },
+  { to: "/procurement", label: "Procurement" },
+  { to: "/orders", label: "Orders" },
+  { to: "/arrival", label: "Arrival" },
+  { to: "/movements", label: "Movements" },
+  { to: "/reserve", label: "Reserve" },
   { to: "/bom", label: "BOM" },
-  { to: "/locations", label: "Location" },
-  { to: "/snapshot", label: "Snapshot" },
+  { to: "/items", label: "Items" },
   { to: "/history", label: "History" },
+  { to: "/snapshot", label: "Snapshot" },
   { to: "/master", label: "Master" }
 ];
 

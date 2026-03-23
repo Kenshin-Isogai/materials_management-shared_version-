@@ -337,21 +337,41 @@ export function BomPage() {
     setLoading(true);
     setMessage("");
     try {
-      const data = await apiSend<{
-        target_date: string | null;
-        analysis: Array<Record<string, unknown>>;
-        created_count: number;
-      }>("/purchase-candidates/from-bom", {
+      const analysis = await apiSend<BomResult>("/bom/analyze", {
         method: "POST",
         body: JSON.stringify({
           rows: payloadRows,
           target_date: targetDate.trim() || null,
         }),
       });
+      const shortageLines = (analysis.rows ?? [])
+        .filter((row) => Number(row.shortage ?? 0) > 0 && Number(row.item_id ?? 0) > 0)
+        .map((row) => ({
+          item_id: Number(row.item_id),
+          requested_quantity: Number(row.shortage),
+          source_type: "BOM" as const,
+          source_project_id: null,
+          supplier_name: String(row.supplier ?? ""),
+          expected_arrival: analysis.target_date ?? null,
+          note: "Created from BOM shortage analysis",
+        }));
+      if (!shortageLines.length) {
+        setRows(payloadRows);
+        setResult(analysis);
+        setMessage("No resolved shortage rows are available to send to procurement.");
+        return;
+      }
+      const procurement = await apiSend<{ batch_id: number }>("/shortage-inbox/to-procurement", {
+        method: "POST",
+        body: JSON.stringify({
+          create_batch_title: `BOM Shortages ${analysis.target_date ?? "current"}`,
+          lines: shortageLines,
+        }),
+      });
       setRows(payloadRows);
-      setResult({ rows: data.analysis, target_date: data.target_date });
+      setResult(analysis);
       resetPreview();
-      setMessage(`Saved ${data.created_count} purchase candidate(s).`);
+      setMessage(`Created procurement batch #${procurement.batch_id}.`);
     } catch (error) {
       setMessage(formatActionError("Save failed", error));
     } finally {
@@ -485,7 +505,7 @@ export function BomPage() {
               Reserve Available
             </button>
             <button className="button-subtle" disabled={loading} onClick={saveShortagesFromPreview} type="button">
-              Save Shortages
+              Add Shortages To Procurement
             </button>
             <button className="button-subtle" disabled={loading} onClick={applyCorrectionsToGrid} type="button">
               Apply Corrections To Grid

@@ -15,9 +15,9 @@ The Optical Component Inventory Management System provides comprehensive lifecyc
 | **Stock Tracking** | Real-time inventory by location |
 | **Movement** | Transfer, consume, adjust inventory |
 | **Reservation** | Soft-reserve with purpose/deadline tracking |
-| **BOM Analysis** | Gap analysis, batch reservation |
-| **Assembly Management** | Define reusable component groups |
-| **Project Planning** | Future demand registration, sequential project netting, project-dedicated RFQ workflow |
+| **BOM Analysis** | Gap analysis, batch reservation, shortage handoff to procurement |
+| **Procurement** | Cross-project procurement batches and CSV export for supplier communication |
+| **Project Planning** | Future demand registration, sequential project netting, procurement-linked shortage workflow |
 | **Undo Operations** | Safe reversal with compensating transactions |
 
 ### **1.3 Non-Functional Requirements**
@@ -78,14 +78,10 @@ When statements conflict, interpret in this order:
 | `category_aliases` | Category soft-merge aliases | alias_category, canonical_category |
 | `transaction_log` | All inventory operations | log_id, operation_type, item_id |
 | `reservations` | Structured reservations | reservation_id, item_id, purpose |
-| `assemblies` | Assembly definitions | assembly_id, name |
-| `assembly_components` | Assembly component list | assembly_id, item_id, quantity |
-| `location_assembly_usage` | Assembly deployment by location | location, assembly_id, quantity |
 | `projects` | Project definitions | project_id, name, status |
 | `project_requirements` | Project component needs | requirement_id, project_id |
-| `rfq_batches` | Project shortage follow-up batches | rfq_id, project_id, status |
-| `rfq_lines` | Project-dedicated quote/order planning lines | line_id, rfq_id, item_id |
-| `purchase_candidates` | Persistent pre-PO shortage candidates | candidate_id, source_type, status |
+| `procurement_batches` | Cross-project procurement batches | batch_id, title, status |
+| `procurement_lines` | Procurement line items | line_id, batch_id, item_id |
 
 ### **2.3 ER Diagram (Mermaid)**
 
@@ -1114,10 +1110,14 @@ Base URL: `http://localhost:8000/api`
 
 `POST /projects/{project_id}/rfq-batches` accepts optional `target_date` (`YYYY-MM-DD`) so RFQ creation can reuse the planning date currently being reviewed. When this flow auto-promotes a `PLANNING` project, it persists that analysis date as `projects.planned_start`.
 
-`GET /projects/{project_id}/gap-analysis` remains as a compatibility view over the same planning engine and reports:
-- `available_stock`: total on-time supply visible at the project start date
-- `shortage`: uncovered quantity at the project start date
-- `target_date`: the effective planning date used by the shared engine (`target_date` override, stored `planned_start`, or `today_jst()` fallback)
+`GET /projects/{project_id}/gap-analysis` remains as a compatibility endpoint and reports:
+- `available_stock`
+- `shortage`
+- `target_date`
+
+Compatibility rule:
+- no `target_date`: use current net available stock only and do not project open-order arrivals
+- with `target_date`: use the planning/projection engine and include eligible arrivals up to that date
 
 #### **Purchase Candidates**
 

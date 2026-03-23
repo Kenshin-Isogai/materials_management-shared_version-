@@ -90,6 +90,8 @@ class InventoryImportRequest(BaseModel):
 
 class ReservationImportRequest(BaseModel):
     pass
+
+
 class OrderUpdateRequest(BaseModel):
     expected_arrival: str | None = None
     status: Literal["Ordered"] | None = None
@@ -186,44 +188,19 @@ class ReservationActionRequest(BaseModel):
     note: str | None = None
 
 
-class AssemblyComponentInput(BaseModel):
-    item_id: int
-    quantity: int = Field(gt=0)
-
-
-class AssemblyCreate(BaseModel):
-    name: str = Field(min_length=1)
-    description: str | None = None
-    components: list[AssemblyComponentInput] = Field(default_factory=list)
-
-
-class AssemblyUpdate(BaseModel):
-    name: str | None = None
-    description: str | None = None
-    components: list[AssemblyComponentInput] | None = None
-
-
-class LocationAssemblyAssignment(BaseModel):
-    assembly_id: int
-    quantity: int = Field(gt=0)
-    note: str | None = None
-
-
-class LocationAssemblySetRequest(BaseModel):
-    assignments: list[LocationAssemblyAssignment]
-
-
 class ProjectRequirementInput(BaseModel):
-    assembly_id: int | None = None
     item_id: int | None = None
+    assembly_id: int | None = None
     quantity: int = Field(gt=0)
     requirement_type: Literal["INITIAL", "SPARE", "REPLACEMENT"] = "INITIAL"
     note: str | None = None
 
     @model_validator(mode="after")
-    def validate_one_target(self) -> "ProjectRequirementInput":
-        if (self.assembly_id is None) == (self.item_id is None):
-            raise ValueError("exactly one of assembly_id or item_id is required")
+    def validate_target(self) -> "ProjectRequirementInput":
+        has_item = self.item_id is not None
+        has_assembly = self.assembly_id is not None
+        if has_item == has_assembly:
+            raise ValueError("exactly one of item_id or assembly_id is required")
         return self
 
 
@@ -276,73 +253,98 @@ class BomReserveRequest(BaseModel):
     note: str | None = None
 
 
-class PurchaseCandidatesFromBomRequest(BaseModel):
-    rows: list[BomLineInput]
-    target_date: str | None = None
+class ProcurementBatchCreateRequest(BaseModel):
+    title: str = Field(min_length=1)
     note: str | None = None
+    status: Literal["DRAFT", "SENT", "QUOTED", "ORDERED", "CLOSED", "CANCELLED"] = "DRAFT"
 
 
-class PurchaseCandidatesFromProjectRequest(BaseModel):
-    target_date: str | None = None
-    note: str | None = None
-
-
-class ProjectRfqBatchCreateRequest(BaseModel):
+class ProcurementBatchUpdate(BaseModel):
     title: str | None = None
-    note: str | None = None
-    target_date: str | None = None
-
-
-class RfqBatchUpdate(BaseModel):
-    title: str | None = None
-    status: Literal["OPEN", "CLOSED", "CANCELLED"] | None = None
+    status: Literal["DRAFT", "SENT", "QUOTED", "ORDERED", "CLOSED", "CANCELLED"] | None = None
     note: str | None = None
 
     @model_validator(mode="after")
-    def validate_non_empty_payload(self) -> "RfqBatchUpdate":
+    def validate_non_empty_payload(self) -> "ProcurementBatchUpdate":
         if not ({"title", "status", "note"} & set(self.__pydantic_fields_set__)):
-            raise ValueError("at least one RFQ batch field is required")
+            raise ValueError("at least one procurement batch field is required")
         return self
 
 
-class RfqLineUpdate(BaseModel):
+class ProcurementLineCreate(BaseModel):
+    item_id: int
+    source_type: Literal["PROJECT", "BOM", "ADHOC"] = "ADHOC"
+    source_project_id: int | None = None
+    requested_quantity: int = Field(gt=0)
+    finalized_quantity: int | None = Field(default=None, gt=0)
+    supplier_name: str | None = None
+    expected_arrival: str | None = None
+    linked_order_id: int | None = None
+    linked_quotation_id: int | None = None
+    status: Literal["DRAFT", "SENT", "QUOTED", "ORDERED", "CANCELLED"] = "DRAFT"
+    note: str | None = None
+
+
+class ProcurementBatchAddLinesRequest(BaseModel):
+    lines: list[ProcurementLineCreate] = Field(default_factory=list)
+
+
+class ProcurementLineUpdate(BaseModel):
     requested_quantity: int | None = Field(default=None, gt=0)
     finalized_quantity: int | None = Field(default=None, gt=0)
     supplier_name: str | None = None
-    lead_time_days: int | None = Field(default=None, ge=0)
     expected_arrival: str | None = None
     linked_order_id: int | None = None
+    linked_quotation_id: int | None = None
     status: Literal["DRAFT", "SENT", "QUOTED", "ORDERED", "CANCELLED"] | None = None
     note: str | None = None
 
     @model_validator(mode="after")
-    def validate_non_empty_payload(self) -> "RfqLineUpdate":
+    def validate_non_empty_payload(self) -> "ProcurementLineUpdate":
         if not (
             {
                 "requested_quantity",
                 "finalized_quantity",
                 "supplier_name",
-                "lead_time_days",
                 "expected_arrival",
                 "linked_order_id",
+                "linked_quotation_id",
                 "status",
                 "note",
             }
             & set(self.__pydantic_fields_set__)
         ):
-            raise ValueError("at least one RFQ line field is required")
+            raise ValueError("at least one procurement line field is required")
         return self
 
 
-class PurchaseCandidateUpdate(BaseModel):
-    status: Literal["OPEN", "ORDERING", "ORDERED", "CANCELLED"] | None = None
+class ShortageInboxLine(BaseModel):
+    item_id: int
+    requested_quantity: int = Field(gt=0)
+    source_type: Literal["PROJECT", "BOM", "ADHOC"]
+    source_project_id: int | None = None
+    supplier_name: str | None = None
+    expected_arrival: str | None = None
     note: str | None = None
 
-    @model_validator(mode="after")
-    def validate_non_empty_payload(self) -> "PurchaseCandidateUpdate":
-        if "status" not in self.__pydantic_fields_set__ and "note" not in self.__pydantic_fields_set__:
-            raise ValueError("at least one of status or note is required")
-        return self
+
+class ShortageInboxToProcurementRequest(BaseModel):
+    batch_id: int | None = None
+    create_batch_title: str | None = None
+    create_batch_note: str | None = None
+    confirm_project_id: int | None = None
+    confirm_target_date: str | None = None
+    lines: list[ShortageInboxLine] = Field(default_factory=list)
+
+
+class ProcurementLinkConfirmation(BaseModel):
+    order_id: int
+    line_id: int
+    confirmed: bool = True
+
+
+class ConfirmProcurementLinksRequest(BaseModel):
+    links: list[ProcurementLinkConfirmation] = Field(default_factory=list)
 
 
 class TransactionUndoRequest(BaseModel):

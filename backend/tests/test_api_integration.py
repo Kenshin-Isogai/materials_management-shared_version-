@@ -76,6 +76,129 @@ def test_project_requirement_preview_item_summary_includes_description(client):
     assert "Optics" in suggested_match["summary"]
     assert "Beam shaping lens" in suggested_match["summary"]
 
+
+def test_location_assembly_assignment_endpoint_remains_available(client):
+    manufacturer = client.post("/api/manufacturers", json={"name": "API-LOCATION-MFG"}).json()["data"]
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-LOCATION-ITEM",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Fixture",
+        },
+    ).json()["data"]
+    assembly = client.post(
+        "/api/assemblies",
+        json={
+            "name": "API-LOCATION-ASM",
+            "components": [{"item_id": item["item_id"], "quantity": 2}],
+        },
+    ).json()["data"]
+
+    response = client.put(
+        "/api/locations/LAB-A/assemblies",
+        json={"assignments": [{"assembly_id": assembly["assembly_id"], "quantity": 3}]},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert len(payload) == 1
+    assert int(payload[0]["assembly_id"]) == assembly["assembly_id"]
+    assert int(payload[0]["quantity"]) == 3
+
+
+def test_project_update_preserves_legacy_assembly_requirements(client):
+    manufacturer = client.post("/api/manufacturers", json={"name": "API-LEGACY-PROJECT-MFG"}).json()["data"]
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-LEGACY-PROJECT-ITEM",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Assembly Part",
+        },
+    ).json()["data"]
+    assembly = client.post(
+        "/api/assemblies",
+        json={
+            "name": "API-LEGACY-PROJECT-ASM",
+            "components": [{"item_id": item["item_id"], "quantity": 1}],
+        },
+    ).json()["data"]
+    created = client.post(
+        "/api/projects",
+        json={
+            "name": "API-LEGACY-PROJECT",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [{"assembly_id": assembly["assembly_id"], "quantity": 4}],
+        },
+    )
+    assert created.status_code == 200
+    project = created.json()["data"]
+
+    detail = client.get(f"/api/projects/{project['project_id']}")
+    assert detail.status_code == 200
+    assert detail.json()["data"]["requirements"][0]["assembly_name"] == "API-LEGACY-PROJECT-ASM"
+    assert detail.json()["data"]["requirements"][0]["item_id"] is None
+
+    updated = client.put(
+        f"/api/projects/{project['project_id']}",
+        json={
+            "name": "API-LEGACY-PROJECT-RENAMED",
+            "requirements": [],
+        },
+    )
+    assert updated.status_code == 200
+    updated_requirements = updated.json()["data"]["requirements"]
+    assert len(updated_requirements) == 1
+    assert updated_requirements[0]["assembly_name"] == "API-LEGACY-PROJECT-ASM"
+    assert int(updated_requirements[0]["quantity"]) == 4
+
+
+def test_shortage_inbox_procurement_can_confirm_draft_project(client):
+    manufacturer = client.post("/api/manufacturers", json={"name": "API-PROCUREMENT-CONFIRM-MFG"}).json()["data"]
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-PROCUREMENT-CONFIRM-ITEM",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Optic",
+        },
+    ).json()["data"]
+    project = client.post(
+        "/api/projects",
+        json={
+            "name": "API-PROCUREMENT-CONFIRM-PROJECT",
+            "status": "PLANNING",
+            "planned_start": "2999-07-01",
+            "requirements": [{"item_id": item["item_id"], "quantity": 2}],
+        },
+    ).json()["data"]
+
+    response = client.post(
+        "/api/shortage-inbox/to-procurement",
+        json={
+            "create_batch_title": "API procurement batch",
+            "confirm_project_id": project["project_id"],
+            "confirm_target_date": FUTURE_TARGET_DATE,
+            "lines": [
+                {
+                    "item_id": item["item_id"],
+                    "requested_quantity": 2,
+                    "source_type": "PROJECT",
+                    "source_project_id": project["project_id"],
+                    "expected_arrival": FUTURE_TARGET_DATE,
+                    "note": "Created from workspace planning gap",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    project_detail = client.get(f"/api/projects/{project['project_id']}")
+    assert project_detail.status_code == 200
+    assert project_detail.json()["data"]["status"] == "CONFIRMED"
+    assert project_detail.json()["data"]["planned_start"] == FUTURE_TARGET_DATE
+
 def test_auth_capabilities_endpoint_defaults_and_header(client):
     response = client.get("/api/auth/capabilities")
     assert response.status_code == 200
@@ -2814,6 +2937,41 @@ def test_reservations_import_accepts_preview_target_override(client):
     assert rows[0]["quantity"] == 3
 
 
+def test_reservations_import_accepts_preview_assembly_override(client):
+    manufacturer = client.post("/api/manufacturers", json={"name": "API-RES-ASM-OVERRIDE-MFG"}).json()["data"]
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-RES-ASM-OVERRIDE-ITEM",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Mirror",
+        },
+    ).json()["data"]
+    client.post(
+        "/api/inventory/adjust",
+        json={"item_id": item["item_id"], "quantity_delta": 20, "location": "STOCK"},
+    )
+    assembly = client.post(
+        "/api/assemblies",
+        json={"name": "API-RES-ASM-OVERRIDE-ASM", "components": [{"item_id": item["item_id"], "quantity": 2}]},
+    ).json()["data"]
+
+    csv_content = (
+        "assembly,quantity,purpose\n"
+        "API-RES-ASM-OVERRIDE-TYPO,3,override assembly target\n"
+    ).encode("utf-8")
+    response = client.post(
+        "/api/reservations/import-csv",
+        files={"file": ("reservations-assembly-override.csv", csv_content, "text/csv")},
+        data={"row_overrides": json.dumps({"2": {"assembly_id": assembly["assembly_id"]}})},
+    )
+    assert response.status_code == 200
+    rows = response.json()["data"]
+    assert len(rows) == 1
+    assert rows[0]["item_id"] == item["item_id"]
+    assert rows[0]["quantity"] == 6
+
+
 def test_reservations_import_rejects_override_without_target_field(client):
     csv_content = make_csv_bytes(
         ["assembly", "quantity", "purpose"],
@@ -2835,6 +2993,36 @@ def test_reservations_import_rejects_override_without_target_field(client):
     error = response.json()["error"]
     assert error["code"] == "INVALID_RESERVATION_IMPORT_OVERRIDE"
     assert error["message"] == "Reservation import override for row 2 must include item_id or assembly_id"
+
+
+def test_get_rfq_batches_endpoint_still_loads_without_item_filter_support(client):
+    client.post("/api/manufacturers", json={"name": "API-RFQ-LIST-MFG"})
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-RFQ-LIST-ITEM",
+            "manufacturer_name": "API-RFQ-LIST-MFG",
+            "category": "Lens",
+        },
+    ).json()["data"]
+    project = client.post(
+        "/api/projects",
+        json={
+            "name": "API-RFQ-LIST-PROJECT",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [{"item_id": item["item_id"], "quantity": 1}],
+        },
+    ).json()["data"]
+    created = client.post(
+        f"/api/projects/{project['project_id']}/rfq-batches",
+        json={"target_date": FUTURE_TARGET_DATE},
+    )
+    assert created.status_code == 200
+
+    response = client.get("/api/rfq-batches")
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert any(int(row["project_id"]) == project["project_id"] for row in payload)
 
 
 def test_bom_analyze_endpoint_supports_target_date_projection(client):
@@ -3872,6 +4060,110 @@ def test_update_order_endpoint_rejects_manual_project_override_for_rfq_owned_ord
     refreshed_order = client.get(f"/api/orders/{order_id}")
     assert refreshed_order.status_code == 200
     assert refreshed_order.json()["data"]["project_id"] == owner_project["project_id"]
+
+
+def test_procurement_line_revert_preserves_rfq_owned_order_project(client):
+    client.post("/api/manufacturers", json={"name": "API-PROC-RFQ-FALLBACK-MFG"})
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-PROC-RFQ-FALLBACK-ITEM",
+            "manufacturer_name": "API-PROC-RFQ-FALLBACK-MFG",
+            "category": "Lens",
+        },
+    ).json()["data"]
+    project = client.post(
+        "/api/projects",
+        json={
+            "name": "API-PROC-RFQ-FALLBACK-PROJECT",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [{"item_id": item["item_id"], "quantity": 5}],
+        },
+    ).json()["data"]
+    rfq = client.post(
+        f"/api/projects/{project['project_id']}/rfq-batches",
+        json={"target_date": FUTURE_TARGET_DATE},
+    )
+    assert rfq.status_code == 200
+    rfq_line_id = rfq.json()["data"]["lines"][0]["line_id"]
+
+    order_csv = StringIO()
+    writer = csv.DictWriter(
+        order_csv,
+        fieldnames=[
+            "item_number",
+            "quantity",
+            "quotation_number",
+            "issue_date",
+            "order_date",
+            "expected_arrival",
+            "pdf_link",
+        ],
+    )
+    writer.writeheader()
+    writer.writerow(
+        {
+            "item_number": item["item_number"],
+            "quantity": "5",
+            "quotation_number": "Q-API-PROC-RFQ-FALLBACK-001",
+            "issue_date": "2026-03-01",
+            "order_date": "2026-03-02",
+            "expected_arrival": FUTURE_TARGET_DATE,
+            "pdf_link": "",
+        }
+    )
+    imported = client.post(
+        "/api/orders/import",
+        files={"file": ("orders.csv", order_csv.getvalue().encode("utf-8"), "text/csv")},
+        data={"supplier_name": "ApiProcRfqFallbackSupplier"},
+    )
+    assert imported.status_code == 200
+    order_id = imported.json()["data"]["order_ids"][0]
+
+    linked_rfq = client.put(
+        f"/api/rfq-lines/{rfq_line_id}",
+        json={"linked_order_id": order_id, "status": "ORDERED"},
+    )
+    assert linked_rfq.status_code == 200
+
+    procurement = client.post(
+        "/api/shortage-inbox/to-procurement",
+        json={
+            "create_batch_title": "API procurement fallback batch",
+            "lines": [
+                {
+                    "item_id": item["item_id"],
+                    "requested_quantity": 1,
+                    "source_type": "PROJECT",
+                    "source_project_id": project["project_id"],
+                    "expected_arrival": FUTURE_TARGET_DATE,
+                    "note": "procurement fallback coverage",
+                }
+            ],
+        },
+    )
+    assert procurement.status_code == 200
+    batch_id = procurement.json()["data"]["batch_id"]
+
+    batch = client.get(f"/api/procurement-batches/{batch_id}")
+    assert batch.status_code == 200
+    line_id = batch.json()["data"]["lines"][0]["line_id"]
+
+    ordered = client.put(
+        f"/api/procurement-lines/{line_id}",
+        json={"linked_order_id": order_id, "status": "ORDERED"},
+    )
+    assert ordered.status_code == 200
+
+    quoted = client.put(
+        f"/api/procurement-lines/{line_id}",
+        json={"linked_order_id": order_id, "status": "QUOTED", "expected_arrival": FUTURE_TARGET_DATE},
+    )
+    assert quoted.status_code == 200
+
+    refreshed_order = client.get(f"/api/orders/{order_id}")
+    assert refreshed_order.status_code == 200
+    assert refreshed_order.json()["data"]["project_id"] == project["project_id"]
 
 
 def test_rfq_line_endpoint_clears_stale_link_when_reverted_to_quoted(client):

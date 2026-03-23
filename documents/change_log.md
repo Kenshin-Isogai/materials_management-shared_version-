@@ -1,10 +1,53 @@
+## 2026-03-23 (project planning assembly requirement expansion fix)
+
+### Fixed
+
+- Restored assembly-backed project demand expansion in planning aggregation:
+  - `_aggregate_project_required_by_item` now expands `assembly_id` requirements into component-level item demand (quantity × component quantity) instead of skipping non-`item_id` rows.
+  - This fixes project gap-analysis totals and downstream project shortage follow-up flows (for example purchase-candidate creation) for projects that still carry assembly-based requirements.
+
+### Tests
+
+- Added backend regression coverage validating that assembly-only project requirements produce expected component shortages in project gap analysis and create the correct purchase candidate quantity.
+
 ## 2026-03-12
+
+## 2026-03-23
+
+### Changed
+
+- Began the redesign transition from RFQ and purchase-candidate flows to a unified procurement workflow.
+  - Added backend procurement persistence via `procurement_batches` and `procurement_lines`, plus migration logic from legacy RFQ and purchase-candidate tables.
+  - Added procurement API endpoints and a new frontend `Procurement` page.
+  - Updated workspace, BOM, projects, and reservations UI paths toward the procurement-first route structure described in `temporary/redesign_specification.md`.
+  - Simplified primary project requirement editing toward item-only requirements.
+
+### Compatibility
+
+- Kept temporary legacy API/service compatibility for RFQ, assembly, and purchase-candidate routes so existing callers and tests do not hard-fail during the redesign.
+- Workspace summary and order-project ownership checks now recognize both legacy RFQ ownership and the new procurement ownership model during migration.
+
+### Tests
+
+- Frontend production build executed successfully: `npm run build`.
+- Frontend TypeScript compile executed successfully: `npx tsc -b`.
+- Backend full suite executed: `151 passed`, `3 failed`.
+- Follow-up change: default `GET /projects/{id}/gap-analysis` without `target_date` now explicitly uses current stock only and does not project pending arrivals; explicit `target_date` still enables projection.
 
 ### Fixed
 
 - Workspace multi-project CSV export now keeps `target_date` aligned with the selected planning analysis date instead of duplicating each row's `planned_start`.
   - Preview-inclusive exports now write the shared requested/effective board date on every row so downstream consumers can distinguish analysis date from project start date.
   - Committed-only exports leave `target_date` blank because there is no single selected preview date for the whole pipeline snapshot.
+- Restored redesign compatibility gaps found during review.
+  - Re-added the Location-page assembly assignment API route `PUT /api/locations/{location}/assemblies`.
+  - Project detail/update flows now preserve legacy `project_requirements` rows stored with `assembly_id` and no `item_id`, while the item-only editor warns that those legacy rows are preserved but not editable there.
+  - Workspace procurement creation can again confirm `PLANNING` projects and persist the active planning date when creating procurement from project shortages.
+- Fixed follow-up regressions in the procurement-first transition.
+  - `GET /api/rfq-batches` no longer fails from an adapter/service signature mismatch.
+  - Procurement unlink sync now falls back to ORDERED RFQ ownership before clearing `orders.project_id`.
+  - Reservations preview confirmation now sends `assembly_id` overrides when the user resolves a row to an assembly.
+  - BOM shortage handoff now stops with a message instead of creating an empty procurement batch when no resolved shortage rows remain.
 
 ## 2026-03-12
 

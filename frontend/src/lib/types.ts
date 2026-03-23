@@ -143,23 +143,23 @@ export type ProjectRow = {
 
 export type ProjectRequirement = {
   requirement_id: number;
-  assembly_id: number | null;
+  assembly_id?: number | null;
   assembly_name?: string | null;
-  item_id: number | null;
+  item_id?: number | null;
   item_number?: string | null;
   quantity: number;
   requirement_type: ProjectRequirementType;
   note: string | null;
 };
 
-export type ProjectDetail = ProjectRow & {
-  description: string | null;
-  requirements: ProjectRequirement[];
-};
-
 export type AssemblyOption = {
   assembly_id: number;
   name: string;
+};
+
+export type ProjectDetail = ProjectRow & {
+  description: string | null;
+  requirements: ProjectRequirement[];
 };
 
 export type ProjectRequirementPreviewMatch = CatalogSearchResult & {
@@ -196,7 +196,7 @@ export type ProjectRequirementPreview = {
 };
 
 export type PlanningSource = {
-  source_type: "stock" | "generic_order" | "dedicated_order" | "quoted_rfq";
+  source_type: "stock" | "generic_order" | "dedicated_order" | "quoted_procurement" | "quoted_rfq";
   quantity: number;
   label: string;
   ref_id: number | null;
@@ -261,6 +261,17 @@ export type WorkspaceProjectSummary = {
   summary_mode: "authoritative" | "preview_required" | "not_plannable";
   summary_message: string;
   planning_summary: PipelineSummary | null;
+  procurement_summary: {
+    total_batches: number;
+    open_batch_count: number;
+    closed_batch_count: number;
+    cancelled_batch_count: number;
+    draft_line_count: number;
+    sent_line_count: number;
+    quoted_line_count: number;
+    ordered_line_count: number;
+    latest_target_date: string | null;
+  };
   rfq_summary: {
     total_batches: number;
     open_batch_count: number;
@@ -299,15 +310,16 @@ export type ItemFlowTimeline = {
   events: ItemFlowEvent[];
 };
 
-export type RfqBatchStatus = "OPEN" | "CLOSED" | "CANCELLED";
+export type ProcurementBatchStatus = "OPEN" | "DRAFT" | "SENT" | "QUOTED" | "ORDERED" | "CLOSED" | "CANCELLED";
 
-export type RfqBatchSummary = {
-  rfq_id: number;
-  project_id: number;
-  project_name: string;
+export type ProcurementBatchSummary = {
+  batch_id: number;
+  rfq_id?: number;
   title: string;
-  target_date: string | null;
-  status: RfqBatchStatus;
+  project_id?: number | null;
+  project_name?: string | null;
+  target_date?: string | null;
+  status: ProcurementBatchStatus;
   note: string | null;
   line_count: number;
   finalized_quantity_total: number;
@@ -315,20 +327,25 @@ export type RfqBatchSummary = {
   ordered_line_count: number;
 };
 
-export type RfqLineStatus = "DRAFT" | "SENT" | "QUOTED" | "ORDERED" | "CANCELLED";
+export type ProcurementLineStatus = "DRAFT" | "SENT" | "QUOTED" | "ORDERED" | "CANCELLED";
 
-export type RfqLine = {
+export type ProcurementLine = {
   line_id: number;
+  batch_id: number;
   item_id: number;
   item_number: string;
   manufacturer_name: string;
+  source_type: "PROJECT" | "BOM" | "ADHOC";
+  source_project_id: number | null;
+  source_project_name?: string | null;
   requested_quantity: number;
   finalized_quantity: number;
   supplier_name: string | null;
-  lead_time_days: number | null;
+  lead_time_days?: number | null;
   expected_arrival: string | null;
   linked_order_id: number | null;
-  status: RfqLineStatus;
+  linked_quotation_id: number | null;
+  status: ProcurementLineStatus;
   note: string | null;
   linked_order_project_id: number | null;
   linked_order_expected_arrival: string | null;
@@ -336,9 +353,15 @@ export type RfqLine = {
   linked_order_supplier_name: string | null;
 };
 
-export type RfqBatchDetail = RfqBatchSummary & {
-  lines: RfqLine[];
+export type ProcurementBatchDetail = ProcurementBatchSummary & {
+  lines: ProcurementLine[];
 };
+
+export type RfqBatchStatus = ProcurementBatchStatus;
+export type RfqBatchSummary = ProcurementBatchSummary;
+export type RfqLineStatus = ProcurementLineStatus;
+export type RfqLine = ProcurementLine;
+export type RfqBatchDetail = ProcurementBatchDetail;
 
 export type ItemPlanningContextProject = {
   project_id: number;

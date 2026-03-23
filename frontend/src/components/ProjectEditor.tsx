@@ -8,7 +8,6 @@ import {
 } from "../lib/editorDrafts";
 import { formatActionError, resolvePreviewSelection } from "../lib/previewState";
 import type {
-  AssemblyOption,
   CatalogSearchResult,
   Item,
   ProjectDetail,
@@ -27,17 +26,6 @@ function itemToCatalogResult(item: Item): CatalogSearchResult {
     display_label: `${item.item_number} (${item.manufacturer_name}) #${item.item_id}`,
     summary: [item.category, `#${item.item_id}`].filter(Boolean).join(" | "),
     match_source: "item_number",
-  };
-}
-
-function assemblyToCatalogResult(assembly: AssemblyOption): CatalogSearchResult {
-  return {
-    entity_type: "assembly",
-    entity_id: assembly.assembly_id,
-    value_text: assembly.name,
-    display_label: `${assembly.name} #${assembly.assembly_id}`,
-    summary: `Assembly #${assembly.assembly_id}`,
-    match_source: "name",
   };
 }
 
@@ -75,18 +63,17 @@ function countItemsCsvExportCandidates(preview: ProjectRequirementPreview | null
 }
 
 function buildRequirementsFromProject(project: ProjectDetail | null | undefined): RequirementDraft[] {
-  if (!project?.requirements.length) {
+  const itemRequirements = (project?.requirements ?? []).filter((requirement) => requirement.item_id != null);
+  if (!itemRequirements.length) {
     return [blankRequirementDraft(), blankRequirementDraft()];
   }
-  return project.requirements.map((requirement) => ({
-    target_type: requirement.item_id ? "ITEM" : "ASSEMBLY",
-    target_id: String(requirement.item_id ?? requirement.assembly_id ?? ""),
+  return itemRequirements.map((requirement) => ({
+    target_type: "ITEM",
+    target_id: String(requirement.item_id ?? ""),
     quantity: String(requirement.quantity),
     requirement_type: requirement.requirement_type,
     note: requirement.note ?? "",
-    target_query: requirement.item_id
-      ? [requirement.item_number, `#${requirement.item_id}`].filter(Boolean).join(" ")
-      : [requirement.assembly_name, `#${requirement.assembly_id}`].filter(Boolean).join(" "),
+    target_query: [requirement.item_number, `#${requirement.item_id}`].filter(Boolean).join(" "),
     match_status: "matched",
   }));
 }
@@ -95,15 +82,12 @@ function buildRequirementPayload(requirements: RequirementDraft[]) {
   return requirements
     .filter((row) => row.target_id && Number(row.quantity) > 0)
     .map((row) => {
-      const base = {
+      return {
         quantity: Number(row.quantity),
         requirement_type: row.requirement_type,
         note: row.note.trim() || null,
+        item_id: Number(row.target_id),
       };
-      if (row.target_type === "ITEM") {
-        return { ...base, item_id: Number(row.target_id), assembly_id: null };
-      }
-      return { ...base, assembly_id: Number(row.target_id), item_id: null };
     });
 }
 
@@ -154,10 +138,6 @@ export function ProjectEditor({
   const { data: itemsResp } = useSWR(active ? "/items-options-project-editor" : null, () =>
     apiGetWithPagination<Item[]>("/items?per_page=1000"),
   );
-  const { data: assembliesResp } = useSWR(active ? "/assembly-options-project-editor" : null, () =>
-    apiGetWithPagination<AssemblyOption[]>("/assemblies?per_page=1000"),
-  );
-
   const [name, setName] = useState("");
   const [status, setStatus] = useState<ProjectStatus>("PLANNING");
   const [plannedStart, setPlannedStart] = useState("");
@@ -184,39 +164,26 @@ export function ProjectEditor({
   const [loadedProjectId, setLoadedProjectId] = useState<number | null>(null);
 
   const items = itemsResp?.data ?? [];
-  const assemblies = assembliesResp?.data ?? [];
   const itemCatalogById = useMemo(
     () => new Map(items.map((item) => [item.item_id, itemToCatalogResult(item)])),
     [items],
   );
-  const assemblyCatalogById = useMemo(
-    () => new Map(assemblies.map((assembly) => [assembly.assembly_id, assemblyToCatalogResult(assembly)])),
-    [assemblies],
+  const legacyAssemblyRequirements = useMemo(
+    () => (projectData?.requirements ?? []).filter((requirement) => requirement.assembly_id != null && requirement.item_id == null),
+    [projectData],
   );
 
   function selectedRequirementCatalogResult(row: RequirementDraft): CatalogSearchResult | null {
     if (!row.target_id) return null;
     const targetId = Number(row.target_id);
     if (!Number.isFinite(targetId) || targetId <= 0) return null;
-    if (row.target_type === "ITEM") {
-      return (
-        itemCatalogById.get(targetId) ?? {
-          entity_type: "item",
-          entity_id: targetId,
-          value_text: row.target_query || `Item #${targetId}`,
-          display_label: row.target_query || `Item #${targetId}`,
-          summary: `#${targetId}`,
-          match_source: null,
-        }
-      );
-    }
     return (
-      assemblyCatalogById.get(targetId) ?? {
-        entity_type: "assembly",
+      itemCatalogById.get(targetId) ?? {
+        entity_type: "item",
         entity_id: targetId,
-        value_text: row.target_query || `Assembly #${targetId}`,
-        display_label: row.target_query || `Assembly #${targetId}`,
-        summary: `Assembly #${targetId}`,
+        value_text: row.target_query || `Item #${targetId}`,
+        display_label: row.target_query || `Item #${targetId}`,
+        summary: `#${targetId}`,
         match_source: null,
       }
     );
@@ -666,12 +633,21 @@ export function ProjectEditor({
                 Add Row
               </button>
             </div>
+            {!!legacyAssemblyRequirements.length && (
+              <div className="mb-3 rounded-md border border-amber-200 bg-amber-50 p-3 text-xs text-amber-800">
+                Preserved legacy assembly requirements are not editable in this item-only form.
+                {" "}
+                {legacyAssemblyRequirements
+                  .map((requirement) => requirement.assembly_name || `Assembly #${requirement.assembly_id}`)
+                  .join(", ")}
+                .
+              </div>
+            )}
 
             <div className="overflow-x-auto">
               <table className="min-w-[980px] text-sm">
                 <thead>
                   <tr className="border-b border-slate-200 text-left text-slate-500">
-                    <th className="px-2 py-2">Target Type</th>
                     <th className="px-2 py-2">Target</th>
                     <th className="px-2 py-2">Qty</th>
                     <th className="px-2 py-2">Requirement Type</th>
@@ -683,60 +659,26 @@ export function ProjectEditor({
                   {requirements.map((row, index) => (
                     <tr key={index} className="border-b border-slate-100">
                       <td className="px-2 py-2">
-                        <select
-                          className="input"
-                          value={row.target_type}
-                          onChange={(event) =>
+                        <CatalogPicker
+                          allowedTypes={["item"]}
+                          onChange={(value) =>
                             updateRequirement(index, {
-                              target_type: event.target.value as RequirementDraft["target_type"],
-                              target_id: "",
-                              target_query: "",
-                              match_status: undefined,
+                              target_id: value ? String(value.entity_id) : "",
+                              target_query: value?.display_label ?? "",
+                              match_status: value ? "matched" : undefined,
                             })
                           }
-                        >
-                          <option value="ITEM">ITEM</option>
-                          <option value="ASSEMBLY">ASSEMBLY</option>
-                        </select>
-                      </td>
-                      <td className="px-2 py-2">
-                        {row.target_type === "ITEM" ? (
-                          <CatalogPicker
-                            allowedTypes={["item"]}
-                            onChange={(value) =>
-                              updateRequirement(index, {
-                                target_id: value ? String(value.entity_id) : "",
-                                target_query: value?.display_label ?? "",
-                                match_status: value ? "matched" : undefined,
-                              })
-                            }
-                            placeholder="Search items"
-                            recentKey="project-requirement-item"
-                            seedQuery={row.target_query}
-                            value={selectedRequirementCatalogResult(row)}
-                          />
-                        ) : (
-                          <CatalogPicker
-                            allowedTypes={["assembly"]}
-                            onChange={(value) =>
-                              updateRequirement(index, {
-                                target_id: value ? String(value.entity_id) : "",
-                                target_query: value?.display_label ?? "",
-                                match_status: value ? "matched" : undefined,
-                              })
-                            }
-                            placeholder="Search assemblies"
-                            recentKey="project-requirement-assembly"
-                            seedQuery={row.target_query}
-                            value={selectedRequirementCatalogResult(row)}
-                          />
-                        )}
+                          placeholder="Search items"
+                          recentKey="project-requirement-item"
+                          seedQuery={row.target_query}
+                          value={selectedRequirementCatalogResult(row)}
+                        />
                         {row.match_status === "unregistered" && (
                           <p className="mt-1 text-xs font-semibold text-amber-700">
                             No registered item matched.
                           </p>
                         )}
-                        {onOpenItem && row.target_type === "ITEM" && row.target_id && (
+                        {onOpenItem && row.target_id && (
                           <button
                             className="mt-2 button-subtle"
                             type="button"

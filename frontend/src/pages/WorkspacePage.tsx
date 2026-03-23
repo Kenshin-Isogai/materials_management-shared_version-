@@ -6,7 +6,6 @@ import {
 } from "react-router-dom";
 import useSWR from "swr";
 import { ProjectEditor } from "../components/ProjectEditor";
-import { RfqBatchEditor } from "../components/RfqBatchEditor";
 import { WorkspaceDrawer } from "../components/WorkspaceDrawer";
 import { apiDownload, apiGet, apiGetWithPagination, apiSend } from "../lib/api";
 import { nextSynchronizedBoardDate, resolveDrawerStackPush } from "../lib/workspaceState";
@@ -305,8 +304,8 @@ function ProjectDrawerContent(_props: {
               <Link className="button-subtle" to="/projects">
                 Open Full Project Editor
               </Link>
-              <Link className="button-subtle" to="/planning">
-                Open Legacy Planning Page
+              <Link className="button-subtle" to="/workspace">
+                Open Workspace Board
               </Link>
             </div>
             <p className="text-xs text-slate-500">
@@ -651,13 +650,13 @@ function RfqDrawerContent(_props: {
   return (
     <div className="space-y-5">
       <section className="space-y-2">
-        <h2 className="font-display text-2xl font-semibold">RFQ Context</h2>
+        <h2 className="font-display text-2xl font-semibold">Procurement Context</h2>
         <p className="text-sm text-slate-600">
-          Update batch fields, supplier follow-up, ETA, and linked-order details directly from the workspace.
+          Open the Procurement page to manage batches, supplier follow-up, ETA, and linked-order details.
         </p>
         <div className="flex flex-wrap gap-2 text-sm">
-          <Link className="button-subtle" to="/rfq">
-            Open Full RFQ Page
+          <Link className="button-subtle" to="/procurement">
+            Open Procurement Page
           </Link>
           <Link className="button-subtle" to="/orders">
             Open Orders Page
@@ -669,16 +668,6 @@ function RfqDrawerContent(_props: {
           </p>
         )}
       </section>
-
-      <RfqBatchEditor
-        fixedProjectId={projectId}
-        highlightedItemId={itemId}
-        showFilters={false}
-        active={active}
-        onOpenItem={onOpenItem}
-        onDirtyChange={onDirtyChange}
-        onSaved={onRefresh}
-      />
     </div>
   );
 }
@@ -1001,24 +990,36 @@ export function WorkspacePage() {
     const isDraft = selectedProject?.status === "PLANNING";
     const confirmed = window.confirm(
       isDraft
-        ? "Create an RFQ batch from current on-time gaps? This will confirm the draft project."
-        : "Create an RFQ batch from current on-time gaps?",
+        ? "Create a procurement batch from current on-time gaps? This will confirm the draft project."
+        : "Create a procurement batch from current on-time gaps?",
     );
     if (!confirmed) return;
     setWorking(true);
     setActionMessage("");
     try {
-      const payload = await apiSend<{ rfq_id: number }>(`/projects/${selectedProjectId}/rfq-batches`, {
+      const payload = await apiSend<{ batch_id: number }>(`/shortage-inbox/to-procurement`, {
         method: "POST",
         body: JSON.stringify({
-          target_date: selectedAnalysisTargetDate ?? (analysisDateApplied.trim() || null),
+          create_batch_title: `${selectedProject?.name ?? "Project"} procurement`,
+          confirm_project_id: isDraft ? selectedProjectId : null,
+          confirm_target_date: isDraft ? selectedAnalysisTargetDate ?? (analysisDateApplied.trim() || null) : null,
+          lines: (analysisData?.rows ?? [])
+            .filter((row) => row.shortage_at_start > 0)
+            .map((row) => ({
+              item_id: row.item_id,
+              requested_quantity: row.shortage_at_start,
+              source_type: "PROJECT",
+              source_project_id: selectedProjectId,
+              expected_arrival: selectedAnalysisTargetDate ?? (analysisDateApplied.trim() || null),
+              note: "Created from workspace planning gap",
+            })),
         }),
       });
-      setActionMessage(`Created RFQ batch #${payload.rfq_id}.`);
+      setActionMessage(`Created procurement batch #${payload.batch_id}.`);
       await refreshWorkspace();
-      openRfqDrawer(selectedProjectId, null, "RFQ Context");
+      openRfqDrawer(selectedProjectId, null, "Procurement Context");
     } catch (rfqError) {
-      setActionMessage(`RFQ creation failed: ${String(rfqError ?? "")}`);
+      setActionMessage(`Procurement creation failed: ${String(rfqError ?? "")}`);
     } finally {
       setWorking(false);
     }
@@ -1069,20 +1070,20 @@ export function WorkspacePage() {
         <div>
           <h1 className="font-display text-3xl font-bold">Workspace</h1>
           <p className="mt-1 text-sm text-slate-600">
-            Summary-first planning surface for Projects, sequential netting, and RFQ follow-up.
+            Summary-first planning surface for Projects, sequential netting, and procurement follow-up.
           </p>
           <p className="mt-1 text-xs text-slate-500">
-            Existing pages remain available for heavy editing:{" "}
+            Related pages:{" "}
             <Link className="font-semibold text-slate-700 underline" to="/projects">
               Projects
             </Link>
             ,{" "}
-            <Link className="font-semibold text-slate-700 underline" to="/planning">
-              Planning
+            <Link className="font-semibold text-slate-700 underline" to="/workspace">
+              Workspace
             </Link>
             , and{" "}
-            <Link className="font-semibold text-slate-700 underline" to="/rfq">
-              RFQ
+            <Link className="font-semibold text-slate-700 underline" to="/procurement">
+              Procurement
             </Link>
             .
           </p>
@@ -1154,8 +1155,8 @@ export function WorkspacePage() {
               <button className="button-subtle" type="button" onClick={() => void downloadPlanningPipelineExport(false)}>
                 Export Pipeline CSV
               </button>
-              <Link className="button-subtle" to="/planning">
-                Open Legacy Planning Page
+              <Link className="button-subtle" to="/procurement">
+                Open Procurement Page
               </Link>
             </div>
           </div>
@@ -1400,11 +1401,11 @@ export function WorkspacePage() {
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
-                <Link className="button-subtle" to="/planning">
-                  Legacy Planning
+                <Link className="button-subtle" to="/workspace">
+                  Workspace
                 </Link>
-                <Link className="button-subtle" to="/rfq">
-                  Legacy RFQ
+                <Link className="button-subtle" to="/procurement">
+                  Procurement
                 </Link>
               </div>
             </div>
