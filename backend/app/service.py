@@ -8331,13 +8331,53 @@ def _aggregate_project_required_by_item(
     focus_item_id: int | None = None,
 ) -> dict[int, int]:
     required_by_item: dict[int, int] = {}
+    assembly_ids = sorted(
+        {
+            int(requirement["assembly_id"])
+            for requirement in project["requirements"]
+            if requirement.get("assembly_id") is not None and requirement.get("item_id") is None
+        }
+    )
+    assembly_components_by_assembly: dict[int, list[dict[str, int]]] = {}
+    if assembly_ids:
+        placeholders = ",".join("?" for _ in assembly_ids)
+        component_rows = conn.execute(
+            f"""
+            SELECT assembly_id, item_id, quantity
+            FROM assembly_components
+            WHERE assembly_id IN ({placeholders})
+            ORDER BY assembly_id, item_id
+            """,
+            tuple(assembly_ids),
+        ).fetchall()
+        for row in component_rows:
+            assembly_id = int(row["assembly_id"])
+            assembly_components_by_assembly.setdefault(assembly_id, []).append(
+                {
+                    "item_id": int(row["item_id"]),
+                    "quantity": int(row["quantity"]),
+                }
+            )
+
     for requirement in project["requirements"]:
-        if not requirement.get("item_id"):
+        requirement_qty = int(requirement["quantity"])
+        item_id_raw = requirement.get("item_id")
+        if item_id_raw is not None:
+            item_id = int(item_id_raw)
+            if focus_item_id is not None and item_id != focus_item_id:
+                continue
+            required_by_item[item_id] = required_by_item.get(item_id, 0) + requirement_qty
             continue
-        item_id = int(requirement["item_id"])
-        if focus_item_id is not None and item_id != focus_item_id:
+
+        assembly_id_raw = requirement.get("assembly_id")
+        if assembly_id_raw is None:
             continue
-        required_by_item[item_id] = required_by_item.get(item_id, 0) + int(requirement["quantity"])
+        for component in assembly_components_by_assembly.get(int(assembly_id_raw), []):
+            component_item_id = int(component["item_id"])
+            if focus_item_id is not None and component_item_id != focus_item_id:
+                continue
+            component_qty = requirement_qty * int(component["quantity"])
+            required_by_item[component_item_id] = required_by_item.get(component_item_id, 0) + component_qty
     return required_by_item
 
 

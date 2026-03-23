@@ -37,7 +37,7 @@ Last updated: 2026-03-23 (JST)
   - success: `status=ok`
   - error: `status=error` with code/message/details
 - Business rules are centralized in `backend/app/service.py` and shared by API and CLI.
-- Planning snapshot hot paths now batch project/requirement loads, assembly component expansion, and per-item inventory totals; item planning context further narrows expansion to the requested item.
+- Planning snapshot hot paths now batch project/requirement loads, assembly component expansion (including legacy assembly-only project requirements), and per-item inventory totals; item planning context further narrows expansion to the requested item.
 - Current auth posture:
   - no enforced auth for PoC
   - capability metadata endpoint exists: `GET /api/auth/capabilities`

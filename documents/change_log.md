@@ -1,3 +1,15 @@
+## 2026-03-23 (project planning assembly requirement expansion fix)
+
+### Fixed
+
+- Restored assembly-backed project demand expansion in planning aggregation:
+  - `_aggregate_project_required_by_item` now expands `assembly_id` requirements into component-level item demand (quantity × component quantity) instead of skipping non-`item_id` rows.
+  - This fixes project gap-analysis totals and downstream project shortage follow-up flows (for example purchase-candidate creation) for projects that still carry assembly-based requirements.
+
+### Tests
+
+- Added backend regression coverage validating that assembly-only project requirements produce expected component shortages in project gap analysis and create the correct purchase candidate quantity.
+
 ## 2026-03-12
 
 ## 2026-03-23

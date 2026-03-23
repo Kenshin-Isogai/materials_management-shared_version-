@@ -2825,6 +2825,41 @@ def test_purchase_candidates_create_list_and_update(conn):
     assert updated["note"] == "RFQ in progress"
 
 
+def test_project_gap_and_purchase_candidates_expand_assembly_requirements(conn):
+    component = _create_basic_item(conn, item_number="ITEM-PROJ-ASM-COMP")
+    assembly = service.create_assembly(
+        conn,
+        {
+            "name": "PROJ-ASM-REQ-001",
+            "components": [{"item_id": component["item_id"], "quantity": 3}],
+        },
+    )
+    project = service.create_project(
+        conn,
+        {
+            "name": "PROJ-ASM-REQ-001",
+            "status": "PLANNING",
+            "requirements": [
+                {
+                    "item_id": None,
+                    "assembly_id": assembly["assembly_id"],
+                    "quantity": 2,
+                }
+            ],
+        },
+    )
+
+    gap = service.project_gap_analysis(conn, project["project_id"])
+    gap_row = next(row for row in gap["rows"] if int(row["item_id"]) == component["item_id"])
+    assert int(gap_row["required_quantity"]) == 6
+    assert int(gap_row["shortage"]) == 6
+
+    created = service.create_purchase_candidates_from_project_gap(conn, project["project_id"])
+    assert created["created_count"] == 1
+    assert int(created["created"][0]["item_id"]) == component["item_id"]
+    assert int(created["created"][0]["shortage_quantity"]) == 6
+
+
 def test_delete_item_blocked_when_referenced_by_purchase_candidate(conn):
     item = _create_basic_item(conn, item_number="ITEM-PURCHASE-CAND-DELETE")
     created = service.create_purchase_candidates_from_bom(
