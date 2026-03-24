@@ -235,6 +235,12 @@ class ProjectRequirementUnresolvedItemsCsvRequest(BaseModel):
     rows: list[ProjectRequirementPreviewExportRow] = Field(default_factory=list)
 
 
+class ConfirmAllocationRequest(BaseModel):
+    target_date: str | None = None
+    dry_run: bool = True
+    expected_snapshot_signature: str | None = None
+
+
 class BomLineInput(BaseModel):
     supplier: str
     item_number: str

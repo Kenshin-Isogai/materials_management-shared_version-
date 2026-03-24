@@ -2,6 +2,46 @@
 
 ### Fixed
 
+- Confirm allocation no longer persists reservations or dedicated orders for `PLANNING` projects.
+  - `POST /api/projects/{project_id}/confirm-allocation` still supports dry-run preview for draft projects.
+  - Execute now fails with `PROJECT_CONFIRMATION_REQUIRED` until the project is `CONFIRMED` or `ACTIVE`, preventing hidden stock/order consumption outside the committed planning pipeline.
+- Orders page split-plus-project editing now assigns only the consumed child order.
+  - The frontend no longer sends `split_quantity` and `project_id` together in one `PUT /api/orders/{id}` payload.
+  - It now performs the split request first and, when a project was selected, follows with a second update against the created child order so the postponed sibling remains generic.
+
+### Tests
+
+- Backend targeted tests added for draft-project confirm-allocation rejection at both service and API layers.
+- Frontend Orders page regression test added for split-then-assign request sequencing.
+
+## 2026-03-24
+
+### Added
+
+- Workspace planning board now supports confirm-allocation preview/execute workflow.
+  - Added backend endpoint `POST /api/projects/{project_id}/confirm-allocation` with `dry_run` preview support.
+  - Execution persists stock-backed generic coverage as project reservations and generic-order coverage as dedicated order rows.
+  - Partial generic-order coverage now splits the order first, then assigns only the consumed child row to the project.
+  - Preview/execute is guarded by `snapshot_signature`; stale confirms now fail with `PLANNING_SNAPSHOT_CHANGED`.
+
+### Changed
+
+- Orders page open-order editing now includes manual project assignment in the existing ETA/split flow.
+  - Users can assign or clear `project_id` directly from the Orders page.
+  - UI now surfaces clearer messages when an ORDERED RFQ/procurement link owns the order-project assignment.
+- Workspace summary cards and project drawer counters now read current procurement counts from `procurement_summary`.
+- Procurement page selected-batch detail now supports inline line editing for `status`, `finalized_quantity`, `supplier_name`, `expected_arrival`, `linked_order_id`, and `note`.
+  - Linked-order options are loaded lazily for the active line using the same order-option pattern as the RFQ editor.
+
+### Tests
+
+- Backend full suite: `164 passed`.
+- Frontend production build: `npm run build` succeeded.
+
+## 2026-03-24
+
+### Fixed
+
 - Workspace planning recovery summaries and burndown rows now treat missing later-arrival dates as unknown instead of surfacing backend null placeholders such as `None`.
   - Recovery-source sorting now pushes undated sources to the end of the burndown sequence.
   - Summary copy now falls back to `unknown date` when recovery exists but no arrival date is available.

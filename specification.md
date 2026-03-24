@@ -1044,6 +1044,7 @@ Base URL: `http://localhost:8000/api`
 | DELETE | `/projects/{project_id}` | Delete project |
 | GET | `/projects/{project_id}/gap-analysis` | Compatibility start-date gap view (optional `target_date`) |
 | GET | `/projects/{project_id}/planning-analysis` | Sequential planning analysis with earlier-project netting |
+| POST | `/projects/{project_id}/confirm-allocation` | Persist on-time generic allocations for the selected planning date (`dry_run` preview or execute) by dedicating generic orders and creating project reservations from stock |
 | POST | `/projects/{project_id}/reserve` | Reserve project requirements |
 | POST | `/projects/{project_id}/rfq-batches` | Create an RFQ batch from uncovered planning rows |
 
@@ -1086,7 +1087,19 @@ Base URL: `http://localhost:8000/api`
 `GET /api/workspace/summary` is the summary-first workspace contract:
 - committed project rows expose authoritative planning totals from the canonical pipeline snapshot
 - `PLANNING` project rows expose `summary_mode = preview_required` unless the backend later adds a separate draft-preview metric
-- each project row also includes RFQ batch/line counts so the default workspace dashboard stays aggregate and avoids N+1 planning-analysis requests
+- each project row also includes procurement batch/line counts so the default workspace dashboard stays aggregate and avoids N+1 planning-analysis requests
+
+`POST /api/projects/{project_id}/confirm-allocation` turns the current planning board's on-time generic coverage into persisted project-specific state:
+- request accepts `target_date`, `dry_run`, and optional `expected_snapshot_signature`
+- `dry_run = true` returns a preview of:
+  - stock-backed reservations that would be created
+  - generic orders that would be assigned directly
+  - generic orders that would be split so only the consumed child becomes project-dedicated
+  - skipped sources that cannot be safely reassigned
+- execution re-runs the planning snapshot and rejects stale confirmations with `409` / `PLANNING_SNAPSHOT_CHANGED` when `expected_snapshot_signature` no longer matches
+- generic stock coverage is persisted as project reservations
+- generic order coverage is persisted by setting `orders.project_id`; partial coverage splits the order first, then assigns only the consumed child row
+- already-dedicated sources remain unchanged; ORDERED RFQ/procurement-managed orders are skipped instead of being force-reassigned
 
 `GET /api/items/{item_id}/planning-context` returns the item-side planning drill-in used by the workspace drawer:
 - current item identity plus the effective preview context (`preview_project_id`, `target_date`)
@@ -1454,6 +1467,7 @@ Minimum gate for non-trivial changes:
 
 - Users may correct imported purchase data from frontend by:
   - editing quotation metadata (`issue_date`, `pdf_link`)
+  - editing open-order `expected_arrival`, optional split quantity, and manual `project_id`
   - deleting non-arrived orders
   - deleting quotations only when all linked orders are non-arrived (then cascade delete linked orders)
 - Consistency requirement: these operations must keep persisted quotation/order CSV files and database records synchronized.

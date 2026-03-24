@@ -199,6 +199,152 @@ def test_shortage_inbox_procurement_can_confirm_draft_project(client):
     assert project_detail.json()["data"]["status"] == "CONFIRMED"
     assert project_detail.json()["data"]["planned_start"] == FUTURE_TARGET_DATE
 
+
+def test_project_confirm_allocation_endpoint_previews_and_executes(client):
+    manufacturer = client.post("/api/manufacturers", json={"name": "API-CONFIRM-ALLOC-MFG"}).json()["data"]
+    stock_item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-CONFIRM-ALLOC-STOCK",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Optic",
+        },
+    ).json()["data"]
+    order_item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-CONFIRM-ALLOC-ORDER",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Optic",
+        },
+    ).json()["data"]
+    client.post(
+        "/api/inventory/adjust",
+        json={
+            "item_id": stock_item["item_id"],
+            "quantity_delta": 3,
+            "location": "STOCK",
+            "note": "seed confirm allocation stock",
+        },
+    )
+    project = client.post(
+        "/api/projects",
+        json={
+            "name": "API-CONFIRM-ALLOC-PROJECT",
+            "status": "CONFIRMED",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [
+                {"item_id": stock_item["item_id"], "quantity": 3},
+                {"item_id": order_item["item_id"], "quantity": 4},
+            ],
+        },
+    ).json()["data"]
+
+    imported = client.post(
+        "/api/orders/import",
+        files={
+            "file": (
+                "confirm-allocation.csv",
+                (
+                    "item_number,quantity,quotation_number,issue_date,order_date,expected_arrival,pdf_link\n"
+                    f"{order_item['item_number']},6,Q-CONFIRM-ALLOC-001,2026-03-01,2026-03-02,{FUTURE_TARGET_DATE},\n"
+                ).encode("utf-8"),
+                "text/csv",
+            )
+        },
+        data={"supplier_name": "API-CONFIRM-ALLOC-SUP"},
+    )
+    assert imported.status_code == 200
+    original_order_id = int(imported.json()["data"]["order_ids"][0])
+
+    preview = client.post(
+        f"/api/projects/{project['project_id']}/confirm-allocation",
+        json={"target_date": FUTURE_TARGET_DATE, "dry_run": True},
+    )
+    assert preview.status_code == 200
+    preview_payload = preview.json()["data"]
+    assert len(preview_payload["reservations_created"]) == 1
+    assert len(preview_payload["orders_split"]) == 1
+
+    executed = client.post(
+        f"/api/projects/{project['project_id']}/confirm-allocation",
+        json={
+            "target_date": FUTURE_TARGET_DATE,
+            "dry_run": False,
+            "expected_snapshot_signature": preview_payload["snapshot_signature"],
+        },
+    )
+    assert executed.status_code == 200
+    executed_payload = executed.json()["data"]
+    new_order_id = int(executed_payload["orders_split"][0]["new_order_id"])
+
+    original_order = client.get(f"/api/orders/{original_order_id}")
+    assert original_order.status_code == 200
+    assert original_order.json()["data"]["project_id"] is None
+    assert int(original_order.json()["data"]["order_amount"]) == 2
+
+    dedicated_order = client.get(f"/api/orders/{new_order_id}")
+    assert dedicated_order.status_code == 200
+    assert int(dedicated_order.json()["data"]["project_id"]) == project["project_id"]
+    assert int(dedicated_order.json()["data"]["order_amount"]) == 4
+
+    reservations = client.get(f"/api/reservations?item_id={stock_item['item_id']}&status=ACTIVE&per_page=50")
+    assert reservations.status_code == 200
+    active_reservations = reservations.json()["data"]
+    assert len(active_reservations) == 1
+    assert int(active_reservations[0]["project_id"]) == project["project_id"]
+    assert int(active_reservations[0]["quantity"]) == 3
+
+
+def test_project_confirm_allocation_endpoint_rejects_planning_project_execute(client):
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-CONFIRM-ALLOC-DRAFT",
+            "manufacturer_name": "DraftMaker",
+            "category": "Optics",
+            "description": "",
+            "url": "",
+        },
+    ).json()["data"]
+    client.post(
+        "/api/inventory/adjust",
+        json={
+            "item_id": item["item_id"],
+            "quantity_delta": 2,
+            "location": "STOCK",
+            "note": "seed draft confirm allocation stock",
+        },
+    )
+    project = client.post(
+        "/api/projects",
+        json={
+            "name": "API-CONFIRM-ALLOC-DRAFT-PROJECT",
+            "status": "PLANNING",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [{"item_id": item["item_id"], "quantity": 2}],
+        },
+    ).json()["data"]
+
+    preview = client.post(
+        f"/api/projects/{project['project_id']}/confirm-allocation",
+        json={"target_date": FUTURE_TARGET_DATE, "dry_run": True},
+    )
+    assert preview.status_code == 200
+    preview_payload = preview.json()["data"]
+
+    executed = client.post(
+        f"/api/projects/{project['project_id']}/confirm-allocation",
+        json={
+            "target_date": FUTURE_TARGET_DATE,
+            "dry_run": False,
+            "expected_snapshot_signature": preview_payload["snapshot_signature"],
+        },
+    )
+    assert executed.status_code == 409
+    payload = executed.json()
+    assert payload["error"]["code"] == "PROJECT_CONFIRMATION_REQUIRED"
+
 def test_auth_capabilities_endpoint_defaults_and_header(client):
     response = client.get("/api/auth/capabilities")
     assert response.status_code == 200

@@ -9,6 +9,7 @@ import type {
   Item,
   MissingItemResolverRow,
   Order,
+  ProjectRow,
   Quotation,
 } from "../lib/types";
 
@@ -164,6 +165,13 @@ type ImportBatchResult = {
   normalizations?: BatchNormalization[];
 };
 
+type OrderSplitUpdateResult = {
+  order_id: number;
+  split_order_id: number;
+  updated_order: Order;
+  created_order: Order;
+};
+
 function previewMatchToCatalogResult(match: OrderImportPreviewMatch): CatalogSearchResult {
   return {
     entity_type: "item",
@@ -246,6 +254,7 @@ export function OrdersPage() {
   const [editingOrderId, setEditingOrderId] = useState<number | null>(null);
   const [editingOrderExpectedArrival, setEditingOrderExpectedArrival] = useState("");
   const [editingOrderSplitQuantity, setEditingOrderSplitQuantity] = useState("");
+  const [editingOrderProjectId, setEditingOrderProjectId] = useState("");
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
   const [selectedQuotationId, setSelectedQuotationId] = useState<number | null>(null);
   const orderDetailsRef = useRef<HTMLElement | null>(null);
@@ -262,6 +271,9 @@ export function OrdersPage() {
   } = useSWR("/quotations", () => apiGetAllPages<Quotation>("/quotations?per_page=200"));
   const { data: itemsData } = useSWR("/items-orders-context", () =>
     apiGetWithPagination<Item[]>("/items?per_page=500")
+  );
+  const { data: projectsData } = useSWR("/projects-orders-context", () =>
+    apiGetAllPages<ProjectRow>("/projects?per_page=200")
   );
 
   const sortedOrders = useMemo(() => {
@@ -740,12 +752,25 @@ export function OrdersPage() {
     setEditingOrderId(row.order_id);
     setEditingOrderExpectedArrival(row.expected_arrival ?? "");
     setEditingOrderSplitQuantity("");
+    setEditingOrderProjectId(row.project_id == null ? "" : String(row.project_id));
   }
 
   function cancelEditOrder() {
     setEditingOrderId(null);
     setEditingOrderExpectedArrival("");
     setEditingOrderSplitQuantity("");
+    setEditingOrderProjectId("");
+  }
+
+  function formatOrderUpdateError(error: unknown): string {
+    const text = String(error ?? "");
+    if (text.includes("managed by the ORDERED procurement line")) {
+      return "Project assignment failed: this order is controlled by an ORDERED procurement line.";
+    }
+    if (text.includes("managed by the ORDERED RFQ line")) {
+      return "Project assignment failed: this order is controlled by an ORDERED RFQ line.";
+    }
+    return `Order update failed: ${text}`;
   }
 
   async function saveOrderEdit(orderId: number) {
@@ -753,22 +778,43 @@ export function OrdersPage() {
     try {
       const splitQuantity = Number(editingOrderSplitQuantity);
       const hasSplit = editingOrderSplitQuantity.trim().length > 0;
-      await apiSend(`/orders/${orderId}`, {
-        method: "PUT",
-        body: JSON.stringify({
-          expected_arrival: editingOrderExpectedArrival.trim() || null,
-          split_quantity: hasSplit && Number.isFinite(splitQuantity) ? splitQuantity : null,
-        }),
-      });
+      const projectId =
+        editingOrderProjectId.trim().length > 0 ? Number(editingOrderProjectId.trim()) : null;
+      const expectedArrival = editingOrderExpectedArrival.trim() || null;
+      if (hasSplit) {
+        const splitResult = await apiSend<OrderSplitUpdateResult>(`/orders/${orderId}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            expected_arrival: expectedArrival,
+            split_quantity: Number.isFinite(splitQuantity) ? splitQuantity : null,
+          }),
+        });
+        if (Number.isFinite(projectId)) {
+          await apiSend(`/orders/${splitResult.created_order.order_id}`, {
+            method: "PUT",
+            body: JSON.stringify({
+              project_id: projectId,
+            }),
+          });
+        }
+      } else {
+        await apiSend(`/orders/${orderId}`, {
+          method: "PUT",
+          body: JSON.stringify({
+            expected_arrival: expectedArrival,
+            project_id: Number.isFinite(projectId) ? projectId : null,
+          }),
+        });
+      }
       setMessage(
         hasSplit
-          ? `Split order #${orderId} and postponed ${splitQuantity} units to ${editingOrderExpectedArrival || "(no date)"}.`
-          : `Updated expected arrival for order #${orderId}.`
+          ? `Split order #${orderId}, assigned the consumed portion if selected, and postponed ${splitQuantity} units to ${editingOrderExpectedArrival || "(no date)"}.`
+          : `Updated order #${orderId}.`
       );
       cancelEditOrder();
       await Promise.all([mutateOrders(), mutateQuotations()]);
     } catch (error) {
-      setMessage(`Order update failed: ${String(error ?? "")}`);
+      setMessage(formatOrderUpdateError(error));
     } finally {
       setLoading(false);
     }
@@ -1468,6 +1514,18 @@ export function OrdersPage() {
                                   value={editingOrderSplitQuantity}
                                   onChange={(event) => setEditingOrderSplitQuantity(event.target.value)}
                                 />
+                                <select
+                                  className="input"
+                                  value={editingOrderProjectId}
+                                  onChange={(event) => setEditingOrderProjectId(event.target.value)}
+                                >
+                                  <option value="">No project assignment</option>
+                                  {(projectsData ?? []).map((project) => (
+                                    <option key={project.project_id} value={project.project_id}>
+                                      #{project.project_id} {project.name} ({project.status})
+                                    </option>
+                                  ))}
+                                </select>
                               </div>
                             ) : (
                               row.expected_arrival ?? "-"
@@ -1492,7 +1550,7 @@ export function OrdersPage() {
                                         onClick={() => saveOrderEdit(row.order_id)}
                                         disabled={loading}
                                       >
-                                        Save ETA / Split
+                                        Save Order
                                       </button>
                                       <button className="button-subtle" onClick={cancelEditOrder} disabled={loading}>
                                         Cancel
@@ -1504,7 +1562,7 @@ export function OrdersPage() {
                                       onClick={() => beginEditOrder(row)}
                                       disabled={loading}
                                     >
-                                      Edit ETA
+                                      Edit Order
                                     </button>
                                   )}
                                 </>
@@ -1551,8 +1609,8 @@ export function OrdersPage() {
         {!selectedOrder && (
           <p className="text-sm text-slate-500">
             Select <strong>Order Details</strong> from any order row to review the selected order, item metadata, and
-            same-item purchasing history. Use <strong>Edit ETA</strong> to change the entire order date, or enter{" "}
-            <strong>Split qty</strong> to postpone only part of an open order.
+            same-item purchasing history. Use <strong>Edit Order</strong> to change ETA, split an open order, or set a
+            manual project assignment.
           </p>
         )}
         {selectedOrder && (

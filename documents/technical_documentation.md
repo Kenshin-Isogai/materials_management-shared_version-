@@ -22,6 +22,12 @@ This document explains the implemented architecture of the Materials Management 
 - Temporary backend/API compatibility shims remain for some legacy RFQ, assembly, and purchase-candidate routes while the redesign settles.
 - Legacy assembly-backed project requirements are preserved on project update when the item-only editor does not send them back, and the editor warns that those preserved rows are not editable in the current item-only form.
 - Workspace procurement creation can explicitly confirm a `PLANNING` project and persist the active planning date so the procurement-first path keeps the prior project-confirmation behavior.
+- Workspace planning board now also supports `Confirm Allocation`, which persists current on-time generic coverage by:
+  - converting stock-backed coverage into project reservations
+  - assigning fully consumed generic orders to the project
+  - splitting partially consumed generic orders, then assigning only the consumed child row
+  - allowing dry-run preview for `PLANNING` projects but rejecting execute until the project is `CONFIRMED` or `ACTIVE`
+  - rejecting stale confirmations when the planning snapshot no longer matches the preview signature
 
 ### Projects planning UX notes (frontend)
 
@@ -392,6 +398,17 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 
 - Current mode is advisory for planning and visibility.
 - Target evolution is enforceable checks during active/operational phases, with explicit override+audit design.
+
+### 7.1) Planning allocation confirmation
+
+- `POST /api/projects/{project_id}/confirm-allocation` is the persistence bridge between planning-time virtual generic consumption and durable project-specific data.
+- The endpoint always reuses `_build_project_planning_snapshot(...)` so preview/execute semantics stay identical to the Workspace board.
+- `dry_run` returns a preview payload plus `snapshot_signature`; execute may send that signature back as `expected_snapshot_signature` to fail fast on stale planning state.
+- Stock sources are persisted through `create_reservation(...)` with `project_id` set.
+- Generic orders are persisted through `update_order(...)`.
+  - full consumption: assign `project_id` directly
+  - partial consumption: split first with the current ETA preserved, then assign only the created child row
+- Orders already controlled by ORDERED RFQ/procurement links are skipped rather than forcibly reassigned.
 
 ### 8) Schema and migration discipline
 

@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import useSWR from "swr";
 import { apiDownload, apiGet, apiGetWithPagination, apiSend } from "../lib/api";
-import type { ProcurementBatchDetail, ProcurementBatchSummary } from "../lib/types";
+import { buildLinkedOrderSelectOptions } from "../lib/rfqEditorState";
+import type { Order, ProcurementBatchDetail, ProcurementBatchSummary, ProcurementLine, ProcurementLineStatus } from "../lib/types";
 
 type ShortageInboxRow = {
   item_id: number;
@@ -25,6 +26,15 @@ export function ProcurementPage() {
   const [batchTitle, setBatchTitle] = useState("");
   const [message, setMessage] = useState("");
   const [working, setWorking] = useState(false);
+  const [editingLineId, setEditingLineId] = useState<number | null>(null);
+  const [lineDraft, setLineDraft] = useState<{
+    status: ProcurementLineStatus;
+    finalized_quantity: string;
+    supplier_name: string;
+    expected_arrival: string;
+    linked_order_id: string;
+    note: string;
+  } | null>(null);
 
   const { data: inboxResp, mutate: mutateInbox } = useSWR("/shortage-inbox", () =>
     apiGet<ShortageInbox>("/shortage-inbox"),
@@ -44,6 +54,69 @@ export function ProcurementPage() {
     () => batches.find((batch) => batch.batch_id === selectedBatchId) ?? null,
     [batches, selectedBatchId],
   );
+  const editingLine = useMemo(
+    () => batchDetail?.lines.find((line) => line.line_id === editingLineId) ?? null,
+    [batchDetail?.lines, editingLineId],
+  );
+  const matchingOrdersPath = useMemo(() => {
+    if (!editingLine) return null;
+    return `/orders?item_id=${editingLine.item_id}&include_arrived=false&per_page=200`;
+  }, [editingLine]);
+  const {
+    data: matchingOrdersResp,
+    error: matchingOrdersError,
+    isLoading: matchingOrdersLoading,
+  } = useSWR(matchingOrdersPath, () =>
+    apiGetWithPagination<Order[]>(matchingOrdersPath ?? ""),
+  );
+  const matchingOrders = matchingOrdersResp?.data ?? [];
+
+  function beginEditLine(line: ProcurementLine) {
+    setEditingLineId(line.line_id);
+    setLineDraft({
+      status: line.status,
+      finalized_quantity: String(line.finalized_quantity),
+      supplier_name: line.supplier_name ?? "",
+      expected_arrival: line.expected_arrival ?? "",
+      linked_order_id: line.linked_order_id == null ? "" : String(line.linked_order_id),
+      note: line.note ?? "",
+    });
+    setMessage("");
+  }
+
+  function cancelEditLine() {
+    setEditingLineId(null);
+    setLineDraft(null);
+  }
+
+  async function saveLine(line: ProcurementLine) {
+    if (!lineDraft) return;
+    setWorking(true);
+    setMessage("");
+    try {
+      await apiSend(`/procurement-lines/${line.line_id}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          status: lineDraft.status,
+          finalized_quantity: Number(lineDraft.finalized_quantity),
+          supplier_name: lineDraft.supplier_name.trim() || null,
+          expected_arrival: lineDraft.expected_arrival.trim() || null,
+          linked_order_id:
+            lineDraft.status === "ORDERED" && lineDraft.linked_order_id.trim()
+              ? Number(lineDraft.linked_order_id)
+              : null,
+          note: lineDraft.note.trim() || null,
+        }),
+      });
+      setMessage(`Updated procurement line #${line.line_id}.`);
+      cancelEditLine();
+      await Promise.all([mutateDetail(), mutateBatches(), mutateInbox()]);
+    } catch (error) {
+      setMessage(`Line update failed: ${String(error ?? "")}`);
+    } finally {
+      setWorking(false);
+    }
+  }
 
   async function createFromInbox() {
     if (!inboxRows.length) return;
@@ -183,16 +256,129 @@ export function ProcurementPage() {
                 <p className="text-sm text-slate-600">
                   {batchDetail.status} | {batchDetail.finalized_quantity_total} total finalized quantity
                 </p>
-                <div className="space-y-2">
+                <div className="space-y-3">
                   {batchDetail.lines.map((line) => (
-                    <div key={line.line_id} className="rounded-xl border border-slate-200 px-3 py-2 text-sm">
-                      <p className="font-semibold">{line.item_number} x {line.finalized_quantity}</p>
-                      <p className="text-xs text-slate-500">
-                        {line.source_type}
-                        {line.source_project_name ? ` | ${line.source_project_name}` : ""}
-                        {line.supplier_name ? ` | ${line.supplier_name}` : ""}
-                        {line.expected_arrival ? ` | ETA ${line.expected_arrival}` : ""}
-                      </p>
+                    <div key={line.line_id} className="rounded-xl border border-slate-200 px-3 py-3 text-sm">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-semibold">
+                            #{line.line_id} {line.item_number} x {line.finalized_quantity}
+                          </p>
+                          <p className="text-xs text-slate-500">
+                            {line.source_type}
+                            {line.source_project_name ? ` | ${line.source_project_name}` : ""}
+                            {line.linked_order_supplier_name ? ` | ${line.linked_order_supplier_name}` : ""}
+                          </p>
+                        </div>
+                        {editingLineId === line.line_id ? (
+                          <div className="flex gap-2">
+                            <button className="button-subtle" type="button" disabled={working} onClick={() => void saveLine(line)}>
+                              Save
+                            </button>
+                            <button className="button-subtle" type="button" disabled={working} onClick={cancelEditLine}>
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button className="button-subtle" type="button" disabled={working} onClick={() => beginEditLine(line)}>
+                            Edit
+                          </button>
+                        )}
+                      </div>
+                      {editingLineId === line.line_id && lineDraft ? (
+                        <div className="mt-3 space-y-2">
+                          <select
+                            className="input"
+                            value={lineDraft.status}
+                            onChange={(event) =>
+                              setLineDraft((current) =>
+                                current
+                                  ? {
+                                      ...current,
+                                      status: event.target.value as ProcurementLineStatus,
+                                    }
+                                  : current,
+                              )
+                            }
+                          >
+                            <option value="DRAFT">DRAFT</option>
+                            <option value="SENT">SENT</option>
+                            <option value="QUOTED">QUOTED</option>
+                            <option value="ORDERED">ORDERED</option>
+                            <option value="CANCELLED">CANCELLED</option>
+                          </select>
+                          <input
+                            className="input"
+                            type="number"
+                            min={1}
+                            value={lineDraft.finalized_quantity}
+                            onChange={(event) =>
+                              setLineDraft((current) =>
+                                current ? { ...current, finalized_quantity: event.target.value } : current,
+                              )
+                            }
+                            placeholder="Finalized quantity"
+                          />
+                          <input
+                            className="input"
+                            value={lineDraft.supplier_name}
+                            onChange={(event) =>
+                              setLineDraft((current) =>
+                                current ? { ...current, supplier_name: event.target.value } : current,
+                              )
+                            }
+                            placeholder="Supplier name"
+                          />
+                          <input
+                            className="input"
+                            type="date"
+                            value={lineDraft.expected_arrival}
+                            onChange={(event) =>
+                              setLineDraft((current) =>
+                                current ? { ...current, expected_arrival: event.target.value } : current,
+                              )
+                            }
+                          />
+                          <select
+                            className="input"
+                            value={lineDraft.linked_order_id}
+                            onChange={(event) =>
+                              setLineDraft((current) =>
+                                current ? { ...current, linked_order_id: event.target.value } : current,
+                              )
+                            }
+                          >
+                            {buildLinkedOrderSelectOptions({
+                              line,
+                              draftLinkedOrderId: lineDraft.linked_order_id,
+                              matchingOrders,
+                              isActive: true,
+                              isLoading: matchingOrdersLoading,
+                              loadError: matchingOrdersError ? String(matchingOrdersError) : null,
+                            }).map((option) => (
+                              <option key={option.value} value={option.value} disabled={option.disabled}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                          <textarea
+                            className="input min-h-[88px]"
+                            value={lineDraft.note}
+                            onChange={(event) =>
+                              setLineDraft((current) => (current ? { ...current, note: event.target.value } : current))
+                            }
+                            placeholder="Note"
+                          />
+                        </div>
+                      ) : (
+                        <div className="mt-2 space-y-1 text-xs text-slate-500">
+                          <p>Status: {line.status}</p>
+                          <p>Supplier: {line.supplier_name ?? "-"}</p>
+                          <p>ETA: {line.expected_arrival ?? "-"}</p>
+                          <p>Linked order: {line.linked_order_id ? `#${line.linked_order_id}` : "-"}</p>
+                          <p>Note: {line.note ?? "-"}</p>
+                        </div>
+                      )}
                     </div>
                   ))}
                   {!batchDetail.lines.length && <p className="text-sm text-slate-500">No lines in this batch.</p>}

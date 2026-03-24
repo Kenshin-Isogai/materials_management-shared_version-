@@ -9018,6 +9018,273 @@ def _build_project_planning_snapshot(
     }
 
 
+def _project_allocation_snapshot_signature(
+    *,
+    project_id: int,
+    target_date: str | None,
+    rows: list[dict[str, Any]],
+) -> str:
+    normalized_rows = []
+    for row in rows:
+        normalized_rows.append(
+            {
+                "item_id": int(row["item_id"]),
+                "required_quantity": int(row["required_quantity"]),
+                "covered_on_time_quantity": int(row["covered_on_time_quantity"]),
+                "shortage_at_start": int(row["shortage_at_start"]),
+                "remaining_shortage_quantity": int(row["remaining_shortage_quantity"]),
+                "supply_sources_by_start": [
+                    {
+                        "source_type": source.get("source_type"),
+                        "quantity": int(source.get("quantity") or 0),
+                        "ref_id": source.get("ref_id"),
+                        "project_id": source.get("project_id"),
+                        "date": source.get("date"),
+                        "status": source.get("status"),
+                        "label": source.get("label"),
+                    }
+                    for source in list(row.get("supply_sources_by_start") or [])
+                ],
+            }
+        )
+    normalized_rows.sort(key=lambda row: int(row["item_id"]))
+    payload = {
+        "project_id": int(project_id),
+        "target_date": target_date,
+        "rows": normalized_rows,
+    }
+    return json.dumps(payload, ensure_ascii=True, separators=(",", ":"), sort_keys=True)
+
+
+def confirm_project_allocation(
+    conn: sqlite3.Connection,
+    project_id: int,
+    *,
+    target_date: str | None = None,
+    dry_run: bool = True,
+    expected_snapshot_signature: str | None = None,
+) -> dict[str, Any]:
+    snapshot = _build_project_planning_snapshot(
+        conn,
+        project_id=project_id,
+        target_date=target_date,
+    )
+    project = snapshot["project_lookup"].get(project_id)
+    if project is None:
+        raise AppError(
+            code="PROJECT_NOT_IN_PLANNING_PIPELINE",
+            message="Project is not present in the planning pipeline",
+            status_code=404,
+        )
+
+    rows = list(snapshot["project_rows"].get(project_id, []))
+    effective_target_date = snapshot["selected_target_date"]
+    snapshot_signature = _project_allocation_snapshot_signature(
+        project_id=project_id,
+        target_date=effective_target_date,
+        rows=rows,
+    )
+    if expected_snapshot_signature is not None and expected_snapshot_signature != snapshot_signature:
+        raise AppError(
+            code="PLANNING_SNAPSHOT_CHANGED",
+            message="Planning snapshot changed. Refresh the board preview and try again.",
+            status_code=409,
+        )
+
+    summary = next(
+        (row for row in snapshot["project_summaries"] if int(row["project_id"]) == int(project_id)),
+        None,
+    )
+    if summary is None:
+        raise AppError(
+            code="PROJECT_NOT_IN_PLANNING_PIPELINE",
+            message="Project is not present in the planning pipeline",
+            status_code=404,
+        )
+    project_status = str(project.get("status") or "").upper()
+    if not dry_run and project_status not in PLANNING_COMMITTED_PROJECT_STATUSES:
+        raise AppError(
+            code="PROJECT_CONFIRMATION_REQUIRED",
+            message="Project must be CONFIRMED or ACTIVE before allocation can be persisted",
+            status_code=409,
+        )
+
+    reservations_created: list[dict[str, Any]] = []
+    orders_assigned: list[dict[str, Any]] = []
+    orders_split: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+
+    reservation_purpose = f"Confirmed allocation for project {project['name']}"
+    reservation_note = f"Workspace confirm allocation ({effective_target_date or 'no target date'})"
+
+    for row in rows:
+        item_id = int(row["item_id"])
+        for source in list(row.get("supply_sources_by_start") or []):
+            source_type = str(source.get("source_type") or "")
+            quantity = int(source.get("quantity") or 0)
+            ref_id = source.get("ref_id")
+            if quantity <= 0:
+                continue
+
+            if source_type == "stock":
+                preview_entry = {
+                    "reservation_id": None,
+                    "item_id": item_id,
+                    "quantity": quantity,
+                }
+                if dry_run:
+                    reservations_created.append(preview_entry)
+                    continue
+                reservation = create_reservation(
+                    conn,
+                    {
+                        "item_id": item_id,
+                        "quantity": quantity,
+                        "purpose": reservation_purpose,
+                        "deadline": effective_target_date,
+                        "note": reservation_note,
+                        "project_id": project_id,
+                    },
+                )
+                reservations_created.append(
+                    {
+                        "reservation_id": int(reservation["reservation_id"]),
+                        "item_id": item_id,
+                        "quantity": quantity,
+                    }
+                )
+                continue
+
+            if source_type == "generic_order":
+                if ref_id is None:
+                    skipped.append(
+                        {
+                            "item_id": item_id,
+                            "reason": "generic order source is missing an order reference",
+                        }
+                    )
+                    continue
+                order_id = int(ref_id)
+                has_ordered_procurement_link = conn.execute(
+                    """
+                    SELECT 1
+                    FROM procurement_lines
+                    WHERE linked_order_id = ?
+                      AND status = 'ORDERED'
+                    LIMIT 1
+                    """,
+                    (order_id,),
+                ).fetchone() is not None
+                has_ordered_rfq_link = conn.execute(
+                    """
+                    SELECT 1
+                    FROM rfq_lines
+                    WHERE linked_order_id = ?
+                      AND status = 'ORDERED'
+                    LIMIT 1
+                    """,
+                    (order_id,),
+                ).fetchone() is not None
+                if has_ordered_procurement_link or has_ordered_rfq_link:
+                    skipped.append(
+                        {
+                            "item_id": item_id,
+                            "order_id": order_id,
+                            "reason": (
+                                "order is already managed by an ORDERED procurement line"
+                                if has_ordered_procurement_link
+                                else "order is already managed by an ORDERED RFQ line"
+                            ),
+                        }
+                    )
+                    continue
+
+                order = get_order(conn, order_id)
+                order_amount = int(order["order_amount"])
+                if quantity > order_amount:
+                    skipped.append(
+                        {
+                            "item_id": item_id,
+                            "order_id": order_id,
+                            "reason": "allocation quantity exceeds current open order quantity",
+                        }
+                    )
+                    continue
+
+                if quantity == order_amount:
+                    preview_entry = {
+                        "order_id": order_id,
+                        "item_id": item_id,
+                        "quantity": quantity,
+                        "action": "assign",
+                    }
+                    if dry_run:
+                        orders_assigned.append(preview_entry)
+                        continue
+                    update_order(conn, order_id, {"project_id": project_id})
+                    orders_assigned.append(preview_entry)
+                    continue
+
+                if not order.get("expected_arrival"):
+                    skipped.append(
+                        {
+                            "item_id": item_id,
+                            "order_id": order_id,
+                            "reason": "partial allocation requires an expected_arrival on the source order",
+                        }
+                    )
+                    continue
+
+                preview_entry = {
+                    "original_order_id": order_id,
+                    "new_order_id": None,
+                    "item_id": item_id,
+                    "assigned_quantity": quantity,
+                    "remaining_quantity": order_amount - quantity,
+                }
+                if dry_run:
+                    orders_split.append(preview_entry)
+                    continue
+                split_result = update_order(
+                    conn,
+                    order_id,
+                    {
+                        "expected_arrival": order["expected_arrival"],
+                        "split_quantity": quantity,
+                    },
+                )
+                created_order_id = int(split_result["created_order"]["order_id"])
+                update_order(conn, created_order_id, {"project_id": project_id})
+                preview_entry["new_order_id"] = created_order_id
+                orders_split.append(preview_entry)
+                continue
+
+            skipped.append(
+                {
+                    "item_id": item_id,
+                    "ref_id": ref_id,
+                    "reason": (
+                        "already dedicated"
+                        if source_type in {"dedicated_order", "quoted_procurement", "quoted_rfq"}
+                        else f"unsupported allocation source type '{source_type}'"
+                    ),
+                }
+            )
+
+    return {
+        "project_id": int(project_id),
+        "project_name": str(project["name"]),
+        "target_date": effective_target_date,
+        "dry_run": bool(dry_run),
+        "snapshot_signature": snapshot_signature,
+        "summary": summary,
+        "orders_assigned": orders_assigned,
+        "orders_split": orders_split,
+        "reservations_created": reservations_created,
+        "skipped": skipped,
+    }
+
+
 def _load_project_procurement_summary(conn: sqlite3.Connection) -> dict[int, dict[str, Any]]:
     rows = conn.execute(
         """

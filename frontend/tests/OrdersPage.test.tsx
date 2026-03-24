@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -94,6 +94,22 @@ describe("OrdersPage", () => {
             quotation_number: "0000001809",
             issue_date: "2025-10-20",
             pdf_link: "imports/orders/registered/pdf_files/オーテックス/0000001809.pdf",
+          },
+        ];
+      }
+      if (path === "/projects?per_page=200") {
+        return [
+          {
+            project_id: 9,
+            name: "Project Lens",
+            status: "CONFIRMED",
+            planned_start: "2025-12-01",
+          },
+          {
+            project_id: 12,
+            name: "Project Prism",
+            status: "CONFIRMED",
+            planned_start: "2025-12-20",
           },
         ];
       }
@@ -240,5 +256,105 @@ describe("OrdersPage", () => {
 
     await user.click(within(quotationsSection as HTMLElement).getByRole("button", { name: "Collapse" }));
     expect(within(quotationsSection as HTMLElement).queryByPlaceholderText("Search by quotation number")).toBeNull();
+  });
+
+  it("splits first and assigns only the created child order when a project is selected", async () => {
+    const user = userEvent.setup();
+    apiSendMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/orders/304") {
+        expect(init?.method).toBe("PUT");
+        expect(init?.body).toBe(
+          JSON.stringify({
+            expected_arrival: "2025-12-15",
+            split_quantity: 5,
+          }),
+        );
+        return {
+          order_id: 304,
+          split_order_id: 401,
+          updated_order: {
+            order_id: 304,
+            item_id: 1,
+            quotation_id: 12,
+            project_id: null,
+            project_name: null,
+            canonical_item_number: "AOMO3080-125",
+            order_amount: 10,
+            ordered_quantity: 10,
+            ordered_item_number: "AOMO3080-125",
+            order_date: "2025-10-21",
+            expected_arrival: "2025-11-30",
+            arrival_date: null,
+            status: "Ordered",
+            supplier_name: "オーテックス",
+            quotation_number: "0000001809",
+          },
+          created_order: {
+            order_id: 401,
+            item_id: 1,
+            quotation_id: 12,
+            project_id: null,
+            project_name: null,
+            canonical_item_number: "AOMO3080-125",
+            order_amount: 5,
+            ordered_quantity: 5,
+            ordered_item_number: "AOMO3080-125",
+            order_date: "2025-10-21",
+            expected_arrival: "2025-12-15",
+            arrival_date: null,
+            status: "Ordered",
+            supplier_name: "オーテックス",
+            quotation_number: "0000001809",
+          },
+        };
+      }
+      if (path === "/orders/401") {
+        expect(init?.method).toBe("PUT");
+        expect(init?.body).toBe(JSON.stringify({ project_id: 12 }));
+        return {};
+      }
+      throw new Error(`Unexpected apiSend path: ${path}`);
+    });
+
+    renderPage();
+
+    const orderListSection = sectionByHeading("Order List");
+    expect(orderListSection).toBeTruthy();
+    await user.click(within(orderListSection as HTMLElement).getByRole("button", { name: "Expand" }));
+
+    const orderRow = (await screen.findByText("AOMO3080-125")).closest("tr");
+    expect(orderRow).toBeTruthy();
+    await user.click(within(orderRow as HTMLElement).getByRole("button", { name: "Edit Order" }));
+
+    const inputs = within(orderRow as HTMLElement);
+    const dateInput = (orderRow as HTMLElement).querySelector('input[type="date"]') as HTMLInputElement | null;
+    expect(dateInput).toBeTruthy();
+    fireEvent.change(dateInput as HTMLInputElement, { target: { value: "2025-12-15" } });
+    await user.type(inputs.getByPlaceholderText("Split qty (1-14)"), "5");
+    await user.selectOptions(inputs.getByRole("combobox"), "12");
+    await user.click(inputs.getByRole("button", { name: "Save Order" }));
+
+    await waitFor(() => {
+      expect(apiSendMock).toHaveBeenCalledTimes(2);
+    });
+    expect(apiSendMock).toHaveBeenNthCalledWith(
+      1,
+      "/orders/304",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          expected_arrival: "2025-12-15",
+          split_quantity: 5,
+        }),
+      }),
+    );
+    expect(apiSendMock).toHaveBeenNthCalledWith(
+      2,
+      "/orders/401",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ project_id: 12 }),
+      }),
+    );
   });
 });

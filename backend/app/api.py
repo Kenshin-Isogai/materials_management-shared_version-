@@ -18,6 +18,7 @@ from .schemas import (
     BomAnalyzeRequest,
     BomReserveRequest,
     CategoryMergeRequest,
+    ConfirmAllocationRequest,
     ConfirmProcurementLinksRequest,
     InventoryAdjustRequest,
     InventoryBatchRequest,
@@ -828,6 +829,19 @@ def create_app(db_path: str | None = None) -> FastAPI:
     @app.get("/api/projects/{project_id}/planning-analysis")
     def get_project_planning_analysis(project_id: int, target_date: str | None = None, conn= db):
         return ok(service.project_planning_analysis(conn, project_id, target_date=target_date))
+
+    @app.post("/api/projects/{project_id}/confirm-allocation")
+    def post_project_confirm_allocation(project_id: int, body: ConfirmAllocationRequest, conn= db):
+        result = service.confirm_project_allocation(
+            conn,
+            project_id,
+            target_date=body.target_date,
+            dry_run=body.dry_run,
+            expected_snapshot_signature=body.expected_snapshot_signature,
+        )
+        if not body.dry_run:
+            conn.commit()
+        return ok(result)
 
     @app.post("/api/projects/{project_id}/reserve")
     def post_project_reserve(project_id: int, conn= db):

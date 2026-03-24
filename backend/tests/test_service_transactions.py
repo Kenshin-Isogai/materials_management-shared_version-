@@ -2994,6 +2994,184 @@ def test_manual_project_id_preserved_when_rfq_link_removed(conn):
         "Manually-assigned project_id must not be cleared when the RFQ link is removed"
     )
 
+
+def test_confirm_project_allocation_can_preview_and_execute(conn):
+    stock_item = _create_basic_item(conn, item_number="ALLOC-STOCK-ITEM")
+    order_manufacturer = service.create_manufacturer(conn, "TEST-MFG-ALLOC-ORDER")
+    order_item = service.create_item(
+        conn,
+        {
+            "item_number": "ALLOC-ORDER-ITEM",
+            "manufacturer_id": order_manufacturer["manufacturer_id"],
+            "category": "Lens",
+        },
+    )
+    service.adjust_inventory(
+        conn,
+        item_id=stock_item["item_id"],
+        quantity_delta=3,
+        location="STOCK",
+        note="seed stock allocation item",
+    )
+    project = service.create_project(
+        conn,
+        {
+            "name": "ALLOC-CONFIRM-PROJECT",
+            "status": "CONFIRMED",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [
+                {"item_id": stock_item["item_id"], "assembly_id": None, "quantity": 3},
+                {"item_id": order_item["item_id"], "assembly_id": None, "quantity": 4},
+            ],
+        },
+    )
+    imported = service.import_orders_from_rows(
+        conn,
+        supplier_name="ALLOC-SUPPLIER",
+        rows=[
+            {
+                "item_number": order_item["item_number"],
+                "quantity": "6",
+                "quotation_number": "Q-ALLOC-001",
+                "issue_date": "2026-03-01",
+                "order_date": "2026-03-02",
+                "expected_arrival": FUTURE_TARGET_DATE,
+                "pdf_link": "",
+            }
+        ],
+        source_name="confirm_allocation.csv",
+    )
+    order_id = int(imported["order_ids"][0])
+
+    preview = service.confirm_project_allocation(
+        conn,
+        project["project_id"],
+        target_date=FUTURE_TARGET_DATE,
+        dry_run=True,
+    )
+
+    assert preview["dry_run"] is True
+    assert len(preview["reservations_created"]) == 1
+    assert preview["reservations_created"][0]["reservation_id"] is None
+    assert preview["reservations_created"][0]["item_id"] == stock_item["item_id"]
+    assert preview["reservations_created"][0]["quantity"] == 3
+    assert len(preview["orders_split"]) == 1
+    assert preview["orders_split"][0]["original_order_id"] == order_id
+    assert preview["orders_split"][0]["assigned_quantity"] == 4
+    assert preview["orders_split"][0]["remaining_quantity"] == 2
+
+    executed = service.confirm_project_allocation(
+        conn,
+        project["project_id"],
+        target_date=FUTURE_TARGET_DATE,
+        dry_run=False,
+        expected_snapshot_signature=preview["snapshot_signature"],
+    )
+    conn.commit()
+
+    assert executed["dry_run"] is False
+    assert len(executed["reservations_created"]) == 1
+    created_reservation_id = int(executed["reservations_created"][0]["reservation_id"])
+    reservation = service.get_reservation(conn, created_reservation_id)
+    assert int(reservation["project_id"]) == project["project_id"]
+    assert int(reservation["quantity"]) == 3
+
+    updated_original = service.get_order(conn, order_id)
+    created_order_id = int(executed["orders_split"][0]["new_order_id"])
+    created_order = service.get_order(conn, created_order_id)
+    assert updated_original["project_id"] is None
+    assert int(updated_original["order_amount"]) == 2
+    assert int(created_order["project_id"]) == project["project_id"]
+    assert int(created_order["project_id_manual"]) == 1
+    assert int(created_order["order_amount"]) == 4
+
+
+def test_confirm_project_allocation_rejects_stale_snapshot(conn):
+    item = _create_basic_item(conn, item_number="ALLOC-STALE-ITEM")
+    service.adjust_inventory(
+        conn,
+        item_id=item["item_id"],
+        quantity_delta=2,
+        location="STOCK",
+        note="seed stale allocation item",
+    )
+    project = service.create_project(
+        conn,
+        {
+            "name": "ALLOC-STALE-PROJECT",
+            "status": "PLANNING",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [{"item_id": item["item_id"], "assembly_id": None, "quantity": 2}],
+        },
+    )
+
+    preview = service.confirm_project_allocation(
+        conn,
+        project["project_id"],
+        target_date=FUTURE_TARGET_DATE,
+        dry_run=True,
+    )
+
+    service.adjust_inventory(
+        conn,
+        item_id=item["item_id"],
+        quantity_delta=-1,
+        location="STOCK",
+        note="mutate snapshot after preview",
+    )
+
+    with pytest.raises(AppError) as exc:
+        service.confirm_project_allocation(
+            conn,
+            project["project_id"],
+            target_date=FUTURE_TARGET_DATE,
+            dry_run=False,
+            expected_snapshot_signature=preview["snapshot_signature"],
+        )
+
+    assert exc.value.code == "PLANNING_SNAPSHOT_CHANGED"
+
+
+def test_confirm_project_allocation_rejects_persist_for_planning_project(conn):
+    item = _create_basic_item(conn, item_number="ALLOC-DRAFT-ITEM")
+    service.adjust_inventory(
+        conn,
+        item_id=item["item_id"],
+        quantity_delta=2,
+        location="STOCK",
+        note="seed draft allocation item",
+    )
+    project = service.create_project(
+        conn,
+        {
+            "name": "ALLOC-DRAFT-PROJECT",
+            "status": "PLANNING",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [{"item_id": item["item_id"], "assembly_id": None, "quantity": 2}],
+        },
+    )
+
+    preview = service.confirm_project_allocation(
+        conn,
+        project["project_id"],
+        target_date=FUTURE_TARGET_DATE,
+        dry_run=True,
+    )
+    assert preview["dry_run"] is True
+    assert preview["snapshot_signature"]
+
+    with pytest.raises(AppError) as exc:
+        service.confirm_project_allocation(
+            conn,
+            project["project_id"],
+            target_date=FUTURE_TARGET_DATE,
+            dry_run=False,
+            expected_snapshot_signature=preview["snapshot_signature"],
+        )
+
+    assert exc.value.code == "PROJECT_CONFIRMATION_REQUIRED"
+
+
 def test_import_orders_deduplicates_missing_rows_for_same_item(conn, tmp_path: Path):
     """When the same unregistered item_number appears on multiple CSV rows
     (e.g. different expected_arrival dates), there should be only one

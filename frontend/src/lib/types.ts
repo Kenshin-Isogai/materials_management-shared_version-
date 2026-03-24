@@ -251,6 +251,47 @@ export type PlanningAnalysisResult = {
   pipeline: PipelineSummary[];
 };
 
+export type ConfirmAllocationActionAssigned = {
+  order_id: number;
+  item_id: number;
+  quantity: number;
+  action: "assign";
+};
+
+export type ConfirmAllocationActionSplit = {
+  original_order_id: number;
+  new_order_id: number | null;
+  item_id: number;
+  assigned_quantity: number;
+  remaining_quantity: number;
+};
+
+export type ConfirmAllocationReservation = {
+  reservation_id: number | null;
+  item_id: number;
+  quantity: number;
+};
+
+export type ConfirmAllocationSkipped = {
+  item_id: number;
+  order_id?: number;
+  ref_id?: number | null;
+  reason: string;
+};
+
+export type ConfirmAllocationResult = {
+  project_id: number;
+  project_name: string;
+  target_date: string | null;
+  dry_run: boolean;
+  snapshot_signature: string;
+  summary: PipelineSummary;
+  orders_assigned: ConfirmAllocationActionAssigned[];
+  orders_split: ConfirmAllocationActionSplit[];
+  reservations_created: ConfirmAllocationReservation[];
+  skipped: ConfirmAllocationSkipped[];
+};
+
 export type WorkspaceProjectSummary = {
   project_id: number;
   name: string;

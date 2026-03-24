@@ -10,6 +10,7 @@ import { WorkspaceDrawer } from "../components/WorkspaceDrawer";
 import { apiDownload, apiGet, apiGetWithPagination, apiSend } from "../lib/api";
 import { nextSynchronizedBoardDate, resolveDrawerStackPush } from "../lib/workspaceState";
 import type {
+  ConfirmAllocationResult,
   InventoryRow,
   Item,
   ItemFlowTimeline,
@@ -52,7 +53,7 @@ type DrawerContext =
       itemId: number | null;
     };
 
-const EMPTY_RFQ_SUMMARY: WorkspaceProjectSummary["rfq_summary"] = {
+const EMPTY_PROCUREMENT_SUMMARY: WorkspaceProjectSummary["procurement_summary"] = {
   total_batches: 0,
   open_batch_count: 0,
   closed_batch_count: 0,
@@ -109,6 +110,11 @@ function sourceTone(sourceType: PlanningSource["source_type"]): string {
     default:
       return "bg-slate-100 text-slate-700";
   }
+}
+
+function isConfirmablePlanningSource(source: PlanningSource): boolean {
+  if ((source.quantity ?? 0) <= 0) return false;
+  return source.source_type === "stock" || source.source_type === "generic_order";
 }
 
 function formatDate(value: string | null | undefined): string {
@@ -325,6 +331,7 @@ function ProjectSummaryCard({
   onOpenRfq: () => void;
 }) {
   const planningSummary = project.planning_summary;
+  const procurementSummary = project.procurement_summary;
   return (
     <article className={cx("panel p-4 transition", selected && "ring-2 ring-slate-800/20")}>
       <div className="flex items-start justify-between gap-3">
@@ -364,9 +371,9 @@ function ProjectSummaryCard({
         ) : (
           <>
             <SummaryMetric label="Required Rows" value={project.requirement_count} />
-            <SummaryMetric label="Open RFQs" value={project.rfq_summary.open_batch_count} tone="amber" />
-            <SummaryMetric label="Quoted Lines" value={project.rfq_summary.quoted_line_count} tone="emerald" />
-            <SummaryMetric label="Ordered Lines" value={project.rfq_summary.ordered_line_count} tone="sky" />
+            <SummaryMetric label="Open Batches" value={procurementSummary.open_batch_count} tone="amber" />
+            <SummaryMetric label="Quoted Lines" value={procurementSummary.quoted_line_count} tone="emerald" />
+            <SummaryMetric label="Ordered Lines" value={procurementSummary.ordered_line_count} tone="sky" />
           </>
         )}
       </div>
@@ -374,8 +381,8 @@ function ProjectSummaryCard({
       <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
         <p>{project.summary_message}</p>
         <p className="mt-1 text-xs text-slate-500">
-          RFQ: {project.rfq_summary.open_batch_count} open batches, {project.rfq_summary.quoted_line_count} quoted
-          lines, {project.rfq_summary.ordered_line_count} ordered lines.
+          Procurement: {procurementSummary.open_batch_count} open batches, {procurementSummary.quoted_line_count} quoted
+          lines, {procurementSummary.ordered_line_count} ordered lines.
         </p>
       </div>
 
@@ -400,10 +407,10 @@ function ProjectDrawerContent(_props: {
   onPreviewBoard: (projectId: number) => void;
   onRefresh: () => Promise<void>;
   onDirtyChange: (isDirty: boolean) => void;
-  rfqSummary: WorkspaceProjectSummary["rfq_summary"];
+  procurementSummary: WorkspaceProjectSummary["procurement_summary"];
   active: boolean;
 }) {
-  const { projectId, onOpenItem, onPreviewBoard, onRefresh, onDirtyChange, rfqSummary, active } = _props;
+  const { projectId, onOpenItem, onPreviewBoard, onRefresh, onDirtyChange, procurementSummary, active } = _props;
   const { data, error, isLoading, mutate } = useSWR(active ? `/projects/${projectId}` : null, () =>
     apiGet<ProjectDetail>(`/projects/${projectId}`),
   );
@@ -422,7 +429,7 @@ function ProjectDrawerContent(_props: {
               </span>
             </div>
             <p className="text-sm text-slate-600">
-              Requirements {data.requirements.length} | RFQ batches {rfqSummary.total_batches}
+              Requirements {data.requirements.length} | Procurement batches {procurementSummary.total_batches}
             </p>
             {data.description && <p className="text-sm text-slate-600">{data.description}</p>}
             <div className="flex flex-wrap gap-2 text-sm">
@@ -443,9 +450,9 @@ function ProjectDrawerContent(_props: {
           </section>
 
           <section className="grid gap-3 md:grid-cols-3">
-            <SummaryMetric label="Open Batches" value={rfqSummary.open_batch_count} tone="amber" />
-            <SummaryMetric label="Quoted Lines" value={rfqSummary.quoted_line_count} tone="emerald" />
-            <SummaryMetric label="Ordered Lines" value={rfqSummary.ordered_line_count} tone="sky" />
+            <SummaryMetric label="Open Batches" value={procurementSummary.open_batch_count} tone="amber" />
+            <SummaryMetric label="Quoted Lines" value={procurementSummary.quoted_line_count} tone="emerald" />
+            <SummaryMetric label="Ordered Lines" value={procurementSummary.ordered_line_count} tone="sky" />
           </section>
 
           <ProjectEditor
@@ -877,6 +884,7 @@ export function WorkspacePage() {
   const [analysisDateApplied, setAnalysisDateApplied] = useState("");
   const [actionMessage, setActionMessage] = useState("");
   const [working, setWorking] = useState(false);
+  const [allocationPreview, setAllocationPreview] = useState<ConfirmAllocationResult | null>(null);
   const [drawerStack, setDrawerStack] = useState<DrawerContext[]>([]);
   const [dirtyDrawerLabels, setDirtyDrawerLabels] = useState<Record<string, string>>({});
 
@@ -943,6 +951,13 @@ export function WorkspacePage() {
   const previewDirty = analysisDateDraft.trim() !== analysisDateApplied.trim();
   const persistedDate = selectedProject?.planned_start ?? "";
   const canPersistDate = analysisDateDraft.trim() !== "" && analysisDateDraft.trim() !== persistedDate;
+  const hasConfirmableAllocation = useMemo(
+    () =>
+      (analysisData?.rows ?? []).some((row) =>
+        (row.supply_sources_by_start ?? []).some((source) => isConfirmablePlanningSource(source)),
+      ),
+    [analysisData?.rows],
+  );
 
   const statusCounts = useMemo(
     () => ({
@@ -1079,11 +1094,13 @@ export function WorkspacePage() {
     setSelectedProjectId(projectId);
     setAnalysisDateDraft(project?.planned_start ?? "");
     setAnalysisDateApplied(project?.planned_start ?? "");
+    setAllocationPreview(null);
     setView("board");
   }
 
   function previewImpact() {
     setActionMessage("");
+    setAllocationPreview(null);
     setAnalysisDateApplied(analysisDateDraft.trim());
   }
 
@@ -1114,6 +1131,58 @@ export function WorkspacePage() {
       await refreshWorkspace();
     } catch (saveError) {
       setActionMessage(`Save failed: ${String(saveError ?? "")}`);
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function previewConfirmAllocation() {
+    if (!selectedProjectId) return;
+    setWorking(true);
+    setActionMessage("");
+    try {
+      const payload = await apiSend<ConfirmAllocationResult>(`/projects/${selectedProjectId}/confirm-allocation`, {
+        method: "POST",
+        body: JSON.stringify({
+          target_date: selectedAnalysisTargetDate ?? (analysisDateApplied.trim() || null),
+          dry_run: true,
+        }),
+      });
+      setAllocationPreview(payload);
+      setActionMessage("Allocation preview generated.");
+    } catch (error) {
+      setAllocationPreview(null);
+      setActionMessage(`Allocation preview failed: ${String(error ?? "")}`);
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function executeConfirmAllocation() {
+    if (!selectedProjectId || !allocationPreview) return;
+    const confirmed = window.confirm(
+      "Confirm this allocation preview? Generic order coverage will be dedicated to the project and stock coverage will become reservations.",
+    );
+    if (!confirmed) return;
+    setWorking(true);
+    setActionMessage("");
+    try {
+      const payload = await apiSend<ConfirmAllocationResult>(`/projects/${selectedProjectId}/confirm-allocation`, {
+        method: "POST",
+        body: JSON.stringify({
+          target_date: selectedAnalysisTargetDate ?? (analysisDateApplied.trim() || null),
+          dry_run: false,
+          expected_snapshot_signature: allocationPreview.snapshot_signature,
+        }),
+      });
+      setAllocationPreview(payload);
+      setActionMessage(
+        `Allocation confirmed: ${payload.orders_assigned.length} order(s) assigned, ${payload.orders_split.length} split, ${payload.reservations_created.length} reservation(s) created.`,
+      );
+      await refreshWorkspace();
+    } catch (error) {
+      setActionMessage(`Allocation confirm failed: ${String(error ?? "")}`);
+      await refreshWorkspace();
     } finally {
       setWorking(false);
     }
@@ -1446,6 +1515,26 @@ export function WorkspacePage() {
                   </button>
                 )}
                 {selectedProjectId && (
+                  <button
+                    className="button-subtle"
+                    type="button"
+                    disabled={working || !analysisData || !hasConfirmableAllocation}
+                    onClick={() => void previewConfirmAllocation()}
+                  >
+                    Preview Confirm Allocation
+                  </button>
+                )}
+                {selectedProjectId && (
+                  <button
+                    className="button-subtle"
+                    type="button"
+                    disabled={working || !allocationPreview || allocationPreview.dry_run !== true}
+                    onClick={() => void executeConfirmAllocation()}
+                  >
+                    Confirm Allocation
+                  </button>
+                )}
+                {selectedProjectId && (
                   <button className="button-subtle" type="button" disabled={working || !analysisData} onClick={() => void downloadPlanningExport()}>
                     Export Project CSV
                   </button>
@@ -1472,6 +1561,76 @@ export function WorkspacePage() {
                 )}
               </div>
             </div>
+            {allocationPreview && (
+              <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="font-semibold">
+                      Allocation Preview
+                      {allocationPreview.dry_run ? "" : " Result"}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      Target date {formatDate(allocationPreview.target_date)} | Orders assigned {allocationPreview.orders_assigned.length} |
+                      Orders split {allocationPreview.orders_split.length} | Reservations {allocationPreview.reservations_created.length}
+                    </p>
+                  </div>
+                  {!allocationPreview.dry_run && (
+                    <button className="button-subtle" type="button" onClick={() => setAllocationPreview(null)}>
+                      Clear
+                    </button>
+                  )}
+                </div>
+                <div className="mt-3 grid gap-3 xl:grid-cols-2">
+                  <div>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Orders</p>
+                    <div className="space-y-2">
+                      {allocationPreview.orders_assigned.map((entry) => (
+                        <p key={`assign-${entry.order_id}-${entry.item_id}`}>
+                          Assign order #{entry.order_id} item #{entry.item_id} qty {entry.quantity}.
+                        </p>
+                      ))}
+                      {allocationPreview.orders_split.map((entry) => (
+                        <p key={`split-${entry.original_order_id}-${entry.item_id}`}>
+                          Split order #{entry.original_order_id}: assign {entry.assigned_quantity}, leave {entry.remaining_quantity}
+                          {entry.new_order_id ? `, created #${entry.new_order_id}` : ""}.
+                        </p>
+                      ))}
+                      {!allocationPreview.orders_assigned.length && !allocationPreview.orders_split.length && (
+                        <p className="text-slate-500">No generic orders will be dedicated.</p>
+                      )}
+                    </div>
+                  </div>
+                  <div>
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Reservations</p>
+                    <div className="space-y-2">
+                      {allocationPreview.reservations_created.map((entry) => (
+                        <p key={`reservation-${entry.item_id}-${entry.reservation_id ?? "preview"}`}>
+                          Reserve item #{entry.item_id} qty {entry.quantity}
+                          {entry.reservation_id ? ` as reservation #${entry.reservation_id}` : ""}.
+                        </p>
+                      ))}
+                      {!allocationPreview.reservations_created.length && (
+                        <p className="text-slate-500">No stock-backed reservations will be created.</p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+                {!!allocationPreview.skipped.length && (
+                  <div className="mt-3">
+                    <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Skipped</p>
+                    <div className="space-y-1">
+                      {allocationPreview.skipped.map((entry, index) => (
+                        <p key={`skipped-${entry.item_id}-${index}`} className="text-slate-600">
+                          Item #{entry.item_id}
+                          {entry.order_id ? ` / order #${entry.order_id}` : ""}
+                          : {entry.reason}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
             <div className="flex gap-3 overflow-x-auto pb-2">
               {boardPipeline.map((row) => (
                 <button
@@ -1604,9 +1763,9 @@ export function WorkspacePage() {
                 {entry.type === "project" && (
                   <ProjectDrawerContent
                     projectId={entry.projectId}
-                    rfqSummary={
-                      projects.find((project) => project.project_id === entry.projectId)?.rfq_summary ??
-                      EMPTY_RFQ_SUMMARY
+                    procurementSummary={
+                      projects.find((project) => project.project_id === entry.projectId)?.procurement_summary ??
+                      EMPTY_PROCUREMENT_SUMMARY
                     }
                     active={active}
                     onOpenItem={openItemDrawer}

@@ -1,6 +1,6 @@
 # Source Current State
 
-Last updated: 2026-03-23 (JST)
+Last updated: 2026-03-24 (JST)
 
 ## 1. System Snapshot
 
@@ -139,10 +139,15 @@ Last updated: 2026-03-23 (JST)
   - Select a project and analyze it at its planned start (or an override date).
   - Later projects are netted against earlier committed projects (`CONFIRMED` / `ACTIVE`) instead of being analyzed in isolation, including committed work whose start date is already in the past.
   - On-time shortage rows can still be converted directly into RFQ batches, and RFQ creation reuses the planning date currently under review.
+  - The board now supports `Preview Confirm Allocation` and `Confirm Allocation`, which persist current on-time generic coverage as project reservations and dedicated order rows.
+  - Confirm-allocation execute now rejects `PLANNING` projects; draft projects remain preview-only until they are confirmed or activated.
+  - Confirm-allocation previews now carry a backend snapshot signature so execute can reject stale board state.
 - Procurement page now serves as the unified shortage follow-up surface.
   - `/api/shortage-inbox` exposes current shortage rows.
   - `/api/shortage-inbox/to-procurement` creates or extends procurement batches from shortage selections and can optionally confirm a draft project with the active planning date for workspace-driven procurement creation.
   - `/api/procurement-batches/{id}/export.csv` produces supplier-facing CSV output.
+  - Batch detail now supports inline line editing for `status`, `finalized_quantity`, `supplier_name`, `expected_arrival`, `linked_order_id`, and `note`.
+  - Linked-order selectors lazy-load matching open orders for the active line only.
 - Legacy location assembly assignment remains available through `PUT /api/locations/{location}/assemblies` for the Location page workflow.
 - BOM page now supports optional analysis date input and sends `target_date` to `POST /api/bom/analyze` for future-arrival-aware gap checks.
 - BOM page now sends shortage rows into procurement creation instead of purchase-candidate persistence in the primary UI flow.
@@ -151,8 +156,10 @@ Last updated: 2026-03-23 (JST)
 - Purchase Candidates page provides persistent shortage tracking with status transitions (`OPEN`, `ORDERING`, `ORDERED`, `CANCELLED`) and project-gap candidate creation.
 - Orders page `Order List` supports client-side sorting by order id, supplier, item, quantity, expected arrival, and status.
 - Expanded `Order List` now also includes a primary search (`order #`, item, or quotation number) plus a secondary text filter for supplier/project/expected-date/status fields.
-- Orders page `Order List` now supports inline editing of `expected_arrival` (ETA) for open orders, backed by `PUT /api/orders/{order_id}`.
+- Orders page `Order List` now supports inline editing of `expected_arrival` (ETA) plus manual project assignment for open orders, backed by `PUT /api/orders/{order_id}`.
 - ETA edit flow supports partial postponement using split quantity (e.g., postpone 30 of 50), which creates a second open-order row with the new ETA while preserving traceability-safe quantities.
+- The same edit flow now lets users assign or clear `project_id` unless the order is controlled by an ORDERED RFQ/procurement link.
+- When split ETA editing is combined with project selection from the Orders page, the UI now performs the split first and then assigns only the created consumed child order.
 - Backend now persists split/merge/partial-arrival order lineage in `order_lineage_events`; API exposes `POST /api/orders/merge` and `GET /api/orders/{order_id}/lineage` for durable traceability and future scale-out reporting.
 - Orders manual CSV import is now preview-first:
   - `POST /api/orders/import-preview` classifies each row as `exact`, `high_confidence`, `needs_review`, or `unresolved`
@@ -178,6 +185,10 @@ Last updated: 2026-03-23 (JST)
 - Added aggregate workspace endpoint `GET /api/workspace/summary`.
   - committed rows include authoritative planning totals and RFQ counts
   - `PLANNING` rows intentionally return `preview_required` semantics instead of draft shortage numbers inferred in the frontend
+- Workspace summary consumers now prefer `procurement_summary` for batch/line counts; `rfq_summary` remains as a compatibility field.
+- Added `POST /api/projects/{project_id}/confirm-allocation`.
+  - `dry_run` previews reservations and generic-order dedication/splits for the current planning date
+  - execute accepts `expected_snapshot_signature` and returns `PLANNING_SNAPSHOT_CHANGED` when the preview is stale
 - Added item planning drill-in endpoint `GET /api/items/{item_id}/planning-context`.
   - returns committed-project allocation rows plus optional preview-project context for the active workspace board date
 - Added workspace CSV export endpoints `GET /api/workspace/planning-export` and `GET /api/workspace/planning-export-multi`.
