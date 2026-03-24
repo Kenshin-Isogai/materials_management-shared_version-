@@ -49,7 +49,7 @@ This document explains the implemented architecture of the Materials Management 
   - shared project/RFQ drawer editors backfill current selections when ids fall outside initial preload pages so existing links still render correctly
   - shared RFQ linked-order selectors now lazy-load per active row and keep the current selection visible from saved metadata, avoiding eager option rendering across the whole batch
   - shared RFQ editors now page the line table (25/50/100 rows) so large batches do not mount the entire editable grid at once during route changes
-  - legacy `/projects`, `/planning`, and `/rfq` routes remain available for heavy edits and operational fallback
+  - legacy `/planning` and `/rfq` routes have been **removed from the router**; `PlanningPage.tsx` and `RfqPage.tsx` remain as unused source files. Unsupported paths fall through to the `*` wildcard catch-all and redirect to `/`.
 - The Projects page supports requirement target lookup via searchable item input (`datalist`) so users can select from large item registries faster than scrolling long select lists.
   - item candidate summaries include manufacturer, category, and description text to disambiguate similar part numbers during selection
 - Requirement entry includes a preview-first bulk text parser (`item_number,quantity` per line).

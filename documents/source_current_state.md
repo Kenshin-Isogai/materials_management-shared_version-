@@ -21,7 +21,7 @@ Last updated: 2026-03-23 (JST)
   - `app/db.py`: schema + indexes + migration logic, now including procurement-batch migration support
   - `tests/`: integration/service/path tests
 - `frontend/`
-  - `src/pages/`: tab/page UI for dashboard, items, inventory, orders, reservations, assemblies, projects, purchase candidates, BOM, locations, snapshot, history, master data
+  - `src/pages/`: active pages wired into the router: Dashboard, Workspace, Items (Search), Locations, Projects, Procurement, Orders, Inventory (Movements), Reservations (Reserve), BOM, Snapshot, History, Master. Unused page files retained but not routed: `PlanningPage.tsx`, `RfqPage.tsx`, `AssembliesPage.tsx`, `PurchaseCandidatesPage.tsx`.
   - `src/lib/api.ts`: API client with fallback API base probing
 - `documents/`
   - `technical_documentation.md`
@@ -102,7 +102,7 @@ Last updated: 2026-03-23 (JST)
   - project requirement rows preserve current item/assembly selections even when those ids are outside the initial preload page
   - RFQ line order selectors now lazy-load matching orders for the active row only and keep the current linked order visible from saved metadata, reducing large-batch render pressure while preserving older/arrived selections
   - shared RFQ editors now render paged line slices (25/50/100 rows) instead of mounting every editable RFQ line at once, reducing large-batch UI stalls during tab changes
-  - legacy `/projects`, `/planning`, and `/rfq` remain available for heavier edit flows
+  - legacy `/planning` and `/rfq` routes have been **removed from the router**; `PlanningPage.tsx` and `RfqPage.tsx` remain as unused source files. Unsupported paths fall through to the wildcard catch-all and redirect to `/`.
 - Movements page now uses a single expanded `Movement Entry` table for both one-off and multi-row moves (the separate `Single Move` form was removed).
 - Adding a new row in `Movement Entry` now inherits the latest completed `from/to` locations so repeated transfers do not require retyping the same pair each time.
 - Reservations page supports partial release/consume via quantity prompt.
@@ -135,7 +135,7 @@ Last updated: 2026-03-23 (JST)
   - preview confirmation can send per-row `item_id` overrides back through `POST /api/inventory/import-csv`
 - Projects page now supports editing an existing project (load details into form, then save via project update API) including requirement composition/quantities.
 - Existing projects with legacy assembly-only requirements still load those rows from the backend; the current item-only editor preserves them on save and shows an inline warning that they remain non-editable in this form.
-- Planning page is being folded into `/workspace`; the frontend route now redirects and the procurement-first workflow is centered on `/workspace` plus `/procurement`.
+- Planning page has been folded into `/workspace`; the `/planning` route has been removed from the router (the `PlanningPage.tsx` file remains but is unused, and the path falls through to the wildcard redirect at `/`). The procurement-first workflow is centered on `/workspace` plus `/procurement`.
   - Select a project and analyze it at its planned start (or an override date).
   - Later projects are netted against earlier committed projects (`CONFIRMED` / `ACTIVE`) instead of being analyzed in isolation, including committed work whose start date is already in the past.
   - On-time shortage rows can still be converted directly into RFQ batches, and RFQ creation reuses the planning date currently under review.
