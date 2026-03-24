@@ -2,6 +2,8 @@
 
 ### Fixed
 
+- Orders page split editing now preserves an explicit `No project assignment` choice for already-assigned open orders.
+  - When the edit keeps `split_quantity` but clears the project selection, the frontend now includes `project_id: null` in the split update so both resulting rows become generic instead of silently retaining the previous manual assignment.
 - Confirm allocation no longer persists reservations or dedicated orders for `PLANNING` projects.
   - `POST /api/projects/{project_id}/confirm-allocation` still supports dry-run preview for draft projects.
   - Execute now fails with `PROJECT_CONFIRMATION_REQUIRED` until the project is `CONFIRMED` or `ACTIVE`, preventing hidden stock/order consumption outside the committed planning pipeline.

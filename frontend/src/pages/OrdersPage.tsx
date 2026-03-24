@@ -776,17 +776,21 @@ export function OrdersPage() {
   async function saveOrderEdit(orderId: number) {
     setLoading(true);
     try {
+      const currentOrder = (ordersData ?? []).find((row) => row.order_id === orderId) ?? null;
       const splitQuantity = Number(editingOrderSplitQuantity);
       const hasSplit = editingOrderSplitQuantity.trim().length > 0;
       const projectId =
         editingOrderProjectId.trim().length > 0 ? Number(editingOrderProjectId.trim()) : null;
       const expectedArrival = editingOrderExpectedArrival.trim() || null;
+      const shouldClearProjectOnSplit =
+        hasSplit && currentOrder?.project_id != null && projectId == null;
       if (hasSplit) {
         const splitResult = await apiSend<OrderSplitUpdateResult>(`/orders/${orderId}`, {
           method: "PUT",
           body: JSON.stringify({
             expected_arrival: expectedArrival,
             split_quantity: Number.isFinite(splitQuantity) ? splitQuantity : null,
+            ...(shouldClearProjectOnSplit ? { project_id: null } : {}),
           }),
         });
         if (Number.isFinite(projectId)) {

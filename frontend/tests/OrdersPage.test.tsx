@@ -357,4 +357,92 @@ describe("OrdersPage", () => {
       }),
     );
   });
+
+  it("preserves explicit project clearing when splitting an assigned order", async () => {
+    const user = userEvent.setup();
+    apiSendMock.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === "/orders/305") {
+        expect(init?.method).toBe("PUT");
+        expect(init?.body).toBe(
+          JSON.stringify({
+            expected_arrival: "2025-12-22",
+            split_quantity: 3,
+            project_id: null,
+          }),
+        );
+        return {
+          order_id: 305,
+          split_order_id: 402,
+          updated_order: {
+            order_id: 305,
+            item_id: 2,
+            quotation_id: 12,
+            project_id: null,
+            project_name: null,
+            canonical_item_number: "BETA-200",
+            order_amount: 5,
+            ordered_quantity: 5,
+            ordered_item_number: "BETA-200",
+            order_date: "2025-10-21",
+            expected_arrival: "2025-12-10",
+            arrival_date: null,
+            status: "Ordered",
+            supplier_name: "オーテックス",
+            quotation_number: "0000001809",
+          },
+          created_order: {
+            order_id: 402,
+            item_id: 2,
+            quotation_id: 12,
+            project_id: null,
+            project_name: null,
+            canonical_item_number: "BETA-200",
+            order_amount: 3,
+            ordered_quantity: 3,
+            ordered_item_number: "BETA-200",
+            order_date: "2025-10-21",
+            expected_arrival: "2025-12-22",
+            arrival_date: null,
+            status: "Ordered",
+            supplier_name: "オーテックス",
+            quotation_number: "0000001809",
+          },
+        };
+      }
+      throw new Error(`Unexpected apiSend path: ${path}`);
+    });
+
+    renderPage();
+
+    const orderListSection = sectionByHeading("Order List");
+    expect(orderListSection).toBeTruthy();
+    await user.click(within(orderListSection as HTMLElement).getByRole("button", { name: "Expand" }));
+
+    const orderRow = (await screen.findByText("BETA-200")).closest("tr");
+    expect(orderRow).toBeTruthy();
+    await user.click(within(orderRow as HTMLElement).getByRole("button", { name: "Edit Order" }));
+
+    const inputs = within(orderRow as HTMLElement);
+    const dateInput = (orderRow as HTMLElement).querySelector('input[type="date"]') as HTMLInputElement | null;
+    expect(dateInput).toBeTruthy();
+    fireEvent.change(dateInput as HTMLInputElement, { target: { value: "2025-12-22" } });
+    await user.type(inputs.getByPlaceholderText("Split qty (1-7)"), "3");
+    await user.selectOptions(inputs.getByRole("combobox"), "");
+    await user.click(inputs.getByRole("button", { name: "Save Order" }));
+
+    await waitFor(() => {
+      expect(apiSendMock).toHaveBeenCalledTimes(1);
+    });
+    expect(apiSendMock).toHaveBeenCalledWith(
+      "/orders/305",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({
+          expected_arrival: "2025-12-22",
+          split_quantity: 3,
+          project_id: null,
+        }),
+      }),
+    );
+  });
 });
