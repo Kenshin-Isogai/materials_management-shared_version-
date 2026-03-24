@@ -115,6 +115,77 @@ function formatDate(value: string | null | undefined): string {
   return value && value.trim() ? value : "-";
 }
 
+function normalizePlanningDate(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed.toLowerCase() === "none" || trimmed.toLowerCase() === "null") return null;
+  return trimmed;
+}
+
+function formatPlanningDate(value: string | null | undefined): string {
+  return formatDate(normalizePlanningDate(value));
+}
+
+function describePlanningDate(value: string | null | undefined): string {
+  const normalized = normalizePlanningDate(value);
+  return normalized ? formatDate(normalized) : "unknown date";
+}
+
+type RecoveryBurndownStep = {
+  date: string | null;
+  quantity: number;
+  label: string;
+  sourceType: PlanningSource["source_type"];
+  remainingAfter: number;
+};
+
+function comparePlanningSourceDate(a: PlanningSource, b: PlanningSource): number {
+  const left = normalizePlanningDate(a.date) ?? "9999-12-31";
+  const right = normalizePlanningDate(b.date) ?? "9999-12-31";
+  if (left !== right) return left.localeCompare(right);
+  const leftRef = a.ref_id ?? Number.MAX_SAFE_INTEGER;
+  const rightRef = b.ref_id ?? Number.MAX_SAFE_INTEGER;
+  if (leftRef !== rightRef) return leftRef - rightRef;
+  return a.label.localeCompare(b.label);
+}
+
+function buildRecoveryBurndown(
+  shortageAtStart: number,
+  recoverySources: PlanningSource[],
+): RecoveryBurndownStep[] {
+  let remaining = shortageAtStart;
+  return [...recoverySources]
+    .sort(comparePlanningSourceDate)
+    .filter((source) => source.quantity > 0)
+    .map((source) => {
+      remaining = Math.max(0, remaining - source.quantity);
+      return {
+        date: normalizePlanningDate(source.date),
+        quantity: source.quantity,
+        label: source.label,
+        sourceType: source.source_type,
+        remainingAfter: remaining,
+      };
+    });
+}
+
+function recoverySummaryText(shortageAtStart: number, recoverySources: PlanningSource[]): string {
+  if (shortageAtStart <= 0) return "No start-date gap.";
+  const steps = buildRecoveryBurndown(shortageAtStart, recoverySources);
+  if (!steps.length) return "No later recovery scheduled.";
+  const recovered = Math.min(
+    shortageAtStart,
+    steps.reduce((total, step) => total + step.quantity, 0),
+  );
+  const resolvedStep = steps.find((step) => step.remainingAfter === 0);
+  if (resolvedStep) {
+    return `Recovered ${recovered} by ${describePlanningDate(resolvedStep.date)}. Resolved on ${describePlanningDate(resolvedStep.date)}.`;
+  }
+  const lastStep = steps[steps.length - 1];
+  return `Recovered ${recovered} by ${describePlanningDate(lastStep?.date)}. Still short ${steps[steps.length - 1]?.remainingAfter ?? shortageAtStart}.`;
+}
+
 function pickDefaultProject(projects: WorkspaceProjectSummary[]): WorkspaceProjectSummary | null {
   return (
     projects.find((project) => project.status !== "COMPLETED" && project.status !== "CANCELLED") ??
@@ -144,7 +215,7 @@ function PlanningSourceList({
                 "inline-flex items-center gap-2 rounded-full px-2 py-1 text-xs font-medium",
                 sourceTone(source.source_type),
               )}
-              title={source.date ?? undefined}
+              title={normalizePlanningDate(source.date) ?? undefined}
             >
               <span>{source.quantity}</span>
               <span>{source.label}</span>
@@ -153,6 +224,63 @@ function PlanningSourceList({
         </div>
       ) : (
         <p className="text-xs text-slate-500">{emptyLabel}</p>
+      )}
+    </div>
+  );
+}
+
+function RecoveryBurndownList({
+  shortageAtStart,
+  recoverySources,
+}: {
+  shortageAtStart: number;
+  recoverySources: PlanningSource[];
+}) {
+  const steps = buildRecoveryBurndown(shortageAtStart, recoverySources);
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Recovery Burndown</p>
+        <p className="text-xs text-slate-500">{recoverySummaryText(shortageAtStart, recoverySources)}</p>
+      </div>
+      {steps.length ? (
+        <div className="overflow-x-auto rounded-2xl border border-slate-200">
+          <table className="min-w-full text-sm">
+            <thead className="bg-slate-50 text-left text-slate-500">
+              <tr>
+                <th className="px-3 py-2">Date</th>
+                <th className="px-3 py-2">Recovery</th>
+                <th className="px-3 py-2">Source</th>
+                <th className="px-3 py-2">Gap After</th>
+              </tr>
+            </thead>
+            <tbody>
+              {steps.map((step, index) => (
+                <tr key={`${step.date ?? "unknown"}-${step.label}-${index}`} className="border-t border-slate-200">
+                  <td className="px-3 py-2">{formatPlanningDate(step.date)}</td>
+                  <td className="px-3 py-2 font-semibold text-sky-800">+{step.quantity}</td>
+                  <td className="px-3 py-2">
+                    <span
+                      className={cx(
+                        "inline-flex items-center rounded-full px-2 py-1 text-xs font-medium",
+                        sourceTone(step.sourceType),
+                      )}
+                    >
+                      {step.label}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 font-semibold">
+                    {step.remainingAfter === 0 ? "Fully resolved" : `${step.remainingAfter} remaining`}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : (
+        <p className="rounded-2xl border border-dashed border-slate-300 px-4 py-4 text-sm text-slate-500">
+          No later recovery source recorded yet.
+        </p>
       )}
     </div>
   );
@@ -497,6 +625,10 @@ function ItemDrawerContent(_props: {
                       emptyLabel="No recovery source recorded after start."
                     />
                   </div>
+                  <RecoveryBurndownList
+                    shortageAtStart={project.shortage_at_start}
+                    recoverySources={project.recovery_sources_after_start}
+                  />
                 </div>
               ))}
               {!planningData?.projects.length && (
@@ -683,6 +815,7 @@ function PlanningBoardRow({
   onOpenItem: (itemId: number, label: string) => void;
   onOpenRfq: (projectId: number, itemId: number | null, label?: string) => void;
 }) {
+  const recoverySummary = recoverySummaryText(row.shortage_at_start, row.recovery_sources_after_start);
   return (
     <tr className="border-b border-slate-100 align-top">
       <td className="px-2 py-3">
@@ -702,6 +835,7 @@ function PlanningBoardRow({
         <p className="text-xs text-slate-500">
           Generic {row.future_generic_recovery_quantity} | Dedicated {row.future_dedicated_recovery_quantity}
         </p>
+        <p className="mt-1 text-xs text-slate-500">{recoverySummary}</p>
       </td>
       <td className="px-2 py-3 font-semibold text-slate-900">{row.remaining_shortage_quantity}</td>
       <td className="px-2 py-3">

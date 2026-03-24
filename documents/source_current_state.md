@@ -82,11 +82,14 @@ Last updated: 2026-03-23 (JST)
   - default view: project summary dashboard with committed-vs-draft semantics
   - pipeline view: committed projects with `generic_committed_total` and `cumulative_generic_consumed_before_total`
   - board view: selected-project timeline plus shortage grid with `supply_sources_by_start` and `recovery_sources_after_start`
+  - planning-board recovery cells now summarize when later arrivals resolve the gap, including unresolved-later cases (`Still short ...`)
+  - missing recovery dates now render as unknown-date recovery instead of exposing backend `None` placeholders in summary text or burndown dates
 - route-leave blockers on the workspace page now run inside the supported data-router context
 - workspace unsaved-change navigation protection now uses `useBlocker` with an explicit confirm/reset flow instead of `unstable_usePrompt`, preventing client-side tab navigation from getting stuck after workspace/RFQ transitions
   - right-side drawer uses local breadcrumb navigation for project, item, and RFQ context while keeping the board visible
   - project drawer now uses the same editor logic as `/projects`, including bulk requirement preview/apply
   - item drawer now shows incoming orders plus cross-project item planning allocation context from `/api/items/{item_id}/planning-context`
+  - item drawer planning cards now include a dated recovery burndown table derived from `recovery_sources_after_start`, showing each recovery step and the remaining gap after that date
   - RFQ drawer now uses the same batch/line editor logic as `/rfq`
   - board date state now mirrors the effective planning `target_date` after same-project refreshes when there is no pending local preview edit
   - drawer close, breadcrumb back, route-leave, and stack-truncation flows now protect unsaved project/RFQ drafts

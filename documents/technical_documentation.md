@@ -29,11 +29,14 @@ This document explains the implemented architecture of the Materials Management 
   - default view: project summary dashboard with committed-vs-draft semantics
   - secondary view: committed pipeline table with cumulative generic-consumption metrics
   - deep-dive view: planning board with server-driven shortage rows and supply-source breakdowns
-- frontend routing now boots through a React Router data router (`createBrowserRouter` + `RouterProvider`)
+  - planning board rows now summarize later recovery as compact outcome text (`Recovered by ...`, `Resolved on ...`, or `Still short ...`) instead of showing only aggregate recovered quantity
+  - undated recovery sources are treated as unknown-date recovery in those summaries and burndown rows instead of rendering backend null placeholders
+  - frontend routing now boots through a React Router data router (`createBrowserRouter` + `RouterProvider`)
 - workspace route-leave protection now uses `useBlocker` plus an explicit confirmation effect instead of `unstable_usePrompt`, avoiding stale blocked-navigation state after leaving workspace/RFQ flows
   - right-side drawer infrastructure provides local breadcrumb navigation for project, item, and procurement context without leaving the board
   - project drawer now mounts the shared project editor, including preview-first bulk requirement entry
   - item drawer now combines inventory, incoming orders, item flow, and cross-project planning allocation context
+  - item planning context cards now include a chronological recovery burndown table showing how the initial start-date gap burns down across dated recovery sources
   - legacy RFQ drawer paths are being reduced in favor of the dedicated `/procurement` page and procurement summary links
   - board date state re-syncs to the effective planning `target_date` when the same project refreshes and no local preview edit is pending
   - drawer close, breadcrumb back, route leave, and drawer-stack truncation flows now guard unsaved project/RFQ drafts

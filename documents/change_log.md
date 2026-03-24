@@ -1,3 +1,17 @@
+## 2026-03-24
+
+### Fixed
+
+- Workspace planning recovery summaries and burndown rows now treat missing later-arrival dates as unknown instead of surfacing backend null placeholders such as `None`.
+  - Recovery-source sorting now pushes undated sources to the end of the burndown sequence.
+  - Summary copy now falls back to `unknown date` when recovery exists but no arrival date is available.
+
+### Changed
+
+- Workspace planning recovery UX now shows later-arrival impact more explicitly.
+  - Planning-board `Recovered Later` cells now summarize outcome timing in compact text such as `Recovered by ...`, `Resolved on ...`, or `Still short ...`.
+  - Item drawer planning cards now include a chronological recovery burndown table built from `recovery_sources_after_start`, showing each dated recovery step and the remaining start-date gap after that step.
+
 ## 2026-03-23 (batch item registration encoding fix)
 
 ### Fixed
