@@ -4,41 +4,35 @@
 
 This document explains the implemented architecture of the Materials Management application, its database design, and the key maintenance rules that keep behavior consistent across API, CLI, and file-based workflows.
 
-## PostgreSQL Migration Status (2026-03-24)
+## Deployment Architecture
 
-- The backend bootstrap now targets PostgreSQL through a SQLAlchemy-managed engine and Alembic baseline migration.
-- The existing raw-SQL service layer is temporarily preserved behind a compatibility connection wrapper so application behavior can keep using the current query surface while the storage engine changes.
-- Docker deployment artifacts were added:
-  - root `docker-compose.yml`
-  - root `docker-compose.override.yml`
-  - root `docker-compose.test.yml`
-  - `backend/Dockerfile`
-  - `frontend/Dockerfile`
-  - `frontend/nginx.conf`
-- Header-based user identification was added for mutation requests:
+- Backend targets PostgreSQL through a SQLAlchemy-managed engine and Alembic baseline migration.
+- The raw-SQL service layer is preserved behind a compatibility connection wrapper while the storage engine is PostgreSQL.
+- Docker deployment stack:
+  - `docker-compose.yml` (production), `docker-compose.override.yml` (local dev), `docker-compose.test.yml` (test DB)
+  - `backend/Dockerfile`, `frontend/Dockerfile`, `frontend/nginx.conf`
+- Header-based user identification for mutation requests:
   - anonymous reads remain allowed
   - mutation requests require `X-User-Name`
   - resolved users are stored in `request.state.user`
   - database-side audit triggers populate `created_by` / `updated_by` / `performed_by` where supported
-- Frontend user administration now exists as a dedicated `/users` page.
-  - `GET /api/users` remains the active-user feed for the global picker
-  - `GET /api/users?include_inactive=true` backs the management screen so inactive rows can be reviewed and reactivated
-  - create/update/deactivate flows emit a frontend refresh signal so the shared header picker stays aligned without a full-page reload
-- Upload-first shared-server batch import adapters now exist for the main browser-facing batch workflows.
-  - `POST /api/items/batch-upload` stores uploaded missing-item registration CSVs under `imports/staging/items/<job-id>/...` and reuses `register_unregistered_item_csvs(...)`
-  - `POST /api/orders/batch-upload` stores an uploaded ZIP under `imports/staging/orders/<job-id>/...`, extracts accepted CSV/PDF files into the expected `unregistered` layout, and reuses `import_unregistered_order_csvs(...)`
-  - upload-first Orders ZIP imports now treat `pdf_link` as a filename-first field; path-shaped values are stripped down to filename semantics for the staged browser workflow, while legacy path-capable resolution remains available in fallback/admin flows
-  - the shared-server UI now presents upload-first controls on Items and Orders pages while keeping server-resident batch actions only as advanced fallback paths
-- Generated artifact delivery now exists for batch-produced missing-item register CSVs.
-  - `GET /api/artifacts`
-  - `GET /api/artifacts/{artifact_id}`
-  - `GET /api/artifacts/{artifact_id}/download`
-  - the current implementation is a lightweight filesystem-backed registry over generated CSVs under `imports/items/unregistered/`; no separate artifact table is required yet
-- `backend/main.py` is now a server entrypoint only; the prior CLI command surface is no longer the target deployment model.
+- Frontend user administration at `/users` page.
+  - `GET /api/users` provides the active-user feed for the global picker
+  - `GET /api/users?include_inactive=true` backs the management screen
+  - create/update/deactivate flows emit a frontend refresh signal so the shared header picker stays aligned
+- Upload-first shared-server batch import adapters for browser-facing batch workflows:
+  - `POST /api/items/batch-upload` stages uploaded CSVs under `imports/staging/items/<job-id>/...` and reuses `register_unregistered_item_csvs(...)`
+  - `POST /api/orders/batch-upload` stages an uploaded ZIP under `imports/staging/orders/<job-id>/...`, extracts CSV/PDF files into the expected layout, and reuses `import_unregistered_order_csvs(...)`
+  - upload-first Orders ZIP imports treat `pdf_link` as a filename-first field; path-shaped values are stripped to filename semantics
+  - the UI presents upload-first controls on Items and Orders pages while keeping server-resident batch actions as advanced fallback paths
+- Generated artifact delivery for batch-produced missing-item register CSVs:
+  - `GET /api/artifacts`, `GET /api/artifacts/{artifact_id}`, `GET /api/artifacts/{artifact_id}/download`
+  - lightweight filesystem-backed registry over generated CSVs under `imports/items/unregistered/`
+- `backend/main.py` is a server entrypoint only (no CLI).
 
 ## Operating Profile (Confirmed)
 
-- Deployment posture: local-first personal usage today, with future migration path to shared multi-user operation.
+- Deployment posture: shared-server Docker Compose deployment (PostgreSQL + backend + nginx/frontend).
 - Auth posture: PoC runs without enforced authentication, but API/architecture should remain RBAC-ready (`admin`, `operator`, `viewer` planned).
 - Timezone: fixed JST across backend date/time handling.
 - Scale target: ~10,000 items, ~5,000 orders, ~100,000 transactions.
@@ -104,19 +98,16 @@ This document explains the implemented architecture of the Materials Management 
 flowchart LR
     subgraph Clients
         FE[React Frontend\nfrontend/src]
-        CLIUser[CLI Operator]
     end
 
-    FE -->|HTTP JSON /api| API[FastAPI Adapter\nbackend/app/api.py]
-    CLIUser -->|commands| CLI[CLI Adapter\nbackend/main.py]
+    FE -->|HTTP JSON /api| NGINX[nginx reverse proxy\nfrontend/nginx.conf]
+    NGINX -->|proxy_pass| API[FastAPI Adapter\nbackend/app/api.py]
 
     API --> SVC[Domain Service Layer\nbackend/app/service.py]
-    CLI --> SVC
 
-    API --> DBINIT[DB Init/Migration\nbackend/app/db.py]
-    CLI --> DBINIT
+    API --> DBINIT[DB Init/Migration\nbackend/app/db.py\n+ Alembic]
 
-    SVC -->|SQL + transactions| DB[(SQLite\nbackend/database/inventory.db)]
+    SVC -->|SQL + transactions| DB[(PostgreSQL\nDocker volume)]
     SVC -->|CSV/PDF read-write and moves| FS[(Workspace Files\nimports/orders/ + exports/)]
     SVC --> QPATHS[Path Rules\nbackend/app/order_import_paths.py]
     SVC --> UTILS[Validation/Date Utils\nbackend/app/utils.py]
@@ -124,8 +115,8 @@ flowchart LR
 
 ### Why it is implemented this way
 
-1. Single business-logic layer (`service.py`) is shared by API and CLI.
-   This avoids duplicated logic and keeps behavior consistent for web and batch operations.
+1. Single business-logic layer (`service.py`) is shared by all API routes.
+   This avoids duplicated logic and keeps behavior consistent across all operations.
 2. Current-state table + event log model.
    `inventory_ledger` gives fast current stock lookup, while `transaction_log` enables traceability and undo.
 3. Filesystem-aware order ingestion.
@@ -140,17 +131,17 @@ flowchart LR
    DB migration backfills `orders.project_id_manual` for legacy rows that have `project_id` but no ORDERED RFQ ownership, preventing RFQ unlink synchronization from clearing historical manual assignments.
 6. Alias-based normalization strategy.
    `supplier_item_aliases` maps supplier-specific ordered numbers to canonical items; `category_aliases` merges categories without destructive rewrites.
-7. Local PoC with growth path.
-   The current stack is intentionally simple (SQLite + single service layer) while preserving extension points for future RBAC and multi-user deployment.
+7. Docker Compose deployment with growth path.
+   The current stack uses PostgreSQL via Docker Compose with a single service layer, preserving extension points for future RBAC enforcement and horizontal scaling.
 
 ### Inventory and Undo Flow (Mermaid)
 
 ```mermaid
 sequenceDiagram
     actor User
-    participant Adapter as API/CLI Adapter
+    participant Adapter as API Adapter
     participant Service as service.py
-    participant DB as SQLite
+    participant DB as PostgreSQL
 
     User->>Adapter: Move / Reserve / Consume / Arrival
     Adapter->>Service: domain function call
@@ -334,6 +325,60 @@ erDiagram
         string created_at
     }
 
+    USERS {
+        int user_id PK
+        string username UK
+        string display_name
+        string role
+        bool is_active
+        string created_at
+        string updated_at
+    }
+
+    RESERVATION_ALLOCATIONS {
+        int allocation_id PK
+        int reservation_id FK
+        int item_id FK
+        string location
+        int quantity
+        string status
+        string created_at
+        string released_at
+        string note
+    }
+
+    PROCUREMENT_BATCHES {
+        int batch_id PK
+        int project_id FK
+        string status
+        string target_date
+        string note
+        string created_at
+        string updated_at
+    }
+
+    PROCUREMENT_LINES {
+        int line_id PK
+        int batch_id FK
+        int item_id FK
+        int required_quantity
+        int finalized_quantity
+        string supplier_name
+        string status
+        string expected_arrival
+        int linked_order_id FK
+        string note
+    }
+
+    ORDER_LINEAGE_EVENTS {
+        int event_id PK
+        string event_type
+        int source_order_id FK
+        int target_order_id FK
+        string metadata
+        string created_at
+    }
+
     MANUFACTURERS ||--o{ ITEMS_MASTER : owns
     ITEMS_MASTER ||--o{ INVENTORY_LEDGER : stocked_in
     SUPPLIERS ||--o{ QUOTATIONS : issues
@@ -353,6 +398,13 @@ erDiagram
     ITEMS_MASTER ||--o{ SUPPLIER_ITEM_ALIASES : canonical_target
     IMPORT_JOBS ||--o{ IMPORT_JOB_EFFECTS : records
     IMPORT_JOBS ||--o{ IMPORT_JOBS : redo_links
+    RESERVATIONS ||--o{ RESERVATION_ALLOCATIONS : allocates
+    ITEMS_MASTER ||--o{ RESERVATION_ALLOCATIONS : allocated_item
+    PROJECTS ||--o{ PROCUREMENT_BATCHES : procurement_context
+    PROCUREMENT_BATCHES ||--o{ PROCUREMENT_LINES : has_lines
+    ITEMS_MASTER ||--o{ PROCUREMENT_LINES : procured_item
+    ORDERS ||--o{ ORDER_LINEAGE_EVENTS : lineage_source
+    ORDERS ||--o{ ORDER_LINEAGE_EVENTS : lineage_target
 ```
 
 Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `items_master.category`; it is a soft-merge mapping used during reads and filters.
@@ -361,8 +413,8 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 
 ### 1) Business-rule centralization
 
-- Add or change domain behavior in `backend/app/service.py`, then expose it through API/CLI adapters.
-- Avoid adding business logic directly in `api.py` route handlers or CLI parser branches.
+- Add or change domain behavior in `backend/app/service.py`, then expose it through API adapters in `api.py`.
+- Avoid adding business logic directly in `api.py` route handlers.
 
 ### 2) Inventory correctness invariants
 
@@ -478,9 +530,9 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 
 ## Recommended update workflow
 
-1. Change schema/migration in `app/db.py` if needed.
+1. Change schema/migration in `app/db.py` or Alembic if needed.
 2. Update domain logic in `app/service.py`.
-3. Expose endpoints/CLI routes in `app/api.py` and `main.py`.
+3. Expose endpoints in `app/api.py`.
 4. Update frontend API usage/types in `frontend/src/lib`.
 5. Add or update tests in `backend/tests`.
 

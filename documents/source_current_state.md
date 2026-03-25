@@ -15,13 +15,14 @@ Last updated: 2026-03-25 (JST)
 ## 2. Repository Structure (active areas)
 
 - `backend/`
-  - `main.py`: API server entrypoint
-- `app/api.py`: HTTP API routes, including temporary legacy compatibility aliases during redesign
-  - `app/service.py`: domain logic (single business logic layer) still running on raw SQL through a PostgreSQL compatibility wrapper
+  - `main.py`: API server entrypoint (server-only, no CLI)
+  - `app/api.py`: HTTP API routes
+  - `app/service.py`: domain logic (single business logic layer) running on raw SQL through a PostgreSQL compatibility wrapper
   - `app/db.py`: SQLAlchemy engine bootstrap + Alembic runner + compatibility connection wrapper
+  - `alembic/`: database migration scripts
   - `tests/`: integration/service/path tests
 - `frontend/`
-  - `src/pages/`: active pages wired into the router: Dashboard, Workspace, Items (Search), Locations, Projects, Procurement, Orders, Inventory (Movements), Reservations (Reserve), BOM, Snapshot, History, Master. Unused page files retained but not routed: `PlanningPage.tsx`, `RfqPage.tsx`, `AssembliesPage.tsx`, `PurchaseCandidatesPage.tsx`.
+  - `src/pages/`: active pages wired into the router: Dashboard, Workspace, Items (Search), Locations, Projects, Procurement, Orders, Inventory (Movements), Reservations (Reserve), BOM, Snapshot, History, Master, Users. Unused page files retained but not routed: `PlanningPage.tsx`, `RfqPage.tsx`, `AssembliesPage.tsx`, `PurchaseCandidatesPage.tsx`.
   - `src/lib/api.ts`: API client now defaults to `VITE_API_BASE` / `/api` and injects `X-User-Name` on mutations
 - `documents/`
   - `technical_documentation.md`
@@ -51,7 +52,7 @@ Last updated: 2026-03-25 (JST)
 
 ### 3.2 Data Model
 
-- SQLite with normalized core entities:
+- PostgreSQL with normalized core entities:
   - items, inventory ledger, orders/quotations, reservations
   - projects with item-based requirements
   - sequential planning pipeline summaries derived from project status + planned_start
@@ -292,7 +293,6 @@ Last updated: 2026-03-25 (JST)
 ## 7. Known Directional Gaps (intentional for current phase)
 
 - Auth/RBAC enforcement is not active yet (capability scaffolding only).
-- Multi-user concurrency hardening beyond current SQLite/local posture is not implemented.
 - Hash-based quotation duplicate detection and strict provenance metadata are planned, not yet implemented.
 - Compliance controls (retention/backup policy enforcement) are not yet implemented.
 

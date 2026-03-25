@@ -1,10 +1,10 @@
 # PostgreSQL / Windows Server Deployment Instructions
 
-Last updated: 2026-03-24 (JST)
+Last updated: 2026-03-25 (JST)
 
 ## Purpose
 
-This runbook covers the server-side steps that still need to be performed on the target Windows Server after the repository-side PostgreSQL migration work.
+This runbook covers the server-side steps for deploying the application on the target Windows Server using Docker Compose.
 
 ## What Was Added In The Repository
 
@@ -63,7 +63,13 @@ docker compose exec backend uv run alembic upgrade head
 
 Mutation requests require an active user in the `users` table. Before handing the system to operators, create at least one user.
 
-Example:
+Option A — Use the frontend `/users` page (recommended after first startup):
+
+1. Open `http://<server>/users` in a browser.
+2. Create a user with admin role.
+3. Select that user in the header dropdown.
+
+Option B — Create via backend shell:
 
 ```powershell
 docker compose exec backend uv run python -c "from app.db import get_connection, init_db; from app import service; init_db(); conn=get_connection(); service.create_user(conn, {'username':'admin','display_name':'Admin','role':'admin','is_active':True}); conn.commit(); conn.close()"
