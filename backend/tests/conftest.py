@@ -28,6 +28,9 @@ def workspace_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
     orders_unregistered_pdf_root = orders_unregistered_root / "pdf_files"
     orders_registered_csv_root = orders_registered_root / "csv_files"
     orders_registered_pdf_root = orders_registered_root / "pdf_files"
+    staging_import_root = imports_root / "staging"
+    items_staging_root = staging_import_root / "items"
+    orders_staging_root = staging_import_root / "orders"
 
     config_overrides = {
         "WORKSPACE_ROOT": workspace_root,
@@ -46,6 +49,9 @@ def workspace_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
         "ORDERS_IMPORT_UNREGISTERED_PDF_ROOT": orders_unregistered_pdf_root,
         "ORDERS_IMPORT_REGISTERED_CSV_ROOT": orders_registered_csv_root,
         "ORDERS_IMPORT_REGISTERED_PDF_ROOT": orders_registered_pdf_root,
+        "STAGING_IMPORT_ROOT": staging_import_root,
+        "ITEMS_IMPORT_STAGING_ROOT": items_staging_root,
+        "ORDERS_IMPORT_STAGING_ROOT": orders_staging_root,
     }
     for name, value in config_overrides.items():
         monkeypatch.setattr(config, name, value)
@@ -53,6 +59,8 @@ def workspace_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
     monkeypatch.setattr(service, "DEFAULT_EXPORTS_DIR", exports_root)
     monkeypatch.setattr(service, "ITEMS_IMPORT_UNREGISTERED_ROOT", items_unregistered_root)
     monkeypatch.setattr(service, "ITEMS_IMPORT_REGISTERED_ROOT", items_registered_root)
+    monkeypatch.setattr(service, "ITEMS_IMPORT_STAGING_ROOT", items_staging_root)
+    monkeypatch.setattr(service, "ORDERS_IMPORT_STAGING_ROOT", orders_staging_root)
 
     monkeypatch.setattr(order_import_paths, "WORKSPACE_ROOT", workspace_root)
     monkeypatch.setattr(order_import_paths, "ORDERS_IMPORT_UNREGISTERED_ROOT", orders_unregistered_root)

@@ -39,6 +39,46 @@
   - `uv run python -m pytest`
   - Result: `170 passed`
 
+## 2026-03-25 (shared-server adaptation phase 2)
+
+### Added
+
+- Implemented Phase 2 of `documents/postgresql_migration_plan/shared_server_adaptation_plan.md`.
+  - Added upload-first Items batch registration endpoint `POST /api/items/batch-upload`.
+  - Added upload-first Orders ZIP endpoint `POST /api/orders/batch-upload`.
+  - Added server-managed staging roots under:
+    - `imports/staging/items/<job-id>/...`
+    - `imports/staging/orders/<job-id>/...`
+- Added backend staging adapters that reuse existing domain import logic instead of replacing it.
+  - uploaded item registration CSVs are materialized into a staged `unregistered` folder and then passed to `register_unregistered_item_csvs(...)`
+  - uploaded order ZIP contents are normalized into staged `csv_files/` and `pdf_files/` folders and then passed to `import_unregistered_order_csvs(...)`
+- Added backend API regression coverage for:
+  - Items batch upload success path
+  - Orders batch ZIP success path
+  - Orders batch ZIP validation failure when no CSV is present
+
+### Changed
+
+- Items page main batch action is now `Upload Batch CSVs`, with the old server-folder batch action kept as an explicit legacy fallback.
+- Orders page main batch action is now `Upload Orders ZIP`, with the old server-folder batch action kept as an explicit legacy fallback / advanced path.
+- Orders ZIP upload accepts both canonical `csv_files/...` and `pdf_files/...` package layouts and simpler supplier-subfolder package layouts, normalizing both into the existing import folder shape before import starts.
+
+### Tests
+
+- Backend targeted upload staging/API run:
+  - `uv run python -m pytest tests/test_api_integration.py -k "orders_batch_upload_endpoint or items_batch_upload_endpoint or import_unregistered_endpoint"`
+  - Result: `3 passed`
+- Backend full PostgreSQL suite:
+  - `uv run python -m pytest`
+  - Result: `174 passed`
+- Frontend type check:
+  - `node .\\node_modules\\typescript\\bin\\tsc -b`
+- Frontend tests:
+  - `node .\\node_modules\\vitest\\vitest.mjs run`
+  - Result: `29 passed`
+- Frontend production build:
+  - `node .\\node_modules\\vite\\bin\\vite.js build`
+
 ## 2026-03-24 (PostgreSQL migration foundation)
 
 ### Fixed

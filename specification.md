@@ -886,7 +886,7 @@ All management pages handling CRUD operations (Items, Orders, Reservations, etc.
 | Planning | Sequential project netting, start-date shortage analysis, convert uncovered rows into RFQ batches |
 | RFQ | Project-dedicated RFQ batches, quote refinement, order linking |
 | Purchase Candidates | Secondary persistent shortage list for BOM / ad-hoc pre-PO tracking |
-| Orders | Bulk import orders, register missing items, alias CSV import, **batch import+move from unregistered folders**, **orders/quotations management** |
+| Orders | Bulk import orders, register missing items, alias CSV import, **upload-first Orders ZIP batch import with server-managed staging**, legacy folder batch fallback, **orders/quotations management** |
 | Arrival | Process arrivals, partial deliveries (supports bulk resolution) |
 | Movements | Single/batch movements, all operation types, CSV import (`operation_type,item_id,quantity,from_location,to_location,location,note`) |
 | Reserve | Reservation management, BOM batch reservation, CSV import (`item_id` or `assembly`, `quantity`, optional `assembly_quantity/purpose/deadline/note/project_id`) |
@@ -976,6 +976,7 @@ Base URL: `http://localhost:8000/api`
 | GET | `/items/import-reference` | Download live item/alias reference CSV |
 | POST | `/items/import-preview` | Preview item/alias CSV reconciliation before commit |
 | POST | `/items/import` | Import items and supplier-scoped aliases from CSV; accepts optional preview-confirmation `row_overrides` (`canonical_item_number`, `units_per_order`) with strict `422` validation for malformed or invalid override payloads, and archives successful manual-import CSV content into `imports/items/registered/<YYYY-MM>/` for consolidation |
+| POST | `/items/batch-upload` | Upload one-or-more missing-item registration CSVs into server-managed staging, then run the existing unregistered batch registration flow against the staged files |
 | GET | `/items/{item_id}` | Get item details |
 | POST | `/items` | Create item |
 | PUT | `/items/{item_id}` | Update item |
@@ -1012,6 +1013,7 @@ Base URL: `http://localhost:8000/api`
 | POST | `/orders/merge` | Merge two open compatible orders |
 | GET | `/orders/{order_id}/lineage` | List split/merge lineage events for the order |
 | POST | `/orders/import` | Import orders from CSV; accepts optional preview-confirmation `row_overrides` and `alias_saves` form fields with strict `422` validation for malformed or invalid payloads |
+| POST | `/orders/batch-upload` | Upload one ZIP package, extract it into server-managed staging, then run the existing unregistered batch order import flow against the staged CSV/PDF layout |
 | POST | `/orders/{order_id}/arrival` | Process order arrival |
 | POST | `/orders/{order_id}/partial-arrival` | Process partial arrival |
 | GET | `/quotations` | List quotations |
@@ -1312,6 +1314,21 @@ For batch-generated consolidated register CSV, additional provenance columns may
 `
 <workspace_root>/
   imports/
+    staging/
+      items/
+        <job-id>/
+          unregistered/
+            <missing_items_registration.csv>
+      orders/
+        <job-id>/
+          orders_batch.zip
+          unregistered/
+            csv_files/
+              <supplier_name>/
+                <order>.csv
+            pdf_files/
+              <supplier_name>/
+                <quotation>.pdf
     orders/
       unregistered/
         csv_files/
@@ -1350,6 +1367,7 @@ For batch-generated consolidated register CSV, additional provenance columns may
 - All quotation PDFs are stored under `imports/orders/registered/pdf_files/<supplier>/`
 - `pdf_link` in database stores relative path from workspace root
 - PDF files are moved (not copied) during batch import processing
+- Upload-first Orders batch imports first extract browser-uploaded ZIP contents into `imports/staging/orders/<job-id>/...`, then move accepted PDFs into canonical registered storage during the existing import flow
 - Input paths are normalized (including known legacy typos and mixed separators)
 - Missing/unresolved PDF links are returned as warnings in batch reports
 - Filename collisions are handled by deterministic suffixing (`_1`, `_2`, ...)

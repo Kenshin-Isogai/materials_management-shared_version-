@@ -87,6 +87,10 @@ Last updated: 2026-03-25 (JST)
 - Added `/users` as the dedicated shared-server user administration route.
   - supports browser-side create, edit, activate, and deactivate flows against the existing `/api/users` endpoints
   - the global header user picker now refreshes after user mutations and automatically falls back to the next active user if the selected one is deactivated
+- Shared-server batch workflows are now upload-first on the main Items and Orders pages.
+  - Items page now exposes `Upload Batch CSVs`, posting multi-file form data to `POST /api/items/batch-upload`
+  - Orders page now exposes `Upload Orders ZIP`, posting one ZIP package to `POST /api/orders/batch-upload`
+  - both pages keep the old server-folder operations only as explicit legacy fallback controls
 - Added `/workspace` as the summary-first future-demand route.
   - default view: project summary dashboard with committed-vs-draft semantics
   - pipeline view: committed projects with `generic_committed_total` and `cumulative_generic_consumed_before_total`
@@ -237,10 +241,18 @@ Last updated: 2026-03-25 (JST)
 ## 5. File and Import Workflow State
 
 - Canonical order import folder layout is active:
+  - staging roots:
+    - `imports/staging/items/<job-id>/unregistered/`
+    - `imports/staging/orders/<job-id>/orders_batch.zip`
+    - `imports/staging/orders/<job-id>/unregistered/csv_files/<supplier>/`
+    - `imports/staging/orders/<job-id>/unregistered/pdf_files/<supplier>/`
   - `imports/orders/unregistered/csv_files/<supplier>/`
   - `imports/orders/unregistered/pdf_files/<supplier>/`
   - `imports/orders/registered/csv_files/<supplier>/`
   - `imports/orders/registered/pdf_files/<supplier>/`
+- Items batch upload now stages browser-uploaded missing-item registration CSVs under `imports/staging/items/<job-id>/...` and then reuses the existing batch registration flow.
+- Orders batch upload now stages an uploaded ZIP under `imports/staging/orders/<job-id>/...`, extracts accepted CSV/PDF payloads into canonical unregistered subfolders, and then reuses the existing unregistered import flow.
+- Orders ZIP staging accepts either canonical `csv_files/` and `pdf_files/` paths or simpler supplier-subfolder packaging, normalizing both into the same domain input structure.
 - Batch import functions normalize legacy/typo paths, move files safely, and emit warnings for unresolved paths.
 - Successful unregistered order batch imports now rewrite the moved registered CSV archive so each stored `pdf_link` matches the final registered PDF location after the batch move completes.
 - `migrate_orders_import_layout()` now rewrites stale `pdf_link` values found in both unregistered and registered order CSV files, in addition to quotation DB rows, so archived registered CSVs stay aligned with the canonical `imports/orders/...` directory structure.
@@ -267,9 +279,9 @@ Last updated: 2026-03-25 (JST)
 
 ## 6. Quality State
 
-- Backend tests: `122 passed` (latest run on 2026-03-06).
-- Frontend tests: `15 passed` via `npm run test` (latest run on 2026-03-08).
-- Frontend production build: success (latest run on 2026-03-08).
+- Backend tests: `174 passed` via `uv run python -m pytest` (latest run on 2026-03-25).
+- Frontend tests: `29 passed` via `node .\node_modules\vitest\vitest.mjs run` (latest run on 2026-03-25).
+- Frontend production build: success via `node .\node_modules\vite\bin\vite.js build` (latest run on 2026-03-25).
 
 ## 7. Known Directional Gaps (intentional for current phase)
 

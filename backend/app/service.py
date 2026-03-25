@@ -13,12 +13,15 @@ import shutil
 import sqlite3
 from typing import Any, Iterable
 from uuid import uuid4
+import zipfile
 
 from .config import (
     DEFAULT_EXPORTS_DIR,
     ITEMS_IMPORT_MAX_CONSOLIDATED_ROWS,
+    ITEMS_IMPORT_STAGING_ROOT,
     ITEMS_IMPORT_UNREGISTERED_ROOT,
     ITEMS_IMPORT_REGISTERED_ROOT,
+    ORDERS_IMPORT_STAGING_ROOT,
 )
 from .errors import AppError
 from .order_import_paths import (
@@ -54,6 +57,170 @@ class Pagination:
 
 def _rows_to_dict(rows: Iterable[sqlite3.Row]) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
+
+
+def _safe_staging_component(value: str, default: str) -> str:
+    text = (value or "").strip()
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", text).strip("._")
+    return safe or default
+
+
+def _create_staging_job_root(base_root: Path, prefix: str) -> tuple[str, Path]:
+    job_id = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
+    job_root = base_root / job_id
+    job_root.mkdir(parents=True, exist_ok=False)
+    return job_id, job_root
+
+
+def _write_uploaded_batch_csvs_to_staging(
+    files: list[tuple[str, bytes]],
+    *,
+    staging_root: str | Path | None = None,
+) -> dict[str, Any]:
+    if not files:
+        raise AppError(
+            code="INVALID_REQUEST",
+            message="At least one CSV file is required",
+            status_code=422,
+        )
+
+    base_root = Path(staging_root) if staging_root else ITEMS_IMPORT_STAGING_ROOT
+    job_id, job_root = _create_staging_job_root(base_root, "items")
+    unregistered_root = job_root / "unregistered"
+    unregistered_root.mkdir(parents=True, exist_ok=True)
+
+    staged_files: list[str] = []
+    for index, (filename, content) in enumerate(files, start=1):
+        safe_name = _safe_staging_component(Path(filename or f"upload_{index}.csv").name, f"upload_{index}.csv")
+        if not safe_name.lower().endswith(".csv"):
+            raise AppError(
+                code="INVALID_CSV",
+                message=f"Uploaded file must be CSV: {filename or safe_name}",
+                status_code=422,
+            )
+        target = _move_file_preserve_name_bytes(content, unregistered_root, safe_name)
+        staged_files.append(str(target))
+
+    return {
+        "job_id": job_id,
+        "job_root": str(job_root),
+        "items_unregistered_root": str(unregistered_root),
+        "staged_files": staged_files,
+    }
+
+
+def _move_file_preserve_name_bytes(content: bytes, dst_dir: Path, filename: str) -> Path:
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    target = dst_dir / filename
+    if not target.exists():
+        target.write_bytes(content)
+        return target
+
+    stem = target.stem
+    suffix = target.suffix
+    index = 1
+    while True:
+        candidate = dst_dir / f"{stem}_{index}{suffix}"
+        if not candidate.exists():
+            candidate.write_bytes(content)
+            return candidate
+        index += 1
+
+
+def _extract_orders_batch_zip_to_staging(
+    archive_name: str,
+    archive_content: bytes,
+    *,
+    staging_root: str | Path | None = None,
+) -> dict[str, Any]:
+    if not archive_content:
+        raise AppError(
+            code="INVALID_REQUEST",
+            message="Uploaded ZIP file is empty",
+            status_code=422,
+        )
+
+    base_root = Path(staging_root) if staging_root else ORDERS_IMPORT_STAGING_ROOT
+    job_id, job_root = _create_staging_job_root(base_root, "orders")
+    package_path = job_root / _safe_staging_component(Path(archive_name or "orders_batch.zip").name, "orders_batch.zip")
+    package_path.write_bytes(archive_content)
+
+    unregistered_root = job_root / "unregistered"
+    roots = build_roots(unregistered_root=unregistered_root, registered_root=job_root / "registered_placeholder")
+    ensure_roots(roots)
+
+    extracted_files: list[str] = []
+    try:
+        with zipfile.ZipFile(package_path) as archive:
+            for member in archive.infolist():
+                if member.is_dir():
+                    continue
+                member_name = member.filename.replace("\\", "/")
+                normalized = Path(member_name)
+                parts = [part for part in normalized.parts if part not in {"", ".", ".."}]
+                if not parts:
+                    continue
+                lowered = [part.lower() for part in parts]
+                target_root: Path | None = None
+                supplier_parts: list[str] = []
+
+                if "csv_files" in lowered:
+                    idx = lowered.index("csv_files")
+                    target_root = roots.unregistered_csv_root
+                    supplier_parts = parts[idx + 1 :]
+                elif "pdf_files" in lowered:
+                    idx = lowered.index("pdf_files")
+                    target_root = roots.unregistered_pdf_root
+                    supplier_parts = parts[idx + 1 :]
+                else:
+                    suffix = Path(*parts)
+                    if suffix.suffix.lower() == ".csv":
+                        target_root = roots.unregistered_csv_root
+                        supplier_parts = suffix.parts
+                    elif suffix.suffix.lower() == ".pdf":
+                        target_root = roots.unregistered_pdf_root
+                        supplier_parts = suffix.parts
+
+                if target_root is None or not supplier_parts:
+                    continue
+
+                relative_target = Path(*[_safe_staging_component(part, "UNKNOWN") for part in supplier_parts])
+                if relative_target.suffix == "":
+                    continue
+                destination = (target_root / relative_target).resolve()
+                try:
+                    destination.relative_to(target_root.resolve())
+                except ValueError as exc:
+                    raise AppError(
+                        code="INVALID_ZIP",
+                        message=f"Invalid ZIP entry path: {member.filename}",
+                        status_code=422,
+                    ) from exc
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member) as source, destination.open("wb") as target_fp:
+                    shutil.copyfileobj(source, target_fp)
+                extracted_files.append(str(destination))
+    except zipfile.BadZipFile as exc:
+        raise AppError(
+            code="INVALID_ZIP",
+            message="Uploaded file must be a valid ZIP archive",
+            status_code=422,
+        ) from exc
+
+    if not list(roots.unregistered_csv_root.rglob("*.csv")):
+        raise AppError(
+            code="INVALID_ZIP",
+            message="ZIP package must contain at least one order CSV file",
+            status_code=422,
+        )
+
+    return {
+        "job_id": job_id,
+        "job_root": str(job_root),
+        "archive_path": str(package_path),
+        "unregistered_root": str(unregistered_root),
+        "extracted_files": extracted_files,
+    }
 
 
 def list_users(
@@ -6309,6 +6476,26 @@ def register_unregistered_item_csvs(
     }
 
 
+def upload_and_register_item_batch_csvs(
+    conn: sqlite3.Connection,
+    *,
+    files: list[tuple[str, bytes]],
+    continue_on_error: bool = False,
+    staging_root: str | Path | None = None,
+) -> dict[str, Any]:
+    staged = _write_uploaded_batch_csvs_to_staging(files, staging_root=staging_root)
+    result = register_unregistered_item_csvs(
+        conn,
+        items_unregistered_root=staged["items_unregistered_root"],
+        items_registered_root=ITEMS_IMPORT_REGISTERED_ROOT,
+        continue_on_error=continue_on_error,
+    )
+    result["upload_job_id"] = staged["job_id"]
+    result["staging_root"] = staged["job_root"]
+    result["uploaded_files"] = staged["staged_files"]
+    return result
+
+
 _CONSOLIDATED_NAME_RE = re.compile(r"^items_\d{4}-\d{2}_\d{3}\.csv$")
 
 
@@ -6728,6 +6915,35 @@ def import_unregistered_order_csvs(
         "warnings": warnings,
         "normalizations": normalizations,
     }
+
+
+def upload_and_import_orders_batch_zip(
+    conn: sqlite3.Connection,
+    *,
+    filename: str,
+    content: bytes,
+    default_order_date: str | None = None,
+    continue_on_error: bool = False,
+    staging_root: str | Path | None = None,
+) -> dict[str, Any]:
+    staged = _extract_orders_batch_zip_to_staging(
+        filename,
+        content,
+        staging_root=staging_root,
+    )
+    result = import_unregistered_order_csvs(
+        conn,
+        unregistered_root=staged["unregistered_root"],
+        registered_root=build_roots().registered_root,
+        items_unregistered_root=ITEMS_IMPORT_UNREGISTERED_ROOT,
+        default_order_date=default_order_date,
+        continue_on_error=continue_on_error,
+    )
+    result["upload_job_id"] = staged["job_id"]
+    result["staging_root"] = staged["job_root"]
+    result["uploaded_archive"] = staged["archive_path"]
+    result["extracted_files"] = staged["extracted_files"]
+    return result
 
 
 def _predict_move_target(src: Path, dst_dir: Path, reserved_targets: set[str]) -> tuple[Path, bool]:

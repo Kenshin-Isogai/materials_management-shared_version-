@@ -24,6 +24,10 @@ This document explains the implemented architecture of the Materials Management 
   - `GET /api/users` remains the active-user feed for the global picker
   - `GET /api/users?include_inactive=true` backs the management screen so inactive rows can be reviewed and reactivated
   - create/update/deactivate flows emit a frontend refresh signal so the shared header picker stays aligned without a full-page reload
+- Upload-first shared-server batch import adapters now exist for the main folder-based workflows.
+  - `POST /api/items/batch-upload` stores uploaded missing-item registration CSVs under `imports/staging/items/<job-id>/...` and reuses `register_unregistered_item_csvs(...)`
+  - `POST /api/orders/batch-upload` stores an uploaded ZIP under `imports/staging/orders/<job-id>/...`, extracts accepted CSV/PDF files into the expected `unregistered` layout, and reuses `import_unregistered_order_csvs(...)`
+  - the shared-server UI now presents upload-first controls on Items and Orders pages while keeping the legacy server-folder actions as explicit fallback paths
 - `backend/main.py` is now a server entrypoint only; the prior CLI command surface is no longer the target deployment model.
 
 ## Operating Profile (Confirmed)
@@ -122,6 +126,7 @@ flowchart LR
     Orders are imported from CSV/PDF folders, then moved to canonical registered paths to preserve auditability.
    The order-layout migration also rewrites stale `pdf_link` values in both unregistered and registered order CSV archives, plus quotation DB rows, so historical links stay aligned after directory-layout changes.
    The live unregistered batch import now also rewrites the moved registered CSV archive with its final registered `pdf_link` values, keeping the archive consistent with the post-move filesystem state.
+   Shared-server upload adapters now stage browser uploads under `imports/staging/...` first, then materialize them into the same folder shape that the existing domain import logic already understands.
 4. Reversible bulk imports.
    Item imports store job and row-level effects (`import_jobs`, `import_job_effects`) so undo/redo can be state-checked and safe.
    Backend pytest fixtures remap workspace import/export roots into per-test temporary directories so import-related tests cannot leak CSV artifacts into the real repository workspace.
@@ -372,6 +377,11 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 
 - Manual order import accepts only canonical registered PDF links or filename-only values.
 - Unregistered batch import resolves/moves CSV and PDF files and rewrites links to canonical workspace-relative paths.
+- Upload-first adapters stage browser payloads under:
+  - `imports/staging/items/<job-id>/unregistered/`
+  - `imports/staging/orders/<job-id>/unregistered/csv_files/<supplier>/`
+  - `imports/staging/orders/<job-id>/unregistered/pdf_files/<supplier>/`
+- Orders ZIP staging accepts either canonical `csv_files/...` + `pdf_files/...` paths or simpler supplier-subfolder layouts, then normalizes them into the canonical unregistered structure before domain import starts.
 - Missing items discovered during unregistered batch import are aggregated into a single register CSV per batch run under `imports/items/unregistered/` (instead of per-quotation output beside source CSVs).
 - Consolidated missing-item rows are de-duplicated by `(supplier, manufacturer_name, item_number)` so repeated unresolved rows across quotations are emitted once per batch register CSV.
 - Batch consolidation uses collision-safe temporary per-file register naming (supplier-prefixed) and deletes temporary files only after consolidated-register write succeeds.
@@ -387,6 +397,8 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 - File collisions are handled by non-destructive renaming (`_1`, `_2`, ...).
 - Missing/unresolved PDF links are surfaced as warnings, not silent failures.
 - Keep canonical layout:
+  - `imports/staging/items/<job-id>/...`
+  - `imports/staging/orders/<job-id>/...`
   - `imports/orders/unregistered/csv_files/<supplier>/`
   - `imports/orders/unregistered/pdf_files/<supplier>/`
   - `imports/orders/registered/csv_files/<supplier>/`

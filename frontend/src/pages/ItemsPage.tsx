@@ -44,6 +44,19 @@ type ItemImportResult = {
   rows: ItemImportRow[];
 };
 
+type ItemBatchUploadResult = {
+  status: string;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  upload_job_id?: string;
+  files?: Array<{
+    file: string;
+    status: string;
+    error?: string;
+  }>;
+};
+
 type ItemImportPreviewMatch = CatalogSearchResult & {
   confidence_score?: number | null;
   match_reason?: string | null;
@@ -419,6 +432,7 @@ export function ItemsPage() {
   const [metadataBusy, setMetadataBusy] = useState(false);
   const [registerPendingMessage, setRegisterPendingMessage] = useState("");
   const [registerPendingBusy, setRegisterPendingBusy] = useState(false);
+  const [batchUploadFiles, setBatchUploadFiles] = useState<File[]>([]);
   const [sortKey, setSortKey] = useState<"item_id" | "item_number" | "manufacturer_name" | "category" | "url">("item_id");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [isItemListExpanded, setIsItemListExpanded] = useState(true);
@@ -828,6 +842,37 @@ export function ItemsPage() {
       await mutateImportJobs();
     } catch (error) {
       setRegisterPendingMessage(formatActionError("Batch registration failed", error));
+    } finally {
+      setRegisterPendingBusy(false);
+    }
+  }
+
+  async function uploadBatchCsvs(event: FormEvent) {
+    event.preventDefault();
+    if (!batchUploadFiles.length) {
+      setRegisterPendingMessage("Select one or more CSV files to upload.");
+      return;
+    }
+    setRegisterPendingBusy(true);
+    setRegisterPendingMessage("");
+    try {
+      const form = new FormData();
+      for (const file of batchUploadFiles) {
+        form.append("files", file);
+      }
+      form.append("continue_on_error", "true");
+      const result = await apiSendForm<ItemBatchUploadResult>("/items/batch-upload", form);
+      const summary = `Batch upload: status=${result.status}, processed=${result.processed}, succeeded=${result.succeeded}, failed=${result.failed}${result.upload_job_id ? `, job=${result.upload_job_id}` : ""}`;
+      const fileErrors = (result.files ?? [])
+        .filter((file) => file.status === "error")
+        .map((file) => `  ${file.file}: ${file.error ?? "unknown error"}`)
+        .join("\n");
+      setRegisterPendingMessage(fileErrors ? `${summary}\n${fileErrors}` : summary);
+      setBatchUploadFiles([]);
+      await mutate();
+      await mutateImportJobs();
+    } catch (error) {
+      setRegisterPendingMessage(formatActionError("Batch upload failed", error));
     } finally {
       setRegisterPendingBusy(false);
     }
@@ -1814,11 +1859,34 @@ export function ItemsPage() {
       </section>
 
       <section className="panel p-4">
-        <h2 className="font-display text-lg font-semibold">Process Pending CSVs</h2>
+        <h2 className="font-display text-lg font-semibold">Upload Batch CSVs</h2>
         <p className="mt-1 text-sm text-slate-600">
-          Process system-generated missing item CSVs in the pending imports folder.
+          Upload one or more missing-item registration CSVs. The server stages them and runs the existing batch registration flow without requiring server-folder access.
         </p>
-        <div className="mt-3 flex gap-3">
+        <form className="mt-3 space-y-3" onSubmit={uploadBatchCsvs}>
+          <input
+            className="input"
+            type="file"
+            accept=".csv,text/csv"
+            multiple
+            onChange={(event) => setBatchUploadFiles(Array.from(event.target.files ?? []))}
+          />
+          <div className="flex flex-wrap gap-3">
+            <button className="button" type="submit" disabled={registerPendingBusy || submitting}>
+              Upload And Register Batch
+            </button>
+            <span className="self-center text-xs text-slate-500">
+              {batchUploadFiles.length > 0
+                ? `${batchUploadFiles.length} file(s) selected`
+                : "Select CSV files exported from the missing-items workflow."}
+            </span>
+          </div>
+        </form>
+        <div className="mt-4 border-t border-slate-200 pt-4">
+          <p className="text-sm text-slate-600">
+            Legacy fallback: process system-generated missing-item CSVs that already exist on the server.
+          </p>
+          <div className="mt-3 flex gap-3">
           <button
             className="button"
             type="button"
@@ -1827,6 +1895,7 @@ export function ItemsPage() {
           >
             Run Unregistered Batch
           </button>
+        </div>
         </div>
         {registerPendingMessage && (
           <pre className="mt-3 whitespace-pre-wrap text-sm text-signal">{registerPendingMessage}</pre>
