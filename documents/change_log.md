@@ -1,5 +1,16 @@
 ## 2026-03-25
 
+### Fixed
+
+- Upload-first staging filename sanitization now preserves expected file suffixes (for example localized names such as `見積.csv` keep the `.csv` extension after sanitization), preventing valid CSV uploads from being rejected as `INVALID_CSV`.
+- Orders ZIP staging now preserves distinct non-ASCII supplier directory names instead of collapsing them into `UNKNOWN`, preventing cross-supplier staging collisions during batch import.
+
+### Tests
+
+- Targeted backend API batch-upload regression command attempted:
+  - `uv run python -m pytest backend/tests/test_api_integration.py -k "items_batch_upload_endpoint or orders_batch_upload_endpoint"`
+  - Result in this environment: failed before test execution with `ModuleNotFoundError: No module named 'fastapi'` (missing backend dependency in runtime environment).
+
 ### Added
 
 - Implemented Phase 1 of `documents/postgresql_migration_plan/shared_server_adaptation_plan.md`.

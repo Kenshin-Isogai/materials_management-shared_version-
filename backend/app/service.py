@@ -60,9 +60,23 @@ def _rows_to_dict(rows: Iterable[sqlite3.Row]) -> list[dict[str, Any]]:
 
 
 def _safe_staging_component(value: str, default: str) -> str:
-    text = (value or "").strip()
-    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", text).strip("._")
+    text = unicodedata.normalize("NFKC", (value or "").strip())
+    safe = re.sub(r"[^\w.-]+", "_", text, flags=re.UNICODE).strip(".")
     return safe or default
+
+
+def _safe_staging_filename(value: str, default: str) -> str:
+    source_name = Path(value or default).name
+    default_name = Path(default).name
+    source_path = Path(source_name)
+    default_path = Path(default_name)
+
+    suffix = source_path.suffix or default_path.suffix
+    stem_default = default_path.stem or "upload"
+    stem = _safe_staging_component(source_path.stem, stem_default)
+    if not suffix:
+        return stem
+    return f"{stem}{suffix}"
 
 
 def _create_staging_job_root(base_root: Path, prefix: str) -> tuple[str, Path]:
@@ -91,7 +105,7 @@ def _write_uploaded_batch_csvs_to_staging(
 
     staged_files: list[str] = []
     for index, (filename, content) in enumerate(files, start=1):
-        safe_name = _safe_staging_component(Path(filename or f"upload_{index}.csv").name, f"upload_{index}.csv")
+        safe_name = _safe_staging_filename(filename or f"upload_{index}.csv", f"upload_{index}.csv")
         if not safe_name.lower().endswith(".csv"):
             raise AppError(
                 code="INVALID_CSV",
@@ -142,7 +156,7 @@ def _extract_orders_batch_zip_to_staging(
 
     base_root = Path(staging_root) if staging_root else ORDERS_IMPORT_STAGING_ROOT
     job_id, job_root = _create_staging_job_root(base_root, "orders")
-    package_path = job_root / _safe_staging_component(Path(archive_name or "orders_batch.zip").name, "orders_batch.zip")
+    package_path = job_root / _safe_staging_filename(archive_name or "orders_batch.zip", "orders_batch.zip")
     package_path.write_bytes(archive_content)
 
     unregistered_root = job_root / "unregistered"
