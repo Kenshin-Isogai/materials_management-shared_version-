@@ -614,7 +614,7 @@ export function OrdersPage() {
       if (messageText.includes("imports/orders/registered/pdf_files")) {
         setMessage(
           "Preview failed: Manual import requires pdf_link to be blank, filename-only, or imports/orders/registered/pdf_files/<supplier>/<file>.pdf. " +
-          "For unregistered folder CSV files, use 'Unregistered Folder Batch'."
+            "If the PDF is part of the same browser upload, use 'Upload Orders ZIP'."
         );
       } else {
         setMessage(formatActionError("Preview failed", error));
