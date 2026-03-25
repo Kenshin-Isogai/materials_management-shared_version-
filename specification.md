@@ -886,7 +886,7 @@ All management pages handling CRUD operations (Items, Orders, Reservations, etc.
 | Planning | Sequential project netting, start-date shortage analysis, convert uncovered rows into RFQ batches |
 | RFQ | Project-dedicated RFQ batches, quote refinement, order linking |
 | Purchase Candidates | Secondary persistent shortage list for BOM / ad-hoc pre-PO tracking |
-| Orders | Bulk import orders, register missing items, alias CSV import, **upload-first Orders ZIP batch import with server-managed staging**, legacy folder batch fallback, **orders/quotations management** |
+| Orders | Bulk import orders, register missing items, alias CSV import, **upload-first Orders ZIP batch import with server-managed staging**, advanced server-resident batch fallback, **orders/quotations management** |
 | Arrival | Process arrivals, partial deliveries (supports bulk resolution) |
 | Movements | Single/batch movements, all operation types, CSV import (`operation_type,item_id,quantity,from_location,to_location,location,note`) |
 | Reserve | Reservation management, BOM batch reservation, CSV import (`item_id` or `assembly`, `quantity`, optional `assembly_quantity/purpose/deadline/note/project_id`) |

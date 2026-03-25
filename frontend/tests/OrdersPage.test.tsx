@@ -21,7 +21,20 @@ vi.mock("../src/lib/api", () => ({
 }));
 
 vi.mock("../src/components/CatalogPicker", () => ({
-  CatalogPicker: () => <div>Catalog Picker</div>,
+  CatalogPicker: ({
+    onQueryChange,
+    placeholder,
+  }: {
+    onQueryChange?: (value: string) => void;
+    placeholder?: string;
+  }) => (
+    <input
+      aria-label={placeholder ?? "Catalog Picker"}
+      className="input"
+      placeholder={placeholder ?? "Catalog Picker"}
+      onChange={(event) => onQueryChange?.(event.target.value)}
+    />
+  ),
 }));
 
 import { OrdersPage } from "../src/pages/OrdersPage";
@@ -449,5 +462,40 @@ describe("OrdersPage", () => {
         }),
       }),
     );
+  });
+
+  it("points preview pdf-link failures to the upload-first recovery path", async () => {
+    const user = userEvent.setup();
+    apiSendFormMock.mockRejectedValue(
+      new Error("imports/orders/registered/pdf_files/Autex/example.pdf"),
+    );
+
+    renderPage();
+
+    fireEvent.change(screen.getByPlaceholderText("Type or search supplier"), {
+      target: { value: "Autex" },
+    });
+
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement | null;
+    expect(fileInput).toBeTruthy();
+    const file = new File(["quotation_number,item_number\nQ-1,ITEM-1\n"], "orders.csv", {
+      type: "text/csv",
+    });
+    Object.defineProperty(fileInput, "files", {
+      value: [file],
+      configurable: true,
+    });
+    fireEvent.change(fileInput);
+
+    fireEvent.submit(screen.getByRole("button", { name: "Preview Import" }).closest("form") as HTMLFormElement);
+    await waitFor(() => {
+      expect(apiSendFormMock).toHaveBeenCalledWith("/orders/import-preview", expect.any(FormData));
+    });
+
+    expect(
+      await screen.findByText(
+        "Preview failed: Manual import requires pdf_link to be blank, filename-only, or imports/orders/registered/pdf_files/<supplier>/<file>.pdf. If the PDF is part of the same browser upload, use 'Upload Orders ZIP'.",
+      ),
+    ).toBeTruthy();
   });
 });

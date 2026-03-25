@@ -91,7 +91,7 @@ Last updated: 2026-03-25 (JST)
   - Items page now exposes `Upload Batch CSVs`, posting multi-file form data to `POST /api/items/batch-upload`
   - Orders page now exposes `Upload Orders ZIP`, posting one ZIP package to `POST /api/orders/batch-upload`
   - upload-first Orders ZIP guidance now tells users to keep CSV `pdf_link` blank or filename-only instead of teaching server paths
-  - both pages keep the old server-folder operations only as explicit legacy fallback controls
+  - both pages keep existing server-resident batch operations only as advanced fallback controls
 - Generated missing-item register CSVs are now browser-downloadable managed artifacts.
   - backend exposes `/api/artifacts`, `/api/artifacts/{artifact_id}`, and `/api/artifacts/{artifact_id}/download`
   - Orders page surfaces download buttons for current missing-item register output and a recent generated-files list instead of showing raw server paths

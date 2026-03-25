@@ -614,7 +614,7 @@ export function OrdersPage() {
       if (messageText.includes("imports/orders/registered/pdf_files")) {
         setMessage(
           "Preview failed: Manual import requires pdf_link to be blank, filename-only, or imports/orders/registered/pdf_files/<supplier>/<file>.pdf. " +
-          "For unregistered folder CSV files, use 'Unregistered Folder Batch'."
+            "If the PDF is part of the same browser upload, use 'Upload Orders ZIP'."
         );
       } else {
         setMessage(formatActionError("Preview failed", error));
@@ -732,7 +732,7 @@ export function OrdersPage() {
       if (messageText.includes("imports/orders/registered/pdf_files")) {
         setMessage(
           "Import failed: Manual import requires pdf_link to be blank, filename-only, or imports/orders/registered/pdf_files/<supplier>/<file>.pdf. " +
-          "For unregistered folder CSV files, use 'Unregistered Folder Batch'."
+            "If the PDF is part of the same browser upload, use 'Upload Orders ZIP'."
         );
       } else {
         setMessage(formatActionError("Import failed", error));
@@ -1401,10 +1401,10 @@ export function OrdersPage() {
         </form>
         <div className="mt-4 border-t border-slate-200 pt-4">
           <p className="mb-3 text-sm text-slate-600">
-            Legacy fallback: run the default batch for canonical server folders, or open advanced controls for explicit roots.
+            Advanced fallback: run the existing server-resident batch inputs, or open advanced controls for explicit roots.
           </p>
           <p className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
-            Canonical layout:
+            Advanced root layout:
             {" "}
             <code>{"imports/orders/unregistered/csv_files/<supplier>/*.csv"}</code>
             {" "}
@@ -1415,7 +1415,7 @@ export function OrdersPage() {
           </p>
         <div className="mt-3 flex flex-wrap gap-2">
           <button className="button" onClick={runDefaultUnregisteredBatch} disabled={loading}>
-            Run Unregistered Batch (Default Roots)
+            Run Existing Imported Batch
           </button>
           <button
             className="button-subtle"
