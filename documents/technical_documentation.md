@@ -24,11 +24,11 @@ This document explains the implemented architecture of the Materials Management 
   - `GET /api/users` remains the active-user feed for the global picker
   - `GET /api/users?include_inactive=true` backs the management screen so inactive rows can be reviewed and reactivated
   - create/update/deactivate flows emit a frontend refresh signal so the shared header picker stays aligned without a full-page reload
-- Upload-first shared-server batch import adapters now exist for the main folder-based workflows.
+- Upload-first shared-server batch import adapters now exist for the main browser-facing batch workflows.
   - `POST /api/items/batch-upload` stores uploaded missing-item registration CSVs under `imports/staging/items/<job-id>/...` and reuses `register_unregistered_item_csvs(...)`
   - `POST /api/orders/batch-upload` stores an uploaded ZIP under `imports/staging/orders/<job-id>/...`, extracts accepted CSV/PDF files into the expected `unregistered` layout, and reuses `import_unregistered_order_csvs(...)`
   - upload-first Orders ZIP imports now treat `pdf_link` as a filename-first field; path-shaped values are stripped down to filename semantics for the staged browser workflow, while legacy path-capable resolution remains available in fallback/admin flows
-  - the shared-server UI now presents upload-first controls on Items and Orders pages while keeping the legacy server-folder actions as explicit fallback paths
+  - the shared-server UI now presents upload-first controls on Items and Orders pages while keeping server-resident batch actions only as advanced fallback paths
 - Generated artifact delivery now exists for batch-produced missing-item register CSVs.
   - `GET /api/artifacts`
   - `GET /api/artifacts/{artifact_id}`

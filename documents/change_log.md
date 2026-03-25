@@ -152,6 +152,23 @@
 - Frontend production build:
   - `node .\\node_modules\\vite\\bin\\vite.js build`
 
+## 2026-03-25 (shared-server adaptation phase 5)
+
+### Changed
+
+- Implemented Phase 5 of `documents/postgresql_migration_plan/shared_server_adaptation_plan.md` for UI deprecation and wording cleanup.
+  - Items page fallback copy now describes server-resident CSV processing as an advanced path instead of the main workflow.
+  - Orders page fallback copy now describes existing server-resident batch inputs as an advanced path, and the default batch button is labeled `Run Existing Imported Batch`.
+  - Manual Orders import guidance now points browser users toward `Upload Orders ZIP` when the PDF belongs to the same upload, instead of suggesting folder-operated batch flows.
+
+### Documentation
+
+- Updated shared-server wording in:
+  - `specification.md`
+  - `documents/technical_documentation.md`
+  - `documents/source_current_state.md`
+  - `documents/change_log.md`
+
 ## 2026-03-24 (PostgreSQL migration foundation)
 
 ### Fixed

@@ -1884,7 +1884,7 @@ export function ItemsPage() {
         </form>
         <div className="mt-4 border-t border-slate-200 pt-4">
           <p className="text-sm text-slate-600">
-            Legacy fallback: process system-generated missing-item CSVs that already exist on the server.
+            Advanced fallback: process system-generated missing-item CSVs that already exist on the server.
           </p>
           <div className="mt-3 flex gap-3">
           <button
@@ -1893,7 +1893,7 @@ export function ItemsPage() {
             disabled={registerPendingBusy || submitting}
             onClick={runRegisterPending}
           >
-            Run Unregistered Batch
+            Run Existing Imported Batch
           </button>
         </div>
         </div>
