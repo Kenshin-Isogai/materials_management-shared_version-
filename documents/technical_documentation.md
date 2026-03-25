@@ -27,7 +27,13 @@ This document explains the implemented architecture of the Materials Management 
 - Upload-first shared-server batch import adapters now exist for the main folder-based workflows.
   - `POST /api/items/batch-upload` stores uploaded missing-item registration CSVs under `imports/staging/items/<job-id>/...` and reuses `register_unregistered_item_csvs(...)`
   - `POST /api/orders/batch-upload` stores an uploaded ZIP under `imports/staging/orders/<job-id>/...`, extracts accepted CSV/PDF files into the expected `unregistered` layout, and reuses `import_unregistered_order_csvs(...)`
+  - upload-first Orders ZIP imports now treat `pdf_link` as a filename-first field; path-shaped values are stripped down to filename semantics for the staged browser workflow, while legacy path-capable resolution remains available in fallback/admin flows
   - the shared-server UI now presents upload-first controls on Items and Orders pages while keeping the legacy server-folder actions as explicit fallback paths
+- Generated artifact delivery now exists for batch-produced missing-item register CSVs.
+  - `GET /api/artifacts`
+  - `GET /api/artifacts/{artifact_id}`
+  - `GET /api/artifacts/{artifact_id}/download`
+  - the current implementation is a lightweight filesystem-backed registry over generated CSVs under `imports/items/unregistered/`; no separate artifact table is required yet
 - `backend/main.py` is now a server entrypoint only; the prior CLI command surface is no longer the target deployment model.
 
 ## Operating Profile (Confirmed)
@@ -382,7 +388,11 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
   - `imports/staging/orders/<job-id>/unregistered/csv_files/<supplier>/`
   - `imports/staging/orders/<job-id>/unregistered/pdf_files/<supplier>/`
 - Orders ZIP staging accepts either canonical `csv_files/...` + `pdf_files/...` paths or simpler supplier-subfolder layouts, then normalizes them into the canonical unregistered structure before domain import starts.
+- Upload-first Orders ZIP CSVs should use `pdf_link = blank or filename-only`.
+  - browser uploads resolve that filename against staged PDFs for the same supplier
+  - path-shaped `pdf_link` text is normalized for compatibility, but it is no longer the primary shared-server contract
 - Missing items discovered during unregistered batch import are aggregated into a single register CSV per batch run under `imports/items/unregistered/` (instead of per-quotation output beside source CSVs).
+- Generated missing-item register CSVs now return artifact metadata in API responses and are downloadable through `/api/artifacts/{artifact_id}/download`, so the frontend no longer has to display raw server file paths.
 - Consolidated missing-item rows are de-duplicated by `(supplier, manufacturer_name, item_number)` so repeated unresolved rows across quotations are emitted once per batch register CSV.
 - Batch consolidation uses collision-safe temporary per-file register naming (supplier-prefixed) and deletes temporary files only after consolidated-register write succeeds.
 - Consolidated register files may include rows from multiple suppliers; successful unregistered-item registration moves the processed CSV into `imports/items/registered/<YYYY-MM>/` while preserving row-level supplier columns.

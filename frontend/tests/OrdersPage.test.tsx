@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SWRConfig } from "swr";
 
 const apiDownloadMock = vi.fn();
+const apiGetMock = vi.fn();
 const apiGetAllPagesMock = vi.fn();
 const apiGetWithPaginationMock = vi.fn();
 const apiSendMock = vi.fn();
@@ -12,6 +13,7 @@ const apiSendFormMock = vi.fn();
 
 vi.mock("../src/lib/api", () => ({
   apiDownload: (...args: unknown[]) => apiDownloadMock(...args),
+  apiGet: (...args: unknown[]) => apiGetMock(...args),
   apiGetAllPages: (...args: unknown[]) => apiGetAllPagesMock(...args),
   apiGetWithPagination: (...args: unknown[]) => apiGetWithPaginationMock(...args),
   apiSend: (...args: unknown[]) => apiSendMock(...args),
@@ -41,10 +43,13 @@ function sectionByHeading(name: string) {
 describe("OrdersPage", () => {
   beforeEach(() => {
     apiDownloadMock.mockReset();
+    apiGetMock.mockReset();
     apiGetAllPagesMock.mockReset();
     apiGetWithPaginationMock.mockReset();
     apiSendMock.mockReset();
     apiSendFormMock.mockReset();
+
+    apiGetMock.mockResolvedValue([]);
 
     apiGetAllPagesMock.mockImplementation(async (path: string) => {
       if (path === "/orders?per_page=200") {

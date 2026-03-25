@@ -71,6 +71,15 @@ def csv_attachment(filename: str, content: bytes) -> Response:
     )
 
 
+def file_attachment(filename: str, content: bytes) -> Response:
+    media_type = "text/csv; charset=utf-8" if filename.lower().endswith(".csv") else "application/octet-stream"
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 def _parse_optional_json_form(value: str | None, field_name: str) -> Any | None:
     if value is None or not str(value).strip():
         return None
@@ -239,6 +248,19 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
                 "effective_role": effective_role,
             }
         )
+
+    @app.get("/api/artifacts")
+    def get_artifacts(artifact_type: str | None = None):
+        return ok(service.list_generated_artifacts(artifact_type=artifact_type))
+
+    @app.get("/api/artifacts/{artifact_id}")
+    def get_artifact_detail(artifact_id: str):
+        return ok(service.get_generated_artifact(artifact_id))
+
+    @app.get("/api/artifacts/{artifact_id}/download")
+    def download_artifact(artifact_id: str):
+        filename, content = service.get_generated_artifact_download(artifact_id)
+        return file_attachment(filename, content)
 
     @app.get("/api/users")
     def get_users(include_inactive: bool = False, conn= db):

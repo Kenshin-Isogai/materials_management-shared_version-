@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import csv
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
@@ -57,6 +58,118 @@ class Pagination:
 
 def _rows_to_dict(rows: Iterable[sqlite3.Row]) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
+
+
+def _generated_artifact_roots() -> tuple[Path, ...]:
+    return (ITEMS_IMPORT_UNREGISTERED_ROOT.resolve(),)
+
+
+def _infer_generated_artifact_type(path: Path) -> str:
+    name = path.name.lower()
+    if "missing_items_registration" in name:
+        return "missing_items_register"
+    return "generated_file"
+
+
+def _encode_generated_artifact_id(relative_path: str) -> str:
+    raw = relative_path.encode("utf-8")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _decode_generated_artifact_id(artifact_id: str) -> str:
+    text = require_non_empty(artifact_id, "artifact_id")
+    padding = "=" * (-len(text) % 4)
+    try:
+        decoded = base64.urlsafe_b64decode(f"{text}{padding}".encode("ascii")).decode("utf-8")
+    except Exception as exc:  # noqa: BLE001
+        raise AppError(
+            code="ARTIFACT_NOT_FOUND",
+            message=f"Generated artifact '{artifact_id}' not found",
+            status_code=404,
+        ) from exc
+    if not decoded.strip():
+        raise AppError(
+            code="ARTIFACT_NOT_FOUND",
+            message=f"Generated artifact '{artifact_id}' not found",
+            status_code=404,
+        )
+    return decoded
+
+
+def _build_generated_artifact(
+    path: Path,
+    *,
+    source_job_type: str | None = None,
+    source_job_id: str | None = None,
+) -> dict[str, Any]:
+    resolved = path.resolve()
+    if not resolved.exists() or not resolved.is_file():
+        raise AppError(
+            code="ARTIFACT_NOT_FOUND",
+            message=f"Generated artifact '{path}' not found",
+            status_code=404,
+        )
+
+    relative_path = safe_workspace_relative(resolved)
+    stats = resolved.stat()
+    artifact = {
+        "artifact_id": _encode_generated_artifact_id(relative_path),
+        "artifact_type": _infer_generated_artifact_type(resolved),
+        "filename": resolved.name,
+        "relative_path": relative_path,
+        "size_bytes": int(stats.st_size),
+        "created_at": datetime.fromtimestamp(stats.st_mtime).isoformat(timespec="seconds"),
+    }
+    if source_job_type:
+        artifact["source_job_type"] = source_job_type
+    if source_job_id:
+        artifact["source_job_id"] = source_job_id
+    return artifact
+
+
+def _resolve_generated_artifact_path(artifact_id: str) -> Path:
+    relative_text = _decode_generated_artifact_id(artifact_id)
+    for root in _generated_artifact_roots():
+        try:
+            workspace_root = root.parents[2]
+        except IndexError:
+            workspace_root = root.parent
+        candidate = (workspace_root / relative_text).resolve()
+        try:
+            candidate.relative_to(root)
+        except ValueError:
+            continue
+        if candidate.exists() and candidate.is_file():
+            return candidate
+        break
+    raise AppError(
+        code="ARTIFACT_NOT_FOUND",
+        message=f"Generated artifact '{artifact_id}' not found",
+        status_code=404,
+    )
+
+
+def get_generated_artifact(artifact_id: str) -> dict[str, Any]:
+    return _build_generated_artifact(_resolve_generated_artifact_path(artifact_id))
+
+
+def list_generated_artifacts(*, artifact_type: str | None = None) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for root in _generated_artifact_roots():
+        if not root.exists():
+            continue
+        for path in sorted(root.glob("*missing_items_registration*.csv"), key=lambda p: p.stat().st_mtime, reverse=True):
+            artifact = _build_generated_artifact(path)
+            if artifact_type and artifact["artifact_type"] != artifact_type:
+                continue
+            rows.append(artifact)
+    rows.sort(key=lambda item: (str(item["created_at"]), str(item["filename"])), reverse=True)
+    return rows
+
+
+def get_generated_artifact_download(artifact_id: str) -> tuple[str, bytes]:
+    path = _resolve_generated_artifact_path(artifact_id)
+    return path.name, path.read_bytes()
 
 
 def _safe_staging_component(value: str, default: str) -> str:
@@ -1701,12 +1814,15 @@ def _resolve_pdf_source_path(
     pdf_link: str,
     roots: OrderImportRoots,
     supplier_name: str,
+    *,
+    prefer_filename_only: bool = False,
 ) -> tuple[Path | None, str, list[dict[str, str]], list[str]]:
     return normalize_pdf_link(
         pdf_link=pdf_link,
         supplier_name=supplier_name,
         roots=roots,
         csv_path=csv_path,
+        prefer_filename_only=prefer_filename_only,
     )
 
 
@@ -6209,6 +6325,7 @@ def import_orders_from_rows(
             "status": "missing_items",
             "missing_count": len(missing),
             "missing_csv_path": missing_csv_path,
+            "missing_artifact": _build_generated_artifact(Path(missing_csv_path)),
             "rows": missing,
         }
 
@@ -6634,6 +6751,7 @@ def _import_unregistered_order_csv_file(
     supplier_name: str,
     default_order_date: str | None = None,
     items_unregistered_root: Path | None = None,
+    prefer_filename_only_pdf_links: bool = False,
 ) -> dict[str, Any]:
     unregistered_items_root = items_unregistered_root if items_unregistered_root else ITEMS_IMPORT_UNREGISTERED_ROOT
     fieldnames, rows = _load_csv_rows_with_fieldnames_from_path(csv_path)
@@ -6656,6 +6774,7 @@ def _import_unregistered_order_csv_file(
             "status": "missing_items",
             "missing_count": result.get("missing_count", 0),
             "missing_csv_path": result.get("missing_csv_path"),
+            "missing_artifact": result.get("missing_artifact"),
             "missing_rows": result.get("rows", []),
             "warnings": file_warnings,
             "normalizations": file_normalizations,
@@ -6683,6 +6802,7 @@ def _import_unregistered_order_csv_file(
                 pdf_link,
                 roots,
                 supplier_name,
+                prefer_filename_only=prefer_filename_only_pdf_links,
             )
             for warning in link_warnings:
                 if warning not in file_warnings:
@@ -6817,6 +6937,7 @@ def import_unregistered_order_csvs(
     items_unregistered_root: str | Path | None = None,
     default_order_date: str | None = None,
     continue_on_error: bool = False,
+    prefer_filename_only_pdf_links: bool = False,
 ) -> dict[str, Any]:
     unregistered_items_root = Path(items_unregistered_root) if items_unregistered_root else ITEMS_IMPORT_UNREGISTERED_ROOT
     roots = build_roots(
@@ -6854,6 +6975,7 @@ def import_unregistered_order_csvs(
                     supplier_name=supplier_name,
                     default_order_date=default_order_date,
                     items_unregistered_root=unregistered_items_root,
+                    prefer_filename_only_pdf_links=prefer_filename_only_pdf_links,
                 )
                 conn.execute(f"RELEASE {savepoint}")
             except Exception:
@@ -6898,11 +7020,13 @@ def import_unregistered_order_csvs(
                 break
 
     batch_missing_csv_path: str | None = None
+    batch_missing_artifact: dict[str, Any] | None = None
     if missing_reports:
         batch_missing_csv_path = _write_batch_missing_items_register(
             missing_reports,
             output_dir=unregistered_items_root,
         )
+        batch_missing_artifact = _build_generated_artifact(Path(batch_missing_csv_path))
         for item in missing_reports:
             per_file_path = item.get("missing_csv_path")
             if per_file_path:
@@ -6916,6 +7040,7 @@ def import_unregistered_order_csvs(
                     if warning not in warnings:
                         warnings.append(warning)
             item["missing_csv_path"] = batch_missing_csv_path
+            item["missing_artifact"] = batch_missing_artifact
 
     status = "ok" if failed == 0 else ("partial" if (succeeded or missing_items) else "error")
     return {
@@ -6926,6 +7051,7 @@ def import_unregistered_order_csvs(
         "failed": failed,
         "files": report,
         "missing_items_register_csv": batch_missing_csv_path,
+        "missing_items_register_artifact": batch_missing_artifact,
         "warnings": warnings,
         "normalizations": normalizations,
     }
@@ -6952,6 +7078,7 @@ def upload_and_import_orders_batch_zip(
         items_unregistered_root=ITEMS_IMPORT_UNREGISTERED_ROOT,
         default_order_date=default_order_date,
         continue_on_error=continue_on_error,
+        prefer_filename_only_pdf_links=True,
     )
     result["upload_job_id"] = staged["job_id"]
     result["staging_root"] = staged["job_root"]

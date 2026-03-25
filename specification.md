@@ -953,6 +953,14 @@ Base URL: `http://localhost:8000/api`
 | PUT | `/users/{user_id}` | Update display name, role, username, and active state |
 | DELETE | `/users/{user_id}` | Deactivate a user |
 
+#### **Artifacts**
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/artifacts` | List managed generated-file artifacts; supports optional `?artifact_type=` filtering |
+| GET | `/artifacts/{artifact_id}` | Get generated artifact metadata |
+| GET | `/artifacts/{artifact_id}/download` | Download one generated artifact through the browser |
+
 #### **Workspace**
 
 | Method | Endpoint | Description |
@@ -1012,8 +1020,8 @@ Base URL: `http://localhost:8000/api`
 | PUT | `/orders/{order_id}` | Update order ETA, project assignment for non-RFQ-managed orders, or split partial ETA via `split_quantity` |
 | POST | `/orders/merge` | Merge two open compatible orders |
 | GET | `/orders/{order_id}/lineage` | List split/merge lineage events for the order |
-| POST | `/orders/import` | Import orders from CSV; accepts optional preview-confirmation `row_overrides` and `alias_saves` form fields with strict `422` validation for malformed or invalid payloads |
-| POST | `/orders/batch-upload` | Upload one ZIP package, extract it into server-managed staging, then run the existing unregistered batch order import flow against the staged CSV/PDF layout |
+| POST | `/orders/import` | Import orders from CSV; accepts optional preview-confirmation `row_overrides` and `alias_saves` form fields with strict `422` validation for malformed or invalid payloads. Browser/shared-server guidance is `pdf_link = blank or filename-only`; canonical server paths remain compatibility fallback for admin/server-resident imports |
+| POST | `/orders/batch-upload` | Upload one ZIP package, extract it into server-managed staging, then run the existing unregistered batch order import flow against the staged CSV/PDF layout. In uploaded CSVs, `pdf_link` should be blank or filename-only such as `Q2026-0001.pdf`; generated missing-item register CSVs are returned as managed artifact metadata plus browser-download endpoints |
 | POST | `/orders/{order_id}/arrival` | Process order arrival |
 | POST | `/orders/{order_id}/partial-arrival` | Process partial arrival |
 | GET | `/quotations` | List quotations |
@@ -1236,9 +1244,14 @@ Compatibility rule:
 | issue_date | Yes | YYYY-MM-DD |
 | order_date | Conditional* | YYYY-MM-DD |
 | expected_arrival | No | YYYY-MM-DD |
-| pdf_link | No | File path |
+| pdf_link | No | Blank, filename-only, or compatibility server path |
 
 *Required unless shared order date provided.
+
+Browser/shared-server contract:
+- `pdf_link` should normally be blank or filename-only such as `Q2026-0001.pdf`
+- upload-first ZIP imports resolve that filename against PDFs included in the same staged upload package
+- canonical server paths remain accepted only as a compatibility fallback for legacy/admin flows
 
 ### **6.2 missing_items_registration.csv**
 
@@ -1351,6 +1364,10 @@ For batch-generated consolidated register CSV, additional provenance columns may
   backend/database/
     inventory.db
 `
+
+Managed generated-file delivery:
+- direct-download endpoints remain the primary delivery mode for templates, references, planning exports, and procurement exports
+- generated missing-item register CSVs are also exposed through `/api/artifacts/...` so the browser no longer depends on raw server file paths
 ### **7.2 File Naming Conventions**
 
 | File Type | Pattern | Example |
@@ -1368,6 +1385,7 @@ For batch-generated consolidated register CSV, additional provenance columns may
 - `pdf_link` in database stores relative path from workspace root
 - PDF files are moved (not copied) during batch import processing
 - Upload-first Orders batch imports first extract browser-uploaded ZIP contents into `imports/staging/orders/<job-id>/...`, then move accepted PDFs into canonical registered storage during the existing import flow
+- For upload-first browser batches, CSV `pdf_link` values are resolved by uploaded filename first; path-shaped values are normalized only for compatibility
 - Input paths are normalized (including known legacy typos and mixed separators)
 - Missing/unresolved PDF links are returned as warnings in batch reports
 - Filename collisions are handled by deterministic suffixing (`_1`, `_2`, ...)

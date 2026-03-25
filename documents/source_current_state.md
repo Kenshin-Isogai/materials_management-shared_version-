@@ -90,7 +90,11 @@ Last updated: 2026-03-25 (JST)
 - Shared-server batch workflows are now upload-first on the main Items and Orders pages.
   - Items page now exposes `Upload Batch CSVs`, posting multi-file form data to `POST /api/items/batch-upload`
   - Orders page now exposes `Upload Orders ZIP`, posting one ZIP package to `POST /api/orders/batch-upload`
+  - upload-first Orders ZIP guidance now tells users to keep CSV `pdf_link` blank or filename-only instead of teaching server paths
   - both pages keep the old server-folder operations only as explicit legacy fallback controls
+- Generated missing-item register CSVs are now browser-downloadable managed artifacts.
+  - backend exposes `/api/artifacts`, `/api/artifacts/{artifact_id}`, and `/api/artifacts/{artifact_id}/download`
+  - Orders page surfaces download buttons for current missing-item register output and a recent generated-files list instead of showing raw server paths
 - Added `/workspace` as the summary-first future-demand route.
   - default view: project summary dashboard with committed-vs-draft semantics
   - pipeline view: committed projects with `generic_committed_total` and `cumulative_generic_consumed_before_total`
@@ -253,7 +257,9 @@ Last updated: 2026-03-25 (JST)
 - Items batch upload now stages browser-uploaded missing-item registration CSVs under `imports/staging/items/<job-id>/...` and then reuses the existing batch registration flow.
 - Orders batch upload now stages an uploaded ZIP under `imports/staging/orders/<job-id>/...`, extracts accepted CSV/PDF payloads into canonical unregistered subfolders, and then reuses the existing unregistered import flow.
 - Orders ZIP staging accepts either canonical `csv_files/` and `pdf_files/` paths or simpler supplier-subfolder packaging, normalizing both into the same domain input structure.
+- Upload-first Orders ZIP import now resolves `pdf_link` by uploaded filename first and normalizes path-shaped values down to filename semantics for the shared-server workflow.
 - Batch import functions normalize legacy/typo paths, move files safely, and emit warnings for unresolved paths.
+- Batch-generated missing-item register CSVs now carry artifact metadata in API responses and can be re-listed/downloaded through the artifact endpoints without exposing server filesystem paths.
 - Successful unregistered order batch imports now rewrite the moved registered CSV archive so each stored `pdf_link` matches the final registered PDF location after the batch move completes.
 - `migrate_orders_import_layout()` now rewrites stale `pdf_link` values found in both unregistered and registered order CSV files, in addition to quotation DB rows, so archived registered CSVs stay aligned with the canonical `imports/orders/...` directory structure.
 - Unregistered batch order import writes missing-item rows into one consolidated register CSV per run under `imports/items/unregistered/`; source CSV/PDF files remain in place for unresolved quotations.
@@ -279,7 +285,7 @@ Last updated: 2026-03-25 (JST)
 
 ## 6. Quality State
 
-- Backend tests: `174 passed` via `uv run python -m pytest` (latest run on 2026-03-25).
+- Backend tests: `178 passed` via `uv run python -m pytest` (latest run on 2026-03-25).
 - Frontend tests: `29 passed` via `node .\node_modules\vitest\vitest.mjs run` (latest run on 2026-03-25).
 - Frontend production build: success via `node .\node_modules\vite\bin\vite.js build` (latest run on 2026-03-25).
 
