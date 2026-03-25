@@ -90,6 +90,68 @@
 - Frontend production build:
   - `node .\\node_modules\\vite\\bin\\vite.js build`
 
+## 2026-03-25 (shared-server adaptation phase 3)
+
+### Changed
+
+- Implemented Phase 3 of `documents/postgresql_migration_plan/shared_server_adaptation_plan.md` for Orders PDF handling.
+  - Upload-first Orders ZIP imports now treat `pdf_link` as a filename-first browser contract.
+  - Path-shaped `pdf_link` values inside uploaded ZIP CSVs are normalized down to filename semantics for compatibility before staged PDF resolution runs.
+  - Legacy/manual server-path-compatible handling remains available for admin recovery and existing server-resident import flows.
+- Updated the Orders page guidance so the primary shared-server instruction is now:
+  - keep `pdf_link` blank, or
+  - use filename-only such as `Q2026-0001.pdf`
+  - use `Upload Orders ZIP` when the corresponding PDF file is part of the same browser upload
+
+### Tests
+
+- Backend targeted PDF-handling regression run:
+  - `uv run python -m pytest tests/test_api_integration.py -k "orders_batch_upload_endpoint_normalizes_path_like_pdf_link_to_filename_contract or orders_batch_upload_endpoint_stages_zip_and_imports or orders_batch_upload_endpoint_rejects_zip_without_csv or test_order_import_rejects_unregistered_pdf_link_path"`
+  - Result: `4 passed`
+- Backend full PostgreSQL suite:
+  - `uv run python -m pytest`
+  - Result: `177 passed`
+- Frontend type check:
+  - `node .\\node_modules\\typescript\\bin\\tsc -b`
+- Frontend tests:
+  - `node .\\node_modules\\vitest\\vitest.mjs run`
+  - Result: `29 passed`
+- Frontend production build:
+  - `node .\\node_modules\\vite\\bin\\vite.js build`
+
+## 2026-03-25 (shared-server adaptation phase 4)
+
+### Added
+
+- Implemented Phase 4 of `documents/postgresql_migration_plan/shared_server_adaptation_plan.md` for generated file delivery.
+  - Added generated-artifact API endpoints:
+    - `GET /api/artifacts`
+    - `GET /api/artifacts/{artifact_id}`
+    - `GET /api/artifacts/{artifact_id}/download`
+  - Added lightweight filesystem-backed artifact metadata for generated missing-item register CSVs under `imports/items/unregistered/`.
+- Orders import and batch-import responses now include managed artifact metadata for generated missing-item register CSVs instead of only raw filesystem paths.
+
+### Changed
+
+- Orders page now exposes browser download buttons for generated missing-item register CSVs and shows a recent generated-files list backed by the new artifact API.
+- Shared-server artifact delivery now uses browser-download endpoints instead of asking users to interpret server paths printed in status text.
+
+### Tests
+
+- Backend targeted artifact/API regression run:
+  - `uv run python -m pytest tests/test_api_integration.py -k "generated_artifact_endpoints_expose_missing_items_register_download or orders_batch_upload_endpoint_normalizes_path_like_pdf_link_to_filename_contract or orders_batch_upload_endpoint_stages_zip_and_imports"`
+  - Result: `3 passed`
+- Backend full PostgreSQL suite:
+  - `uv run python -m pytest`
+  - Result: `178 passed`
+- Frontend type check:
+  - `node .\\node_modules\\typescript\\bin\\tsc -b`
+- Frontend tests:
+  - `node .\\node_modules\\vitest\\vitest.mjs run`
+  - Result: `29 passed`
+- Frontend production build:
+  - `node .\\node_modules\\vite\\bin\\vite.js build`
+
 ## 2026-03-24 (PostgreSQL migration foundation)
 
 ### Fixed

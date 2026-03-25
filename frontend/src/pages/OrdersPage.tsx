@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import useSWR from "swr";
 import { CatalogPicker } from "../components/CatalogPicker";
-import { apiDownload, apiGetAllPages, apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
+import { apiDownload, apiGet, apiGetAllPages, apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
 import { formatActionError, resolvePreviewSelection } from "../lib/previewState";
 import type {
   CatalogSearchResult,
@@ -55,8 +55,20 @@ type ImportResult = {
   imported_count?: number;
   missing_count?: number;
   missing_csv_path?: string;
+  missing_artifact?: GeneratedArtifact;
   saved_alias_count?: number;
   rows?: MissingItemResolverRow[];
+};
+
+type GeneratedArtifact = {
+  artifact_id: string;
+  artifact_type: string;
+  filename: string;
+  relative_path: string;
+  size_bytes: number;
+  created_at: string;
+  source_job_type?: string;
+  source_job_id?: string;
 };
 
 type OrderImportPreviewStatus = "exact" | "high_confidence" | "needs_review" | "unresolved";
@@ -132,6 +144,7 @@ type UnregisteredFileReport = {
   error?: string;
   missing_count?: number;
   missing_csv_path?: string;
+  missing_artifact?: GeneratedArtifact;
   missing_rows?: MissingItemResolverRow[];
   warnings?: string[];
   normalizations?: BatchNormalization[];
@@ -160,6 +173,7 @@ type ImportBatchResult = {
   succeeded: number;
   missing_items: number;
   failed: number;
+  missing_items_register_artifact?: GeneratedArtifact;
   files?: UnregisteredFileReport[];
   warnings?: string[];
   normalizations?: BatchNormalization[];
@@ -228,6 +242,7 @@ export function OrdersPage() {
   const [unregisteredRoot, setUnregisteredRoot] = useState("");
   const [registeredRoot, setRegisteredRoot] = useState("");
   const [message, setMessage] = useState<string>("");
+  const [latestGeneratedArtifact, setLatestGeneratedArtifact] = useState<GeneratedArtifact | null>(null);
   const [missingRows, setMissingRows] = useState<MissingItemResolverRow[]>([]);
   const [importPreview, setImportPreview] = useState<OrderImportPreview | null>(null);
   const [previewSelections, setPreviewSelections] = useState<Record<number, CatalogSearchResult | null>>({});
@@ -270,6 +285,10 @@ export function OrdersPage() {
     isLoading: quotationsLoading,
     mutate: mutateQuotations,
   } = useSWR("/quotations", () => apiGetAllPages<Quotation>("/quotations?per_page=200"));
+  const { data: generatedArtifacts = [], mutate: mutateGeneratedArtifacts } = useSWR(
+    "/artifacts?artifact_type=missing_items_register",
+    apiGet<GeneratedArtifact[]>
+  );
   const { data: itemsData } = useSWR("/items-orders-context", () =>
     apiGetWithPagination<Item[]>("/items?per_page=500")
   );
@@ -570,6 +589,7 @@ export function OrdersPage() {
     if (!file || !supplier.trim()) return;
     setLoading(true);
     setMessage("");
+    setLatestGeneratedArtifact(null);
     setMissingRows([]);
     resetImportPreview();
     sessionStorage.removeItem(PENDING_BATCH_RETRY_KEY);
@@ -682,17 +702,19 @@ export function OrdersPage() {
       if (result.status === "missing_items") {
         const unresolved = normalizeMissingRows(result.rows, supplier.trim());
         setMissingRows(unresolved);
+        setLatestGeneratedArtifact(result.missing_artifact ?? null);
         try {
           await rememberPendingOrderImport(file);
         } catch {
           // Keep working even if browser storage quota blocks auto-retry cache.
         }
         setMessage(
-          `Missing items detected (${result.missing_count}). CSV generated: ${result.missing_csv_path}`
+          `Missing items detected (${result.missing_count}). Download the generated register CSV, then open the resolver in Items.`
         );
         openMissingResolver(unresolved);
       } else {
         resetImportPreview();
+        setLatestGeneratedArtifact(null);
         setMissingRows([]);
         sessionStorage.removeItem(PENDING_MISSING_ITEMS_KEY);
         sessionStorage.removeItem(PENDING_ORDER_IMPORT_KEY);
@@ -722,6 +744,12 @@ export function OrdersPage() {
 
   function downloadImportCsv(path: string, fallbackFilename: string) {
     void apiDownload(path, fallbackFilename).catch((error) => {
+      setMessage(error instanceof Error ? error.message : String(error));
+    });
+  }
+
+  function downloadGeneratedArtifact(artifact: GeneratedArtifact) {
+    void apiDownload(`/artifacts/${artifact.artifact_id}/download`, artifact.filename).catch((error) => {
       setMessage(error instanceof Error ? error.message : String(error));
     });
   }
@@ -870,6 +898,7 @@ export function OrdersPage() {
   async function runImportUnregisteredOrders() {
     setLoading(true);
     setMessage("");
+    setLatestGeneratedArtifact(null);
     setBatchMissingReports([]);
     setBatchErrorReports([]);
     setBatchWarnings([]);
@@ -887,13 +916,14 @@ export function OrdersPage() {
       setBatchMissingReports(
         (result.files ?? []).filter((entry) => entry.status === "missing_items")
       );
+      setLatestGeneratedArtifact(result.missing_items_register_artifact ?? null);
       setBatchErrorReports(toBatchErrorReports("import", result.files));
       setBatchWarnings(uniqueWarnings(result.warnings ?? []));
       setBatchNormalizations(uniqueNormalizations(result.normalizations ?? []));
       setMessage(
         `Unregistered import batch: status=${result.status}, processed=${result.processed}, succeeded=${result.succeeded}, missing_items=${result.missing_items}, failed=${result.failed}`
       );
-      await Promise.all([mutateOrders(), mutateQuotations()]);
+      await Promise.all([mutateOrders(), mutateQuotations(), mutateGeneratedArtifacts()]);
     } finally {
       setLoading(false);
     }
@@ -902,6 +932,7 @@ export function OrdersPage() {
   async function runDefaultUnregisteredBatch() {
     setLoading(true);
     setMessage("");
+    setLatestGeneratedArtifact(null);
     setBatchMissingReports([]);
     setBatchErrorReports([]);
     setBatchWarnings([]);
@@ -919,6 +950,7 @@ export function OrdersPage() {
       setBatchMissingReports(
         (importResult.files ?? []).filter((entry) => entry.status === "missing_items")
       );
+      setLatestGeneratedArtifact(importResult.missing_items_register_artifact ?? null);
       setBatchErrorReports(toBatchErrorReports("import", importResult.files));
 
       const mergedWarnings = uniqueWarnings(importResult.warnings ?? []);
@@ -928,7 +960,7 @@ export function OrdersPage() {
       setMessage(
         `Unregistered batch complete: import(status=${importResult.status}, processed=${importResult.processed}, succeeded=${importResult.succeeded}, missing_items=${importResult.missing_items}, failed=${importResult.failed})`
       );
-      await Promise.all([mutateOrders(), mutateQuotations()]);
+      await Promise.all([mutateOrders(), mutateQuotations(), mutateGeneratedArtifacts()]);
     } finally {
       setLoading(false);
     }
@@ -942,6 +974,7 @@ export function OrdersPage() {
     }
     setLoading(true);
     setMessage("");
+    setLatestGeneratedArtifact(null);
     setBatchMissingReports([]);
     setBatchErrorReports([]);
     setBatchWarnings([]);
@@ -958,6 +991,7 @@ export function OrdersPage() {
         form
       );
       setBatchMissingReports((result.files ?? []).filter((entry) => entry.status === "missing_items"));
+      setLatestGeneratedArtifact(result.missing_items_register_artifact ?? null);
       setBatchErrorReports(toBatchErrorReports("import", result.files));
       setBatchWarnings(uniqueWarnings(result.warnings ?? []));
       setBatchNormalizations(uniqueNormalizations(result.normalizations ?? []));
@@ -965,7 +999,7 @@ export function OrdersPage() {
         `Orders ZIP upload: status=${result.status}, processed=${result.processed}, succeeded=${result.succeeded}, missing_items=${result.missing_items}, failed=${result.failed}${result.upload_job_id ? `, job=${result.upload_job_id}` : ""}`
       );
       setBatchZipFile(null);
-      await Promise.all([mutateOrders(), mutateQuotations()]);
+      await Promise.all([mutateOrders(), mutateQuotations(), mutateGeneratedArtifacts()]);
     } catch (error) {
       setMessage(formatActionError("Orders ZIP upload failed", error));
     } finally {
@@ -1009,12 +1043,13 @@ export function OrdersPage() {
             <code>pdf_link</code>
           </p>
           <p className="mt-1">
-            For manual import, <code>pdf_link</code> should be{" "}
-            <code>{"imports/orders/registered/pdf_files/<supplier>/<file>.pdf"}</code> or blank.
+            For browser/shared-server use, keep <code>pdf_link</code> blank or use a
+            filename only, such as <code>Q-2026-001.pdf</code>.
           </p>
           <p>
-            If you provide only a filename like <code>Q-2026-001.pdf</code>, it is auto-normalized
-            to the canonical registered path for the selected supplier.
+            If the PDF is part of the same upload package, prefer <strong>Upload Orders ZIP</strong>.
+            Canonical server paths remain accepted only as a compatibility fallback for existing
+            server-side files.
           </p>
           <div className="mt-2 flex flex-wrap gap-2">
             <button
@@ -1084,7 +1119,20 @@ export function OrdersPage() {
             Preview Import
           </button>
         </form>
-        {message && <p className="mt-3 text-sm text-signal">{message}</p>}
+        {message && (
+          <div className="mt-3 space-y-2">
+            <p className="text-sm text-signal">{message}</p>
+            {latestGeneratedArtifact && (
+              <button
+                className="button-subtle"
+                type="button"
+                onClick={() => downloadGeneratedArtifact(latestGeneratedArtifact)}
+              >
+                Download Generated CSV
+              </button>
+            )}
+          </div>
+        )}
         {importPreview && (
           <div className="mt-4 space-y-3 rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <div className="flex flex-wrap items-start justify-between gap-3">
@@ -1337,6 +1385,11 @@ export function OrdersPage() {
           <p className="text-xs text-slate-600">
             Supported layouts include <code>csv_files/&lt;supplier&gt;/...</code> and <code>pdf_files/&lt;supplier&gt;/...</code>. Plain supplier subfolders are also accepted for backward-compatible ZIPs.
           </p>
+          <p className="text-xs text-slate-600">
+            Inside uploaded CSVs, <code>pdf_link</code> should be blank or filename-only such as{" "}
+            <code>Q-2026-001.pdf</code>. Server paths are unnecessary in this flow and are only
+            normalized for compatibility.
+          </p>
           <div className="flex flex-wrap gap-2">
             <button className="button" type="submit" disabled={loading}>
               Upload Orders ZIP
@@ -1471,8 +1524,17 @@ export function OrdersPage() {
                   Missing items: {entry.file}
                 </p>
                 <p className="mt-1 text-xs text-amber-800">
-                  Generated CSV: {entry.missing_csv_path}
+                  Generated register CSV is available for browser download.
                 </p>
+                {entry.missing_artifact && (
+                  <button
+                    className="button-subtle mt-2"
+                    type="button"
+                    onClick={() => downloadGeneratedArtifact(entry.missing_artifact!)}
+                  >
+                    Download Generated CSV
+                  </button>
+                )}
                 <button
                   className="button-subtle mt-2"
                   type="button"
@@ -1505,6 +1567,31 @@ export function OrdersPage() {
                 )}
               </div>
             ))}
+          </div>
+        )}
+        {generatedArtifacts.length > 0 && (
+          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <h3 className="font-medium text-slate-900">Recent Generated Files</h3>
+            <div className="mt-2 space-y-2">
+              {generatedArtifacts.slice(0, 5).map((artifact) => (
+                <div
+                  key={artifact.artifact_id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2"
+                >
+                  <div className="text-sm text-slate-700">
+                    <p className="font-medium text-slate-900">{artifact.filename}</p>
+                    <p className="text-xs text-slate-500">{artifact.relative_path}</p>
+                  </div>
+                  <button
+                    className="button-subtle"
+                    type="button"
+                    onClick={() => downloadGeneratedArtifact(artifact)}
+                  >
+                    Download
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </section>

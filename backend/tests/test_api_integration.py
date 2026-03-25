@@ -821,6 +821,72 @@ def test_orders_batch_upload_endpoint_keeps_non_ascii_supplier_paths_distinct(
     assert (registered_root / "pdf_files" / "供給者B" / "ZIP-NA-002.pdf").exists()
 
 
+def test_orders_batch_upload_endpoint_normalizes_path_like_pdf_link_to_filename_contract(
+    client, workspace_roots: dict[str, Path]
+):
+    client.post("/api/manufacturers", json={"name": "ZIP-PATH-MFG"})
+    client.post(
+        "/api/items",
+        json={
+            "item_number": "ZIP-PATH-ITEM",
+            "manufacturer_name": "ZIP-PATH-MFG",
+            "category": "Lens",
+        },
+    )
+
+    raw_pdf_link = "imports/orders/unregistered/pdf_files/SupplierCompat/ZIP-PATH-001.pdf"
+    archive = make_zip_bytes(
+        {
+            "csv_files/SupplierCompat/ZIP-PATH-001.csv": make_csv_bytes(
+                [
+                    "item_number",
+                    "quantity",
+                    "quotation_number",
+                    "issue_date",
+                    "order_date",
+                    "expected_arrival",
+                    "pdf_link",
+                ],
+                [
+                    {
+                        "item_number": "ZIP-PATH-ITEM",
+                        "quantity": "1",
+                        "quotation_number": "ZIP-PATH-001",
+                        "issue_date": "2026-03-01",
+                        "order_date": "2026-03-02",
+                        "expected_arrival": "2026-03-10",
+                        "pdf_link": raw_pdf_link,
+                    }
+                ],
+            ),
+            "pdf_files/SupplierCompat/ZIP-PATH-001.pdf": b"%PDF-1.4 compat path test",
+        }
+    )
+
+    response = client.post(
+        "/api/orders/batch-upload",
+        files={"file": ("orders_batch.zip", archive, "application/zip")},
+        data={"continue_on_error": "false"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "ok"
+    assert data["succeeded"] == 1
+    assert any(
+        entry.get("kind") == "pdf_link_filename"
+        and entry.get("from") == raw_pdf_link
+        and entry.get("to") == "ZIP-PATH-001.pdf"
+        for entry in data.get("normalizations", [])
+    )
+
+    quotations = client.get("/api/quotations?supplier=SupplierCompat&per_page=50")
+    assert quotations.status_code == 200
+    rows = quotations.json()["data"]
+    assert len(rows) == 1
+    assert rows[0]["pdf_link"] == "imports/orders/registered/pdf_files/SupplierCompat/ZIP-PATH-001.pdf"
+
+
 def test_orders_batch_upload_endpoint_rejects_zip_without_csv(client):
     archive = make_zip_bytes({"pdf_files/SupplierZip/ZIP-ONLY.pdf": b"%PDF-1.4 no csv"})
 
@@ -834,6 +900,66 @@ def test_orders_batch_upload_endpoint_rejects_zip_without_csv(client):
     payload = response.json()
     assert payload["status"] == "error"
     assert payload["error"]["code"] == "INVALID_ZIP"
+
+
+def test_generated_artifact_endpoints_expose_missing_items_register_download(
+    client, workspace_roots: dict[str, Path]
+):
+    archive = make_zip_bytes(
+        {
+            "csv_files/SupplierArtifact/ART-001.csv": make_csv_bytes(
+                [
+                    "item_number",
+                    "quantity",
+                    "quotation_number",
+                    "issue_date",
+                    "order_date",
+                    "expected_arrival",
+                    "pdf_link",
+                ],
+                [
+                    {
+                        "item_number": "ARTIFACT-MISSING-ITEM",
+                        "quantity": "2",
+                        "quotation_number": "ART-001",
+                        "issue_date": "2026-03-01",
+                        "order_date": "2026-03-02",
+                        "expected_arrival": "2026-03-10",
+                        "pdf_link": "ART-001.pdf",
+                    }
+                ],
+            ),
+            "pdf_files/SupplierArtifact/ART-001.pdf": b"%PDF-1.4 artifact batch test",
+        }
+    )
+
+    response = client.post(
+        "/api/orders/batch-upload",
+        files={"file": ("orders_batch.zip", archive, "application/zip")},
+        data={"continue_on_error": "true"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    artifact = data["missing_items_register_artifact"]
+    assert artifact["artifact_type"] == "missing_items_register"
+    assert artifact["filename"].endswith(".csv")
+    assert artifact["relative_path"].startswith("imports/items/unregistered/")
+
+    detail = client.get(f"/api/artifacts/{artifact['artifact_id']}")
+    assert detail.status_code == 200
+    assert detail.json()["data"]["artifact_id"] == artifact["artifact_id"]
+
+    listing = client.get("/api/artifacts?artifact_type=missing_items_register")
+    assert listing.status_code == 200
+    listed_ids = {row["artifact_id"] for row in listing.json()["data"]}
+    assert artifact["artifact_id"] in listed_ids
+
+    download = client.get(f"/api/artifacts/{artifact['artifact_id']}/download")
+    assert download.status_code == 200
+    assert download.headers["content-type"].startswith("text/csv")
+    assert "attachment; filename=" in download.headers["content-disposition"]
+    assert "ARTIFACT-MISSING-ITEM" in download.text
 
 def test_order_import_returns_missing_item_details(client):
     output = StringIO()
@@ -873,6 +999,13 @@ def test_order_import_returns_missing_item_details(client):
     assert data["rows"][0]["row"] == 2
     assert data["rows"][0]["supplier"] == "SupplierMissing"
     assert data["rows"][0]["item_number"] == "MISSING-ITEM-001"
+    artifact = data["missing_artifact"]
+    assert artifact["artifact_type"] == "missing_items_register"
+    assert artifact["relative_path"].startswith("imports/items/unregistered/")
+
+    download = client.get(f"/api/artifacts/{artifact['artifact_id']}/download")
+    assert download.status_code == 200
+    assert "MISSING-ITEM-001" in download.text
 
 def test_order_import_autonormalizes_pdf_link_filename(client):
     client.post("/api/manufacturers", json={"name": "API-MANUAL-MFG"})

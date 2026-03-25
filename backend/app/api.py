@@ -10,7 +10,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from .config import APP_HOST, APP_PORT, AUTO_MIGRATE_ON_STARTUP, get_auth_mode, get_cors_allowed_origins
+from .config import (
+    APP_HOST,
+    APP_PORT,
+    AUTO_MIGRATE_ON_STARTUP,
+    ITEMS_IMPORT_UNREGISTERED_ROOT,
+    get_auth_mode,
+    get_cors_allowed_origins,
+)
 from .db import get_connection, init_db
 from .errors import AppError
 from . import service
@@ -67,6 +74,15 @@ def csv_attachment(filename: str, content: bytes) -> Response:
     return Response(
         content=content,
         media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def file_attachment(filename: str, content: bytes) -> Response:
+    media_type = "text/csv; charset=utf-8" if filename.lower().endswith(".csv") else "application/octet-stream"
+    return Response(
+        content=content,
+        media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
@@ -239,6 +255,19 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
                 "effective_role": effective_role,
             }
         )
+
+    @app.get("/api/artifacts")
+    def get_artifacts(artifact_type: str | None = None):
+        return ok(service.list_generated_artifacts(artifact_type=artifact_type))
+
+    @app.get("/api/artifacts/{artifact_id}")
+    def get_artifact_detail(artifact_id: str):
+        return ok(service.get_generated_artifact(artifact_id))
+
+    @app.get("/api/artifacts/{artifact_id}/download")
+    def download_artifact(artifact_id: str):
+        filename, content = service.get_generated_artifact_download(artifact_id)
+        return file_attachment(filename, content)
 
     @app.get("/api/users")
     def get_users(include_inactive: bool = False, conn= db):
@@ -667,6 +696,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
             content=content,
             default_order_date=default_order_date,
             source_name=file.filename or "order_import.csv",
+            missing_output_dir=ITEMS_IMPORT_UNREGISTERED_ROOT,
             row_overrides=_parse_optional_json_form(row_overrides, "row_overrides"),
             alias_saves=_parse_optional_json_form(alias_saves, "alias_saves"),
         )

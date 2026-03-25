@@ -199,6 +199,7 @@ def normalize_pdf_link(
     supplier_name: str,
     roots: OrderImportRoots,
     csv_path: Path | None = None,
+    prefer_filename_only: bool = False,
 ) -> tuple[Path | None, str, list[dict[str, str]], list[str]]:
     raw = (pdf_link or "").strip()
     if not raw:
@@ -217,8 +218,24 @@ def normalize_pdf_link(
 
     warnings: list[str] = []
     preferred_text = normalized or raw
-    search_texts = [raw]
-    if preferred_text != raw:
+    search_texts: list[str] = []
+
+    if prefer_filename_only:
+        filename_only = Path(preferred_text or raw).name.strip()
+        if filename_only and filename_only != preferred_text:
+            normalizations.append(
+                {
+                    "kind": "pdf_link_filename",
+                    "from": raw,
+                    "to": filename_only,
+                }
+            )
+            preferred_text = filename_only
+        if preferred_text:
+            search_texts.append(preferred_text)
+
+    search_texts.append(raw)
+    if preferred_text and preferred_text != raw:
         search_texts.append(preferred_text)
 
     candidates: list[Path] = []
