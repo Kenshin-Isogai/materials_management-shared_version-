@@ -224,6 +224,7 @@ export function OrdersPage() {
   const [supplierSelection, setSupplierSelection] = useState<CatalogSearchResult | null>(null);
   const [defaultDate, setDefaultDate] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [batchZipFile, setBatchZipFile] = useState<File | null>(null);
   const [unregisteredRoot, setUnregisteredRoot] = useState("");
   const [registeredRoot, setRegisteredRoot] = useState("");
   const [message, setMessage] = useState<string>("");
@@ -933,6 +934,45 @@ export function OrdersPage() {
     }
   }
 
+  async function uploadOrdersBatchZip(event: FormEvent) {
+    event.preventDefault();
+    if (!batchZipFile) {
+      setMessage("Select an orders ZIP file to upload.");
+      return;
+    }
+    setLoading(true);
+    setMessage("");
+    setBatchMissingReports([]);
+    setBatchErrorReports([]);
+    setBatchWarnings([]);
+    setBatchNormalizations([]);
+    try {
+      const form = new FormData();
+      form.append("file", batchZipFile);
+      if (defaultDate.trim()) {
+        form.append("default_order_date", defaultDate.trim());
+      }
+      form.append("continue_on_error", "true");
+      const result = await apiSendForm<ImportBatchResult & { upload_job_id?: string }>(
+        "/orders/batch-upload",
+        form
+      );
+      setBatchMissingReports((result.files ?? []).filter((entry) => entry.status === "missing_items"));
+      setBatchErrorReports(toBatchErrorReports("import", result.files));
+      setBatchWarnings(uniqueWarnings(result.warnings ?? []));
+      setBatchNormalizations(uniqueNormalizations(result.normalizations ?? []));
+      setMessage(
+        `Orders ZIP upload: status=${result.status}, processed=${result.processed}, succeeded=${result.succeeded}, missing_items=${result.missing_items}, failed=${result.failed}${result.upload_job_id ? `, job=${result.upload_job_id}` : ""}`
+      );
+      setBatchZipFile(null);
+      await Promise.all([mutateOrders(), mutateQuotations()]);
+    } catch (error) {
+      setMessage(formatActionError("Orders ZIP upload failed", error));
+    } finally {
+      setLoading(false);
+    }
+  }
+
   function openBatchEntryResolver(entry: UnregisteredFileReport) {
     const fallbackSupplier = (entry.supplier ?? supplier).trim() || "UNKNOWN";
     const unresolved = normalizeMissingRows(entry.missing_rows, fallbackSupplier);
@@ -1283,20 +1323,43 @@ export function OrdersPage() {
       </section>
 
       <section className="panel p-4">
-        <h2 className="mb-3 font-display text-lg font-semibold">Unregistered Folder Batch</h2>
+        <h2 className="mb-3 font-display text-lg font-semibold">Upload Orders ZIP</h2>
         <p className="mb-3 text-sm text-slate-600">
-          Run the default batch for canonical folders, or open advanced controls for explicit roots.
+          Upload a ZIP package containing order CSV files and quotation PDFs. The server stages the package and runs the existing unregistered import flow.
         </p>
-        <p className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
-          Canonical layout:
-          {" "}
-          <code>{"imports/orders/unregistered/csv_files/<supplier>/*.csv"}</code>
-          {" "}
-          and
-          {" "}
-          <code>{"imports/orders/unregistered/pdf_files/<supplier>/*"}</code>
-          .
-        </p>
+        <form className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3" onSubmit={uploadOrdersBatchZip}>
+          <input
+            className="input"
+            type="file"
+            accept=".zip,application/zip"
+            onChange={(event) => setBatchZipFile(event.target.files?.[0] ?? null)}
+          />
+          <p className="text-xs text-slate-600">
+            Supported layouts include <code>csv_files/&lt;supplier&gt;/...</code> and <code>pdf_files/&lt;supplier&gt;/...</code>. Plain supplier subfolders are also accepted for backward-compatible ZIPs.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button className="button" type="submit" disabled={loading}>
+              Upload Orders ZIP
+            </button>
+            <span className="self-center text-xs text-slate-500">
+              {batchZipFile ? batchZipFile.name : "Select one ZIP archive"}
+            </span>
+          </div>
+        </form>
+        <div className="mt-4 border-t border-slate-200 pt-4">
+          <p className="mb-3 text-sm text-slate-600">
+            Legacy fallback: run the default batch for canonical server folders, or open advanced controls for explicit roots.
+          </p>
+          <p className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
+            Canonical layout:
+            {" "}
+            <code>{"imports/orders/unregistered/csv_files/<supplier>/*.csv"}</code>
+            {" "}
+            and
+            {" "}
+            <code>{"imports/orders/unregistered/pdf_files/<supplier>/*"}</code>
+            .
+          </p>
         <div className="mt-3 flex flex-wrap gap-2">
           <button className="button" onClick={runDefaultUnregisteredBatch} disabled={loading}>
             Run Unregistered Batch (Default Roots)
@@ -1333,6 +1396,7 @@ export function OrdersPage() {
             </div>
           </div>
         )}
+        </div>
         {(batchWarnings.length > 0 || batchNormalizations.length > 0) && (
           <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
             {batchWarnings.length > 0 && (

@@ -71,6 +71,14 @@ desktop.ini
 !.env.example
 *.local
 *.secret
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+*.jks
+*.kdbx
 secrets/
 /temporary
 /temporary

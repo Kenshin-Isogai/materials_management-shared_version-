@@ -428,6 +428,21 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         conn.commit()
         return ok(result)
 
+    @app.post("/api/items/batch-upload")
+    async def post_items_batch_upload(
+        files: list[UploadFile] = File(...),
+        continue_on_error: bool = Form(default=True),
+        conn= db,
+    ):
+        uploaded_files = [(file.filename or "items_batch.csv", await file.read()) for file in files]
+        result = service.upload_and_register_item_batch_csvs(
+            conn,
+            files=uploaded_files,
+            continue_on_error=continue_on_error,
+        )
+        conn.commit()
+        return ok(result)
+
     @app.get("/api/items/{item_id}/history")
     def get_item_history(item_id: int, conn= db):
         return ok(service.list_item_history(conn, item_id))
@@ -675,6 +690,24 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
             registered_root=body.registered_root,
             default_order_date=body.default_order_date,
             continue_on_error=body.continue_on_error,
+        )
+        conn.commit()
+        return ok(result)
+
+    @app.post("/api/orders/batch-upload")
+    async def post_orders_batch_upload(
+        file: UploadFile = File(...),
+        default_order_date: str | None = Form(default=None),
+        continue_on_error: bool = Form(default=True),
+        conn= db,
+    ):
+        content = await file.read()
+        result = service.upload_and_import_orders_batch_zip(
+            conn,
+            filename=file.filename or "orders_batch.zip",
+            content=content,
+            default_order_date=default_order_date,
+            continue_on_error=continue_on_error,
         )
         conn.commit()
         return ok(result)

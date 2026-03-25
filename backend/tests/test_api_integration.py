@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import csv
 import json
-from io import StringIO
+from io import BytesIO, StringIO
 from pathlib import Path
+import zipfile
 
 from app import service
 from app.utils import today_jst
@@ -23,6 +24,14 @@ def make_csv_bytes(fieldnames, rows):
     for row in rows:
         writer.writerow(row)
     return output.getvalue().encode("utf-8")
+
+
+def make_zip_bytes(entries: dict[str, bytes]) -> bytes:
+    output = BytesIO()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, content in entries.items():
+            archive.writestr(name, content)
+    return output.getvalue()
 
 
 def test_health_endpoint(client):
@@ -671,6 +680,160 @@ def test_unregistered_order_import_endpoint_accepts_unregistered_pdf_path(client
     assert not csv_path.exists()
     assert (registered_root / "csv_files" / "SupplierPath" / "QP-001.csv").exists()
     assert (registered_root / "pdf_files" / "SupplierPath" / "QP-001.pdf").exists()
+
+
+def test_orders_batch_upload_endpoint_stages_zip_and_imports(client, workspace_roots: dict[str, Path]):
+    client.post("/api/manufacturers", json={"name": "ZIP-BATCH-MFG"})
+    client.post(
+        "/api/items",
+        json={
+            "item_number": "ZIP-BATCH-ITEM",
+            "manufacturer_name": "ZIP-BATCH-MFG",
+            "category": "Lens",
+        },
+    )
+
+    archive = make_zip_bytes(
+        {
+            "csv_files/SupplierZip/ZIP-001.csv": make_csv_bytes(
+                [
+                    "item_number",
+                    "quantity",
+                    "quotation_number",
+                    "issue_date",
+                    "order_date",
+                    "expected_arrival",
+                    "pdf_link",
+                ],
+                [
+                    {
+                        "item_number": "ZIP-BATCH-ITEM",
+                        "quantity": "3",
+                        "quotation_number": "ZIP-001",
+                        "issue_date": "2026-03-01",
+                        "order_date": "2026-03-02",
+                        "expected_arrival": "2026-03-10",
+                        "pdf_link": "ZIP-001.pdf",
+                    }
+                ],
+            ),
+            "pdf_files/SupplierZip/ZIP-001.pdf": b"%PDF-1.4 zip batch test",
+        }
+    )
+
+    response = client.post(
+        "/api/orders/batch-upload",
+        files={"file": ("orders_batch.zip", archive, "application/zip")},
+        data={"continue_on_error": "true"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "ok"
+    assert data["succeeded"] == 1
+    assert data["upload_job_id"].startswith("orders_")
+    assert len(data["extracted_files"]) == 2
+    registered_root = workspace_roots["orders_registered_root"]
+    assert (registered_root / "csv_files" / "SupplierZip" / "ZIP-001.csv").exists()
+    assert (registered_root / "pdf_files" / "SupplierZip" / "ZIP-001.pdf").exists()
+
+
+def test_orders_batch_upload_endpoint_keeps_non_ascii_supplier_paths_distinct(
+    client, workspace_roots: dict[str, Path]
+):
+    client.post("/api/manufacturers", json={"name": "ZIP-NONASCII-MFG"})
+    for item_number in ("ZIP-NONASCII-ITEM-A", "ZIP-NONASCII-ITEM-B"):
+        client.post(
+            "/api/items",
+            json={
+                "item_number": item_number,
+                "manufacturer_name": "ZIP-NONASCII-MFG",
+                "category": "Lens",
+            },
+        )
+
+    archive = make_zip_bytes(
+        {
+            "csv_files/供給者A/ZIP-NA-001.csv": make_csv_bytes(
+                [
+                    "item_number",
+                    "quantity",
+                    "quotation_number",
+                    "issue_date",
+                    "order_date",
+                    "expected_arrival",
+                    "pdf_link",
+                ],
+                [
+                    {
+                        "item_number": "ZIP-NONASCII-ITEM-A",
+                        "quantity": "1",
+                        "quotation_number": "ZIP-NA-001",
+                        "issue_date": "2026-03-01",
+                        "order_date": "2026-03-02",
+                        "expected_arrival": "2026-03-10",
+                        "pdf_link": "ZIP-NA-001.pdf",
+                    }
+                ],
+            ),
+            "csv_files/供給者B/ZIP-NA-002.csv": make_csv_bytes(
+                [
+                    "item_number",
+                    "quantity",
+                    "quotation_number",
+                    "issue_date",
+                    "order_date",
+                    "expected_arrival",
+                    "pdf_link",
+                ],
+                [
+                    {
+                        "item_number": "ZIP-NONASCII-ITEM-B",
+                        "quantity": "2",
+                        "quotation_number": "ZIP-NA-002",
+                        "issue_date": "2026-03-03",
+                        "order_date": "2026-03-04",
+                        "expected_arrival": "2026-03-11",
+                        "pdf_link": "ZIP-NA-002.pdf",
+                    }
+                ],
+            ),
+            "pdf_files/供給者A/ZIP-NA-001.pdf": b"%PDF-1.4 supplier A",
+            "pdf_files/供給者B/ZIP-NA-002.pdf": b"%PDF-1.4 supplier B",
+        }
+    )
+
+    response = client.post(
+        "/api/orders/batch-upload",
+        files={"file": ("orders_batch.zip", archive, "application/zip")},
+        data={"continue_on_error": "false"},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["status"] == "ok"
+    assert data["succeeded"] == 2
+
+    registered_root = workspace_roots["orders_registered_root"]
+    assert (registered_root / "csv_files" / "供給者A" / "ZIP-NA-001.csv").exists()
+    assert (registered_root / "pdf_files" / "供給者A" / "ZIP-NA-001.pdf").exists()
+    assert (registered_root / "csv_files" / "供給者B" / "ZIP-NA-002.csv").exists()
+    assert (registered_root / "pdf_files" / "供給者B" / "ZIP-NA-002.pdf").exists()
+
+
+def test_orders_batch_upload_endpoint_rejects_zip_without_csv(client):
+    archive = make_zip_bytes({"pdf_files/SupplierZip/ZIP-ONLY.pdf": b"%PDF-1.4 no csv"})
+
+    response = client.post(
+        "/api/orders/batch-upload",
+        files={"file": ("orders_batch.zip", archive, "application/zip")},
+        data={"continue_on_error": "true"},
+    )
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["error"]["code"] == "INVALID_ZIP"
 
 def test_order_import_returns_missing_item_details(client):
     output = StringIO()
@@ -1558,6 +1721,86 @@ def test_items_import_endpoint_archives_uploaded_csv_into_registered_month_folde
     assert len(rows) == 1
     assert rows[0]["item_number"] == "CSV-ARCHIVE-001"
     assert not (month_dir / "items_archive.csv").exists()
+
+
+def test_items_batch_upload_endpoint_stages_and_registers_csvs(client, workspace_roots: dict[str, Path]):
+    batch_one = make_csv_bytes(
+        ["supplier", "item_number", "resolution_type", "category", "url", "description"],
+        [
+            {
+                "supplier": "Upload Supplier A",
+                "item_number": "UPLOAD-BATCH-ITEM-001",
+                "resolution_type": "new_item",
+                "category": "Lens",
+                "url": "",
+                "description": "first upload batch row",
+            }
+        ],
+    )
+    batch_two = make_csv_bytes(
+        ["supplier", "item_number", "resolution_type", "category", "url", "description"],
+        [
+            {
+                "supplier": "Upload Supplier B",
+                "item_number": "UPLOAD-BATCH-ITEM-002",
+                "resolution_type": "new_item",
+                "category": "Mirror",
+                "url": "",
+                "description": "second upload batch row",
+            }
+        ],
+    )
+
+    response = client.post(
+        "/api/items/batch-upload",
+        files=[
+            ("files", ("upload_batch_a.csv", batch_one, "text/csv")),
+            ("files", ("upload_batch_b.csv", batch_two, "text/csv")),
+        ],
+        data={"continue_on_error": "true"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["status"] == "ok"
+    assert payload["succeeded"] == 2
+    assert payload["upload_job_id"].startswith("items_")
+    assert len(payload["uploaded_files"]) == 2
+
+    month_dir = workspace_roots["items_registered_root"] / today_jst()[:7]
+    archived_files = sorted(month_dir.glob("*.csv"))
+    assert archived_files
+    archived_text = "\n".join(path.read_text(encoding="utf-8") for path in archived_files)
+    assert "UPLOAD-BATCH-ITEM-001" in archived_text
+    assert "UPLOAD-BATCH-ITEM-002" in archived_text
+
+
+def test_items_batch_upload_endpoint_accepts_non_ascii_csv_filename(client):
+    batch = make_csv_bytes(
+        ["supplier", "item_number", "resolution_type", "category", "url", "description"],
+        [
+            {
+                "supplier": "Upload Supplier Localized",
+                "item_number": "UPLOAD-BATCH-ITEM-LOCALIZED",
+                "resolution_type": "new_item",
+                "category": "Lens",
+                "url": "",
+                "description": "localized filename upload",
+            }
+        ],
+    )
+
+    response = client.post(
+        "/api/items/batch-upload",
+        files=[("files", ("見積.csv", batch, "text/csv"))],
+        data={"continue_on_error": "true"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["status"] == "ok"
+    assert payload["succeeded"] == 1
+    assert any(str(path).endswith(".csv") for path in payload["uploaded_files"])
 
 
 def test_items_import_preview_endpoint_classifies_duplicate_and_alias_resolution(client):
