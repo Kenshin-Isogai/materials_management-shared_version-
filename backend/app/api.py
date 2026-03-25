@@ -10,7 +10,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from .config import APP_HOST, APP_PORT, AUTO_MIGRATE_ON_STARTUP, get_auth_mode, get_cors_allowed_origins
+from .config import (
+    APP_HOST,
+    APP_PORT,
+    AUTO_MIGRATE_ON_STARTUP,
+    ITEMS_IMPORT_UNREGISTERED_ROOT,
+    get_auth_mode,
+    get_cors_allowed_origins,
+)
 from .db import get_connection, init_db
 from .errors import AppError
 from . import service
@@ -689,6 +696,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
             content=content,
             default_order_date=default_order_date,
             source_name=file.filename or "order_import.csv",
+            missing_output_dir=ITEMS_IMPORT_UNREGISTERED_ROOT,
             row_overrides=_parse_optional_json_form(row_overrides, "row_overrides"),
             alias_saves=_parse_optional_json_form(alias_saves, "alias_saves"),
         )

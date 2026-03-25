@@ -999,6 +999,13 @@ def test_order_import_returns_missing_item_details(client):
     assert data["rows"][0]["row"] == 2
     assert data["rows"][0]["supplier"] == "SupplierMissing"
     assert data["rows"][0]["item_number"] == "MISSING-ITEM-001"
+    artifact = data["missing_artifact"]
+    assert artifact["artifact_type"] == "missing_items_register"
+    assert artifact["relative_path"].startswith("imports/items/unregistered/")
+
+    download = client.get(f"/api/artifacts/{artifact['artifact_id']}/download")
+    assert download.status_code == 200
+    assert "MISSING-ITEM-001" in download.text
 
 def test_order_import_autonormalizes_pdf_link_filename(client):
     client.post("/api/manufacturers", json={"name": "API-MANUAL-MFG"})
