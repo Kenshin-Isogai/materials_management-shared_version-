@@ -4,6 +4,28 @@
 
 This document explains the implemented architecture of the Materials Management application, its database design, and the key maintenance rules that keep behavior consistent across API, CLI, and file-based workflows.
 
+## PostgreSQL Migration Status (2026-03-24)
+
+- The backend bootstrap now targets PostgreSQL through a SQLAlchemy-managed engine and Alembic baseline migration.
+- The existing raw-SQL service layer is temporarily preserved behind a compatibility connection wrapper so application behavior can keep using the current query surface while the storage engine changes.
+- Docker deployment artifacts were added:
+  - root `docker-compose.yml`
+  - root `docker-compose.override.yml`
+  - root `docker-compose.test.yml`
+  - `backend/Dockerfile`
+  - `frontend/Dockerfile`
+  - `frontend/nginx.conf`
+- Header-based user identification was added for mutation requests:
+  - anonymous reads remain allowed
+  - mutation requests require `X-User-Name`
+  - resolved users are stored in `request.state.user`
+  - database-side audit triggers populate `created_by` / `updated_by` / `performed_by` where supported
+- Frontend user administration now exists as a dedicated `/users` page.
+  - `GET /api/users` remains the active-user feed for the global picker
+  - `GET /api/users?include_inactive=true` backs the management screen so inactive rows can be reviewed and reactivated
+  - create/update/deactivate flows emit a frontend refresh signal so the shared header picker stays aligned without a full-page reload
+- `backend/main.py` is now a server entrypoint only; the prior CLI command surface is no longer the target deployment model.
+
 ## Operating Profile (Confirmed)
 
 - Deployment posture: local-first personal usage today, with future migration path to shared multi-user operation.

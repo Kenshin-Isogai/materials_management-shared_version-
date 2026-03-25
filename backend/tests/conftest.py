@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
 
 from app import config, order_import_paths, service
 from app.api import create_app
@@ -14,7 +16,6 @@ from app.db import get_connection, init_db
 def workspace_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     workspace_root = tmp_path / "workspace"
     backend_root = workspace_root / "backend"
-    database_root = backend_root / "database"
     exports_root = workspace_root / "exports"
     imports_root = workspace_root / "imports"
     items_import_root = imports_root / "items"
@@ -27,13 +28,13 @@ def workspace_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
     orders_unregistered_pdf_root = orders_unregistered_root / "pdf_files"
     orders_registered_csv_root = orders_registered_root / "csv_files"
     orders_registered_pdf_root = orders_registered_root / "pdf_files"
-    default_db_path = database_root / "inventory.db"
 
     config_overrides = {
         "WORKSPACE_ROOT": workspace_root,
         "BACKEND_ROOT": backend_root,
-        "DEFAULT_DB_PATH": default_db_path,
+        "APP_DATA_ROOT": workspace_root,
         "DEFAULT_EXPORTS_DIR": exports_root,
+        "EXPORTS_ROOT": exports_root,
         "IMPORTS_ROOT": imports_root,
         "ITEMS_IMPORT_ROOT": items_import_root,
         "ITEMS_IMPORT_UNREGISTERED_ROOT": items_unregistered_root,
@@ -69,14 +70,26 @@ def workspace_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
 
 
 @pytest.fixture
-def db_path(tmp_path: Path) -> Path:
-    return tmp_path / "inventory.db"
+def database_url() -> str:
+    url = os.getenv("TEST_DATABASE_URL") or os.getenv("DATABASE_URL")
+    if not url:
+        pytest.skip("TEST_DATABASE_URL or DATABASE_URL is required for PostgreSQL-backed tests")
+    return url
+
+
+def _reset_database(database_url: str) -> None:
+    engine = create_engine(database_url, future=True, isolation_level="AUTOCOMMIT")
+    with engine.connect() as conn:
+        conn.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
+        conn.execute(text("CREATE SCHEMA public"))
+    engine.dispose()
 
 
 @pytest.fixture
-def conn(db_path: Path, workspace_roots: dict[str, Path]):
-    init_db(str(db_path))
-    connection = get_connection(str(db_path))
+def conn(database_url: str, workspace_roots: dict[str, Path]):
+    _reset_database(database_url)
+    init_db(database_url)
+    connection = get_connection(database_url)
     try:
         yield connection
     finally:
@@ -84,8 +97,24 @@ def conn(db_path: Path, workspace_roots: dict[str, Path]):
 
 
 @pytest.fixture
-def client(db_path: Path, workspace_roots: dict[str, Path]):
-    app = create_app(db_path=str(db_path))
+def client(database_url: str, workspace_roots: dict[str, Path]):
+    _reset_database(database_url)
+    init_db(database_url)
+    seed_conn = get_connection(database_url)
+    try:
+        service.create_user(
+            seed_conn,
+            {
+                "username": "pytest",
+                "display_name": "Pytest User",
+                "role": "admin",
+                "is_active": True,
+            },
+        )
+        seed_conn.commit()
+    finally:
+        seed_conn.close()
+    app = create_app(database_url=database_url)
     with TestClient(app) as test_client:
+        test_client.headers.update({"X-User-Name": "pytest"})
         yield test_client
-

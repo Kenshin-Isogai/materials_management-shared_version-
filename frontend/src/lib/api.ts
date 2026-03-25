@@ -1,73 +1,69 @@
 import type { ApiResponse } from "./types";
 
-const configuredApiBase = String(import.meta.env.VITE_API_BASE ?? "").trim();
-const defaultHost =
-  typeof window !== "undefined" && window.location.hostname
-    ? window.location.hostname
-    : "127.0.0.1";
-const fallbackApiBases = [8000, 8001, 8010, 18000].map(
-  (port) => `http://${defaultHost}:${port}/api`
-);
-let lastWorkingApiBase: string | null = configuredApiBase || null;
-let probingPromise: Promise<string> | null = null;
+const API_BASE = String(import.meta.env.VITE_API_BASE ?? "/api").trim() || "/api";
+const USERNAME_STORAGE_KEY = "materials.username";
+const USERS_CHANGED_EVENT = "materials:users-changed";
 
 function toAbsolutePath(path: string): string {
   if (path.startsWith("/")) return path;
   return `/${path}`;
 }
 
-function candidateApiBases(): string[] {
-  if (configuredApiBase) return [configuredApiBase];
-  const bases = [lastWorkingApiBase, ...fallbackApiBases].filter(Boolean) as string[];
-  return Array.from(new Set(bases));
+function getStoredUsername(): string | null {
+  if (typeof window === "undefined") return null;
+  const value = window.localStorage.getItem(USERNAME_STORAGE_KEY);
+  return value && value.trim() ? value.trim() : null;
 }
 
-async function resolveApiBase(): Promise<string> {
-  if (configuredApiBase) return configuredApiBase;
-  if (lastWorkingApiBase) return lastWorkingApiBase;
-  if (!probingPromise) {
-    probingPromise = (async () => {
-      for (const base of fallbackApiBases) {
-        try {
-          const response = await fetch(`${base}/health`);
-          if (!response.ok) continue;
-          const payload = (await response.json()) as { status?: string };
-          if (payload.status === "ok") {
-            lastWorkingApiBase = base;
-            return base;
-          }
-        } catch {
-          continue;
-        }
-      }
-      return fallbackApiBases[0];
-    })();
+export function setStoredUsername(username: string | null): void {
+  if (typeof window === "undefined") return;
+  if (username && username.trim()) {
+    window.localStorage.setItem(USERNAME_STORAGE_KEY, username.trim());
+    return;
   }
-  const resolved = await probingPromise;
-  lastWorkingApiBase = resolved;
-  return resolved;
+  window.localStorage.removeItem(USERNAME_STORAGE_KEY);
+}
+
+export function getStoredUsernameOrNull(): string | null {
+  return getStoredUsername();
+}
+
+export function notifyUsersChanged(): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent(USERS_CHANGED_EVENT));
+}
+
+export function subscribeUsersChanged(listener: () => void): () => void {
+  if (typeof window === "undefined") {
+    return () => {};
+  }
+  const handler = () => listener();
+  window.addEventListener(USERS_CHANGED_EVENT, handler);
+  return () => window.removeEventListener(USERS_CHANGED_EVENT, handler);
+}
+
+function isMutationMethod(method: string | undefined): boolean {
+  const normalized = String(method ?? "GET").toUpperCase();
+  return !["GET", "HEAD", "OPTIONS"].includes(normalized);
+}
+
+function buildHeaders(init?: RequestInit): Headers {
+  const headers = new Headers(init?.headers ?? {});
+  const username = getStoredUsername();
+  if (isMutationMethod(init?.method)) {
+    if (!username) {
+      throw new Error("Select a user before performing changes.");
+    }
+    headers.set("X-User-Name", username);
+  }
+  return headers;
 }
 
 async function fetchApi(path: string, init?: RequestInit): Promise<Response> {
-  const normalizedPath = toAbsolutePath(path);
-  await resolveApiBase();
-  const bases = candidateApiBases();
-  let lastError: unknown = null;
-
-  for (const base of bases) {
-    try {
-      const response = await fetch(`${base}${normalizedPath}`, init);
-      lastWorkingApiBase = base;
-      return response;
-    } catch (error) {
-      lastError = error;
-    }
-  }
-
-  const attempted = bases.join(", ");
-  throw new Error(
-    `Failed to fetch backend API. Tried: ${attempted}. ${String(lastError ?? "")}`.trim()
-  );
+  return fetch(`${API_BASE}${toAbsolutePath(path)}`, {
+    ...init,
+    headers: buildHeaders(init),
+  });
 }
 
 function extractFilename(
@@ -155,12 +151,12 @@ export async function apiSend<T>(
   path: string,
   init?: RequestInit
 ): Promise<T> {
-  const res = await fetchApi(path, {
+  const headers = buildHeaders({ ...init, method: init?.method ?? "POST" });
+  headers.set("Content-Type", "application/json");
+  const res = await fetch(`${API_BASE}${toAbsolutePath(path)}`, {
     ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
-    },
+    method: init?.method ?? "POST",
+    headers,
   });
   const payload = await parseJson<T>(res);
   if (!res.ok || payload.status === "error") {

@@ -20,6 +20,18 @@ export type ApiErr = {
 
 export type ApiResponse<T> = ApiOk<T> | ApiErr;
 
+export type UserRole = "admin" | "operator" | "viewer";
+
+export type User = {
+  user_id: number;
+  username: string;
+  display_name: string;
+  role: UserRole;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
 export type Item = {
   item_id: number;
   item_number: string;

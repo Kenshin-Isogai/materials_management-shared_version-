@@ -4,12 +4,13 @@ from contextlib import asynccontextmanager
 import json
 from typing import Any
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
+from starlette.middleware.base import BaseHTTPMiddleware
 
-from .config import get_auth_mode
+from .config import APP_HOST, APP_PORT, AUTO_MIGRATE_ON_STARTUP, get_auth_mode, get_cors_allowed_origins
 from .db import get_connection, init_db
 from .errors import AppError
 from . import service
@@ -50,6 +51,8 @@ from .schemas import (
     TransactionUndoRequest,
     UnregisteredBatchRequest,
     UnregisteredFileRetryRequest,
+    UserCreate,
+    UserUpdate,
 )
 
 
@@ -82,8 +85,10 @@ def _parse_optional_json_form(value: str | None, field_name: str) -> Any | None:
 
 
 def _db_dep(app: FastAPI):
-    def _get_db():
-        conn = get_connection(app.state.db_path)
+    def _get_db(request: Request):
+        conn = get_connection(app.state.database_url)
+        current_user = getattr(request.state, "user", None)
+        conn.set_actor(None if current_user is None else int(current_user["user_id"]))
         try:
             yield conn
         finally:
@@ -116,10 +121,58 @@ def cleanup_unreg_file_with_retry(path_str: str) -> None:
             pass
 
 
-def create_app(db_path: str | None = None) -> FastAPI:
+def _is_read_only_request(request: Request) -> bool:
+    return request.method in {"GET", "HEAD", "OPTIONS"} or request.url.path == "/api/health"
+
+
+class UserIdentityMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        request.state.user = None
+        username = (request.headers.get("X-User-Name") or "").strip()
+        if _is_read_only_request(request) and not username:
+            return await call_next(request)
+
+        if not username:
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "status": "error",
+                    "error": {
+                        "code": "USER_REQUIRED",
+                        "message": "X-User-Name header is required for mutation requests",
+                        "details": None,
+                    },
+                },
+            )
+
+        conn = get_connection(request.app.state.database_url)
+        try:
+            user = service.get_active_user_by_username(conn, username)
+        finally:
+            conn.close()
+
+        if user is None:
+            return JSONResponse(
+                status_code=403,
+                content={
+                    "status": "error",
+                    "error": {
+                        "code": "USER_NOT_FOUND",
+                        "message": f"User '{username}' is not registered or inactive",
+                        "details": None,
+                    },
+                },
+            )
+
+        request.state.user = user
+        return await call_next(request)
+
+
+def create_app(database_url: str | None = None, db_path: str | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        init_db(db_path=app.state.db_path)
+        if AUTO_MIGRATE_ON_STARTUP:
+            init_db(database_url=app.state.database_url)
         yield
 
     app = FastAPI(
@@ -127,15 +180,16 @@ def create_app(db_path: str | None = None) -> FastAPI:
         version="0.1.0",
         lifespan=lifespan,
     )
-    app.state.db_path = db_path
+    app.state.database_url = database_url or db_path
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=get_cors_allowed_origins(),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(UserIdentityMiddleware)
 
     @app.exception_handler(AppError)
     async def app_error_handler(_, exc: AppError):
@@ -185,6 +239,39 @@ def create_app(db_path: str | None = None) -> FastAPI:
                 "effective_role": effective_role,
             }
         )
+
+    @app.get("/api/users")
+    def get_users(include_inactive: bool = False, conn= db):
+        return ok(service.list_users(conn, include_inactive=include_inactive))
+
+    @app.get("/api/users/me")
+    def get_current_user(request: Request):
+        user = getattr(request.state, "user", None)
+        if user is None:
+            raise AppError(code="USER_REQUIRED", message="No active user selected", status_code=403)
+        return ok(user)
+
+    @app.get("/api/users/{user_id}")
+    def get_user(user_id: int, conn= db):
+        return ok(service.get_user(conn, user_id))
+
+    @app.post("/api/users")
+    def post_user(body: UserCreate, conn= db):
+        result = service.create_user(conn, body.model_dump())
+        conn.commit()
+        return ok(result)
+
+    @app.put("/api/users/{user_id}")
+    def put_user(user_id: int, body: UserUpdate, conn= db):
+        result = service.update_user(conn, user_id, body.model_dump(exclude_unset=True))
+        conn.commit()
+        return ok(result)
+
+    @app.delete("/api/users/{user_id}")
+    def delete_user(user_id: int, conn= db):
+        result = service.deactivate_user(conn, user_id)
+        conn.commit()
+        return ok(result)
 
     @app.get("/api/dashboard/summary")
     def get_dashboard_summary(conn= db):

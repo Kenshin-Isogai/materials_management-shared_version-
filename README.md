@@ -19,51 +19,54 @@ The workspace drawers now complete the main planning loop in place:
 
 ## Tech Stack
 
-- Backend: Python, FastAPI, SQLite, `uv`
-- Frontend: React, TypeScript, Vite, SWR
-- Data/Files: SQLite database + workspace folders (`imports/orders/`, `exports/`)
+- Backend: Python, FastAPI, PostgreSQL, SQLAlchemy engine bootstrap, Alembic, `uv`
+- Frontend: React, TypeScript, Vite, SWR, nginx in production
+- Deployment: Docker Compose (`db`, `backend`, `nginx`)
+- Data/Files: PostgreSQL database + mounted app-data volume (`imports/`, `exports/`)
 
 ## Repository Structure
 
-- `backend/`: API server, CLI, database schema/migrations, business logic, tests
+- `backend/`: API server, PostgreSQL/Alembic schema bootstrap, business logic, tests
 - `frontend/`: Web UI
+- `docker-compose.yml`: production composition for PostgreSQL + backend + nginx
+- `docker-compose.override.yml`: local development override
+- `docker-compose.test.yml`: PostgreSQL test database
 - `imports/orders/`: Registered/unregistered order import CSV/PDF files
 - `exports/`: Generated CSV exports (for example missing-item registration templates)
 - `documents/`: Technical documentation
 - `specification.md`: Detailed functional specification
 - `start-dev.bat` / `stop-dev.bat`: Windows helper scripts to start/stop both servers
 
-## Quick Start (Windows)
+## Quick Start (Docker Compose)
 
-1. Install prerequisites:
-- Python 3.10+ and `uv`
-- Node.js 18+
+1. Copy `.env.example` to `.env` and set the PostgreSQL password.
+2. Start the stack:
 
-2. Start both backend and frontend from project root:
-
-```bat
-start-dev.bat
+```powershell
+docker compose up --build
 ```
 
-This starts:
-- Backend API on the first free port in `8000, 8001, 8010, 18000`
-- Frontend on `http://127.0.0.1:5173`
+3. Open:
+- Frontend: `http://127.0.0.1/`
+- API: `http://127.0.0.1/api`
+- Swagger: `http://127.0.0.1/docs`
 
-3. Stop both:
+4. Stop:
 
-```bat
-stop-dev.bat
+```powershell
+docker compose down
 ```
 
-## Manual Setup
+Detailed Windows Server deployment steps are in `documents/postgresql_windows_server_instructions.md`.
+
+## Local Development
 
 Backend:
 
 ```powershell
 cd backend
 uv sync
-uv run main.py init-db
-uv run main.py serve --host 127.0.0.1 --port 8000
+uv run main.py
 ```
 
 Frontend:
@@ -75,27 +78,16 @@ $env:VITE_API_BASE = "http://127.0.0.1:8000/api"
 npm run dev
 ```
 
-## API and CLI
+## API
 
 - API base: `http://127.0.0.1:8000/api`
 - API docs (Swagger): `http://127.0.0.1:8000/docs`
-- CLI entry: `backend/main.py`
-
-Example CLI commands:
-
-```powershell
-uv run main.py import-orders --supplier "Thorlabs" --csv-path ".\sample\order_import.csv"
-uv run main.py import-unregistered-orders --continue-on-error
-uv run main.py register-unregistered-items --continue-on-error
-uv run main.py bom-analyze --csv-path ".\sample\bom.csv" --target-date 2026-04-01
-uv run main.py purchase-candidates-from-project --project-id 1 --target-date 2026-04-01
-uv run main.py move --item-id 1 --quantity 5 --from-location STOCK --to-location BENCH_A
-uv run main.py reserve --item-id 1 --quantity 2 --purpose "Experiment A"
-```
+- Mutation requests require `X-User-Name` for a pre-registered active user.
+- The frontend header bar now includes a user selector backed by `/api/users`.
 
 ## Database and File Layout
 
-- Default DB path: `backend/database/inventory.db`
+- Database: PostgreSQL via `DATABASE_URL`
 - Orders import roots:
   - `imports/orders/unregistered/csv_files/<supplier>/`
   - `imports/orders/unregistered/pdf_files/<supplier>/`

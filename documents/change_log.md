@@ -1,3 +1,92 @@
+## 2026-03-25
+
+### Added
+
+- Implemented Phase 1 of `documents/postgresql_migration_plan/shared_server_adaptation_plan.md`.
+  - Added frontend Users management page at `/users`.
+  - Added browser-side create, edit, reactivate, and deactivate flows for shared-server user administration.
+  - Added a shared frontend users-refresh signal so header user selection updates immediately after user mutations.
+
+### Changed
+
+- Extended `GET /api/users` with optional `include_inactive=true` so the frontend management screen can load inactive rows without changing the active-user picker contract.
+
+### Documentation
+
+- Added `documents/postgresql_migration_plan/shared_server_adaptation_plan.md`.
+  - This breaks the next shared-server readiness work into phased slices for frontend user management, upload-first batch imports, PDF filename resolution, and browser-delivered generated files.
+
+### Added
+
+- Added backend API regression coverage for PostgreSQL migration user-header behavior.
+  - `GET /api/users` now has explicit test coverage confirming anonymous reads remain allowed.
+  - `GET /api/users/me` now has explicit test coverage for both missing-header rejection and valid `X-User-Name` resolution on read requests.
+  - Read requests that send an unknown `X-User-Name` now have explicit API coverage for the expected `USER_NOT_FOUND` error path.
+
+### Fixed
+
+- Aligned the PostgreSQL test Compose database user with the documented test connection string.
+  - `docker-compose.test.yml` now uses `POSTGRES_USER=develop`, matching `TEST_DATABASE_URL=postgresql+psycopg://develop:test@localhost:5433/materials_test`.
+  - This restores the documented `docker compose -f docker-compose.test.yml up -d` plus `uv run python -m pytest` workflow for PostgreSQL-backed backend tests.
+
+### Tests
+
+- Backend targeted API regression run:
+  - `uv run python -m pytest backend/tests/test_api_integration.py -k "users_endpoint"`
+- Backend targeted API regression run:
+  - `uv run python -m pytest backend/tests/test_api_integration.py -k "users_endpoint_allows_anonymous_read or users_me_endpoint or unknown_user_header"`
+- Backend full PostgreSQL suite:
+  - `uv run python -m pytest`
+  - Result: `170 passed`
+
+## 2026-03-24 (PostgreSQL migration foundation)
+
+### Fixed
+
+- `GET /api/users/me` now resolves correctly in the deployed FastAPI app.
+  - The static `/api/users/me` route is now registered before `/api/users/{user_id}` so it is no longer misparsed as `user_id="me"` and rejected with a `422` validation error during runtime smoke tests.
+- Read requests that provide `X-User-Name` now resolve `request.state.user` without forcing headers for anonymous reads.
+  - This restores the intended behavior of `GET /api/users/me`: anonymous reads remain allowed globally, while callers that send a valid user header can retrieve their active user identity on a read request.
+
+### Documentation
+
+- Added a consolidated rollout/status handoff document at `documents/postgresql_migration_plan/postgresql_migration_plan.md`.
+  - This records completed migration work, verified runtime/test status, remaining operational tasks, and the exact steps required to finish the PostgreSQL/shared-server rollout.
+
+### Added
+
+- PostgreSQL-first backend bootstrap using SQLAlchemy engine management and Alembic baseline migration.
+- Initial PostgreSQL schema under `backend/alembic/versions/001_initial_schema.py`, including `users` plus audit columns/triggers.
+- Docker deployment artifacts:
+  - `docker-compose.yml`
+  - `docker-compose.override.yml`
+  - `docker-compose.test.yml`
+  - `.env.example`
+  - `backend/Dockerfile`
+  - `frontend/Dockerfile`
+  - `frontend/nginx.conf`
+- User management endpoints:
+  - `GET /api/users`
+  - `GET /api/users/{id}`
+  - `GET /api/users/me`
+  - `POST /api/users`
+  - `PUT /api/users/{id}`
+  - `DELETE /api/users/{id}`
+- Windows Server deployment runbook: `documents/postgresql_windows_server_instructions.md`
+
+### Changed
+
+- Backend entrypoint is now server-only (`uv run main.py`); the legacy CLI flow is no longer the target path for the PostgreSQL/shared-server deployment.
+- Frontend API client now uses `VITE_API_BASE` / `/api` directly instead of runtime port probing.
+- Frontend mutations now require a selected user and send `X-User-Name`.
+- Header bar now includes a user picker populated from `/api/users`.
+- Vite dev server now binds to `0.0.0.0` and proxies `/api` to `http://backend:8000`.
+
+### Tests
+
+- Backend syntax/buildability smoke: `uv run python -m compileall app main.py tests`
+- Frontend production build: `npm run build`
+
 ## 2026-03-24
 
 ### Fixed

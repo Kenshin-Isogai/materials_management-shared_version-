@@ -33,13 +33,20 @@ const apiGetWithPaginationMock = vi.fn(async () => ({ data: [], pagination: unde
 const apiSendMock = vi.fn();
 const apiDownloadMock = vi.fn();
 
-vi.mock("../src/lib/api", () => ({
-  apiDownload: (...args: unknown[]) => apiDownloadMock(...args),
-  apiGet: (...args: unknown[]) => apiGetMock(...args),
-  apiGetAllPages: (...args: unknown[]) => apiGetAllPagesMock(...args),
-  apiGetWithPagination: (...args: unknown[]) => apiGetWithPaginationMock(...args),
-  apiSend: (...args: unknown[]) => apiSendMock(...args),
-}));
+vi.mock("../src/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/api")>();
+  return {
+    ...actual,
+    apiDownload: (...args: unknown[]) => apiDownloadMock(...args),
+    apiGet: (...args: unknown[]) => apiGetMock(...args),
+    apiGetAllPages: (...args: unknown[]) => apiGetAllPagesMock(...args),
+    apiGetWithPagination: (...args: unknown[]) => apiGetWithPaginationMock(...args),
+    apiSend: (...args: unknown[]) => apiSendMock(...args),
+    getStoredUsernameOrNull: () => null,
+    setStoredUsername: vi.fn(),
+    subscribeUsersChanged: () => () => {},
+  };
+});
 
 vi.mock("../src/components/ProjectEditor", () => ({
   ProjectEditor: ({ onDirtyChange }: { onDirtyChange?: (isDirty: boolean) => void }) => {
@@ -100,20 +107,15 @@ describe("app router", () => {
     expect(screen.getByText("No projects available yet.")).toBeTruthy();
   });
 
-  it("navigates from /rfq to / without freezing on the RFQ page", async () => {
+  it("redirects the removed /rfq route back to the dashboard", async () => {
     const router = renderRouter("/rfq");
-
-    expect(screen.getByRole("heading", { name: "RFQ Workspace" })).toBeTruthy();
-
-    await act(async () => {
-      router.navigate("/");
-    });
 
     await waitFor(() => {
       expect(screen.getByRole("heading", { name: "Dashboard" })).toBeTruthy();
     });
 
     expect(screen.queryByText("RFQ Workspace")).toBeNull();
+    expect(router.state.location.pathname).toBe("/");
   });
 
 });

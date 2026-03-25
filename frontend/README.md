@@ -22,3 +22,11 @@ Set backend URL if needed:
 VITE_API_BASE=http://127.0.0.1:8000/api
 ```
 
+### Production Build
+
+```bash
+npm run build
+```
+
+The production deployment is baked into the nginx container defined in `frontend/Dockerfile`.
+

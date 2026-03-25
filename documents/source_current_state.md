@@ -1,33 +1,34 @@
 # Source Current State
 
-Last updated: 2026-03-24 (JST)
+Last updated: 2026-03-25 (JST)
 
 ## 1. System Snapshot
 
 - Project type: local-first optical component inventory management application.
 - Stack:
-  - Backend: Python + FastAPI + SQLite
+  - Backend: Python + FastAPI + PostgreSQL bootstrap via SQLAlchemy engine + Alembic
   - Frontend: React + TypeScript + Vite + SWR
 - Runtime posture:
-  - Current: personal/local usage
-  - Direction: PoC designed to remain compatible with future multi-user/RBAC expansion
+  - Current: Docker Compose deployment target for shared Windows Server plus local development override
+  - Direction: shared-server operation with anonymous reads and header-based named mutations
 
 ## 2. Repository Structure (active areas)
 
 - `backend/`
-  - `main.py`: CLI entrypoint and command routing
+  - `main.py`: API server entrypoint
 - `app/api.py`: HTTP API routes, including temporary legacy compatibility aliases during redesign
-  - `app/service.py`: domain logic (single business logic layer)
-  - `app/db.py`: schema + indexes + migration logic, now including procurement-batch migration support
+  - `app/service.py`: domain logic (single business logic layer) still running on raw SQL through a PostgreSQL compatibility wrapper
+  - `app/db.py`: SQLAlchemy engine bootstrap + Alembic runner + compatibility connection wrapper
   - `tests/`: integration/service/path tests
 - `frontend/`
   - `src/pages/`: active pages wired into the router: Dashboard, Workspace, Items (Search), Locations, Projects, Procurement, Orders, Inventory (Movements), Reservations (Reserve), BOM, Snapshot, History, Master. Unused page files retained but not routed: `PlanningPage.tsx`, `RfqPage.tsx`, `AssembliesPage.tsx`, `PurchaseCandidatesPage.tsx`.
-  - `src/lib/api.ts`: API client with fallback API base probing
+  - `src/lib/api.ts`: API client now defaults to `VITE_API_BASE` / `/api` and injects `X-User-Name` on mutations
 - `documents/`
   - `technical_documentation.md`
   - `team_onboarding.md`
   - `source_current_state.md` (this file)
   - `change_log.md`
+  - `postgresql_windows_server_instructions.md`
 
 ## 3. Backend State
 
@@ -37,6 +38,11 @@ Last updated: 2026-03-24 (JST)
   - success: `status=ok`
   - error: `status=error` with code/message/details
 - Business rules are centralized in `backend/app/service.py` and shared by API and CLI.
+- Mutation requests now pass through `UserIdentityMiddleware`.
+  - read methods stay anonymous
+  - write methods require `X-User-Name`
+  - basic user endpoints now exist under `/api/users`
+  - `GET /api/users` returns active picker rows; `GET /api/users?include_inactive=true` returns the full management list
 - Planning snapshot hot paths now batch project/requirement loads, assembly component expansion (including legacy assembly-only project requirements), and per-item inventory totals; item planning context further narrows expansion to the requested item.
 - Current auth posture:
   - no enforced auth for PoC
@@ -78,6 +84,9 @@ Last updated: 2026-03-24 (JST)
 
 - SPA navigation now boots through a React Router data router (`createBrowserRouter` + `RouterProvider`) with `AppShell` as the shared layout route.
 - Data fetching is SWR-based with typed API client wrappers.
+- Added `/users` as the dedicated shared-server user administration route.
+  - supports browser-side create, edit, activate, and deactivate flows against the existing `/api/users` endpoints
+  - the global header user picker now refreshes after user mutations and automatically falls back to the next active user if the selected one is deactivated
 - Added `/workspace` as the summary-first future-demand route.
   - default view: project summary dashboard with committed-vs-draft semantics
   - pipeline view: committed projects with `generic_committed_total` and `cumulative_generic_consumed_before_total`

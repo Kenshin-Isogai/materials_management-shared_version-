@@ -5,12 +5,16 @@ description = "Optical component inventory management backend"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
+    "alembic>=1.16.5",
     "fastapi>=0.118.0",
+    "gunicorn>=23.0.0",
     "httpx>=0.28.1",
     "pydantic>=2.12.5",
+    "psycopg[binary]>=3.2.10",
     "pypdf>=6.7.3",
     "pytest>=8.4.2",
     "python-multipart>=0.0.20",
+    "sqlalchemy>=2.0.43",
     "uvicorn>=0.38.0",
 ]
 

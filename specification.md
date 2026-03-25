@@ -25,7 +25,7 @@ The Optical Component Inventory Management System provides comprehensive lifecyc
 | Requirement | Specification |
 |-------------|---------------|
 | Target OS | Windows |
-| Database | SQLite (single file) |
+| Database | PostgreSQL 16+ (primary deployment target via Docker Compose) |
 | Language (Backend) | Python 3.10+ |
 | Backend API | FastAPI |
 | Backend DB Access | SQLAlchemy Core / Raw SQL |
@@ -36,8 +36,8 @@ The Optical Component Inventory Management System provides comprehensive lifecyc
 | Package Manager (Python) | uv |
 | Package Manager (Frontend) | npm |
 | Frontend Builder | Vite |
-| User Model | Local-first personal usage (PoC), with forward compatibility for future shared/multi-user deployment |
-| Authentication/Authorization | PoC: none (trusted local environment). Roadmap: RBAC (`admin`, `operator`, `viewer`) |
+| User Model | Shared-server operation on trusted internal network, with forward compatibility for fuller RBAC deployment |
+| Authentication/Authorization | Anonymous reads; mutation requests require `X-User-Name` for a pre-registered active user. Roadmap: RBAC (`admin`, `operator`, `viewer`) |
 | Timezone | Fixed JST for all date/time fields |
 | CSV Encoding | UTF-8 (no BOM) |
 | Expected Scale | Items: 10,000 / Orders: 5,000 / Transactions: ~100,000 |
@@ -896,7 +896,7 @@ All management pages handling CRUD operations (Items, Orders, Reservations, etc.
 | History | Transaction log, undo operations |
 | **Snapshot** | **Past/future inventory state reconstruction, CSV export** |
 
-### **5.2 CLI Commands**
+### **5.2 CLI Commands (Deprecated / Removed For PostgreSQL Deployment)**
 
 | Command | Purpose |
 |---------|---------|
@@ -940,6 +940,18 @@ Base URL: `http://localhost:8000/api`
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/auth/capabilities` | Return runtime auth mode and planned RBAC roles metadata |
+
+#### **Users**
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/users` | List active users for picker/mutation selection |
+| GET | `/users?include_inactive=true` | List all users, including inactive rows for management UI |
+| GET | `/users/me` | Resolve the current user from `X-User-Name` on read requests |
+| GET | `/users/{user_id}` | Get one user |
+| POST | `/users` | Create a user |
+| PUT | `/users/{user_id}` | Update display name, role, username, and active state |
+| DELETE | `/users/{user_id}` | Deactivate a user |
 
 #### **Workspace**
 
@@ -1439,10 +1451,10 @@ The system supports migration from older database versions:
 
 Minimum gate for non-trivial changes:
 
-1. Update domain behavior first (`backend/app/service.py`), then adapters (`api.py`, CLI), then UI.
+1. Update domain behavior first (`backend/app/service.py`), then adapters (`api.py`), then UI.
 2. Run backend full tests: `uv run python -m pytest`.
 3. If frontend changed, run build check: `npm run build`.
-4. Execute a manual smoke check for touched flows (API/CLI/UI).
+4. Execute a manual smoke check for touched flows (API/UI).
 5. Update documents in the same change:
    - `specification.md` for requirement/contract changes
    - `documents/technical_documentation.md` for architecture/maintenance impact

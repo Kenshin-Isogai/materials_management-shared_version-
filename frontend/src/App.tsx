@@ -18,6 +18,7 @@ import { ProcurementPage } from "./pages/ProcurementPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
 import { ReservationsPage } from "./pages/ReservationsPage";
 import { SnapshotPage } from "./pages/SnapshotPage";
+import { UsersPage } from "./pages/UsersPage";
 import { WorkspacePage } from "./pages/WorkspacePage";
 
 export const appRoutes = createRoutesFromElements(
@@ -41,6 +42,7 @@ export const appRoutes = createRoutesFromElements(
     <Route path="/snapshot" element={<SnapshotPage />} />
     <Route path="/history" element={<HistoryPage />} />
     <Route path="/master" element={<MasterPage />} />
+    <Route path="/users" element={<UsersPage />} />
     <Route path="*" element={<Navigate to="/" replace />} />
   </Route>,
 );

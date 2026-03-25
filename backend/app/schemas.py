@@ -387,3 +387,23 @@ class ApiPayload(BaseModel):
     data: Any | None = None
     pagination: dict[str, Any] | None = None
     error: dict[str, Any] | None = None
+
+
+class UserCreate(BaseModel):
+    username: str = Field(min_length=1)
+    display_name: str = Field(min_length=1)
+    role: str = "operator"
+    is_active: bool = True
+
+
+class UserUpdate(BaseModel):
+    username: str | None = None
+    display_name: str | None = None
+    role: str | None = None
+    is_active: bool | None = None
+
+    @model_validator(mode="after")
+    def validate_non_empty_payload(self) -> "UserUpdate":
+        if not ({"username", "display_name", "role", "is_active"} & set(self.__pydantic_fields_set__)):
+            raise ValueError("at least one user field is required")
+        return self

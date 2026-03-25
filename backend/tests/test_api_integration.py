@@ -359,6 +359,76 @@ def test_auth_capabilities_endpoint_defaults_and_header(client):
     header_payload = header_response.json()["data"]
     assert header_payload["effective_role"] == "viewer"
 
+
+def test_users_endpoint_allows_anonymous_read(client):
+    client.headers.pop("X-User-Name", None)
+
+    response = client.get("/api/users")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert any(row["username"] == "pytest" for row in payload["data"])
+
+
+def test_users_me_endpoint_requires_active_user_header_on_read_request(client):
+    client.headers.pop("X-User-Name", None)
+
+    response = client.get("/api/users/me")
+
+    assert response.status_code == 403
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["error"]["code"] == "USER_REQUIRED"
+
+
+def test_users_me_endpoint_resolves_request_user_from_read_header(client):
+    response = client.get("/api/users/me")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["data"]["username"] == "pytest"
+    assert payload["data"]["display_name"] == "Pytest User"
+
+
+def test_read_request_with_unknown_user_header_is_rejected(client):
+    response = client.get("/api/users", headers={"X-User-Name": "missing-user"})
+
+    assert response.status_code == 403
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["error"]["code"] == "USER_NOT_FOUND"
+
+
+def test_users_endpoint_can_include_inactive_rows(client):
+    created = client.post(
+        "/api/users",
+        json={
+            "username": "phase1-inactive",
+            "display_name": "Phase 1 Inactive",
+            "role": "viewer",
+            "is_active": True,
+        },
+    )
+    assert created.status_code == 200
+    user_id = created.json()["data"]["user_id"]
+
+    deleted = client.delete(f"/api/users/{user_id}")
+    assert deleted.status_code == 200
+
+    active_only = client.get("/api/users")
+    assert active_only.status_code == 200
+    active_rows = active_only.json()["data"]
+    assert all(row["username"] != "phase1-inactive" for row in active_rows)
+
+    including_inactive = client.get("/api/users?include_inactive=true")
+    assert including_inactive.status_code == 200
+    rows = including_inactive.json()["data"]
+    target = next(row for row in rows if row["username"] == "phase1-inactive")
+    assert target["is_active"] is False
+
+
 def test_inventory_reservation_and_dashboard_flow(client):
     manufacturer = client.post("/api/manufacturers", json={"name": "API-MFG"}).json()["data"]
     item = client.post(

@@ -56,6 +56,91 @@ def _rows_to_dict(rows: Iterable[sqlite3.Row]) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
+def list_users(
+    conn: sqlite3.Connection,
+    *,
+    include_inactive: bool = False,
+) -> list[dict[str, Any]]:
+    where_clause = "" if include_inactive else "WHERE is_active = TRUE"
+    rows = conn.execute(
+        f"""
+        SELECT user_id, username, display_name, role, is_active, created_at, updated_at
+        FROM users
+        {where_clause}
+        ORDER BY is_active DESC, lower(display_name), lower(username), user_id
+        """
+    ).fetchall()
+    return _rows_to_dict(rows)
+
+
+def get_user(conn: sqlite3.Connection, user_id: int) -> dict[str, Any]:
+    row = _get_entity_or_404(
+        conn,
+        "users",
+        "user_id",
+        user_id,
+        "USER_NOT_FOUND",
+        f"User with id {user_id} not found",
+    )
+    return dict(row)
+
+
+def get_active_user_by_username(conn: sqlite3.Connection, username: str) -> dict[str, Any] | None:
+    normalized = require_non_empty(username, "username")
+    row = conn.execute(
+        """
+        SELECT user_id, username, display_name, role, is_active, created_at, updated_at
+        FROM users
+        WHERE lower(username) = lower(?) AND is_active = TRUE
+        ORDER BY user_id
+        """,
+        (normalized,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def create_user(conn: sqlite3.Connection, data: dict[str, Any]) -> dict[str, Any]:
+    username = require_non_empty(str(data.get("username") or ""), "username")
+    display_name = require_non_empty(str(data.get("display_name") or ""), "display_name")
+    role = require_non_empty(str(data.get("role") or "operator"), "role")
+    is_active = bool(data.get("is_active", True))
+    created_at = now_jst_iso()
+    cursor = conn.execute(
+        """
+        INSERT INTO users (username, display_name, role, is_active, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        """,
+        (username, display_name, role, is_active, created_at, created_at),
+    )
+    return get_user(conn, int(cursor.lastrowid))
+
+
+def update_user(conn: sqlite3.Connection, user_id: int, data: dict[str, Any]) -> dict[str, Any]:
+    existing = get_user(conn, user_id)
+    username = require_non_empty(str(data.get("username", existing["username"])), "username")
+    display_name = require_non_empty(str(data.get("display_name", existing["display_name"])), "display_name")
+    role = require_non_empty(str(data.get("role", existing["role"])), "role")
+    is_active = bool(data.get("is_active", existing["is_active"]))
+    conn.execute(
+        """
+        UPDATE users
+        SET username = ?, display_name = ?, role = ?, is_active = ?, updated_at = ?
+        WHERE user_id = ?
+        """,
+        (username, display_name, role, is_active, now_jst_iso(), user_id),
+    )
+    return get_user(conn, user_id)
+
+
+def deactivate_user(conn: sqlite3.Connection, user_id: int) -> dict[str, Any]:
+    _ = get_user(conn, user_id)
+    conn.execute(
+        "UPDATE users SET is_active = FALSE, updated_at = ? WHERE user_id = ?",
+        (now_jst_iso(), user_id),
+    )
+    return get_user(conn, user_id)
+
+
 def _require_json_object(
     value: Any,
     *,
@@ -8605,16 +8690,18 @@ def _build_project_planning_snapshot(
             target_date=target_date,
         )
 
-    committed_rows = conn.execute(
-        """
+    committed_sql = """
         SELECT project_id
         FROM projects
         WHERE status IN ('CONFIRMED', 'ACTIVE')
-          AND (? IS NULL OR project_id <> ?)
-        ORDER BY COALESCE(planned_start, ?) ASC, project_id ASC
-        """,
-        (project_id, project_id, today_jst()),
-    ).fetchall()
+    """
+    committed_params: list[Any] = []
+    if project_id is not None:
+        committed_sql += "\n          AND project_id <> ?"
+        committed_params.append(project_id)
+    committed_sql += "\n        ORDER BY COALESCE(planned_start, ?) ASC, project_id ASC"
+    committed_params.append(today_jst())
+    committed_rows = conn.execute(committed_sql, tuple(committed_params)).fetchall()
 
     committed_project_ids = [int(row["project_id"]) for row in committed_rows]
     planning_projects = _load_projects_with_requirements(conn, committed_project_ids)
@@ -9958,7 +10045,7 @@ def _rfq_batch_row(conn: sqlite3.Connection, rfq_id: int) -> sqlite3.Row:
         JOIN projects p ON p.project_id = rb.project_id
         LEFT JOIN rfq_lines rl ON rl.rfq_id = rb.rfq_id
         WHERE rb.rfq_id = ?
-        GROUP BY rb.rfq_id
+        GROUP BY rb.rfq_id, p.name
         """,
         (rfq_id,),
     ).fetchone()
@@ -10031,7 +10118,7 @@ def list_rfq_batches(
         JOIN projects p ON p.project_id = rb.project_id
         LEFT JOIN rfq_lines rl ON rl.rfq_id = rb.rfq_id
         {where}
-        GROUP BY rb.rfq_id
+        GROUP BY rb.rfq_id, p.name
         ORDER BY rb.updated_at DESC, rb.rfq_id DESC
     """
     return _paginate(conn, sql, tuple(params), page, per_page)
@@ -11859,12 +11946,12 @@ def catalog_search(
             LEFT JOIN supplier_item_aliases a ON a.canonical_item_id = im.item_id
             LEFT JOIN suppliers s ON s.supplier_id = a.supplier_id
             WHERE
-                im.item_number LIKE ?
-                OR m.name LIKE ?
-                OR COALESCE(ca.canonical_category, im.category, '') LIKE ?
-                OR COALESCE(im.description, '') LIKE ?
-                OR COALESCE(a.ordered_item_number, '') LIKE ?
-                OR COALESCE(s.name, '') LIKE ?
+                im.item_number ILIKE ?
+                OR m.name ILIKE ?
+                OR COALESCE(ca.canonical_category, im.category, '') ILIKE ?
+                OR COALESCE(im.description, '') ILIKE ?
+                OR COALESCE(a.ordered_item_number, '') ILIKE ?
+                OR COALESCE(s.name, '') ILIKE ?
             ORDER BY im.item_number, im.item_id
             """,
             (wildcard, wildcard, wildcard, wildcard, wildcard, wildcard),
@@ -11926,7 +12013,7 @@ def catalog_search(
                 COUNT(a.alias_id) AS alias_count
             FROM suppliers s
             LEFT JOIN supplier_item_aliases a ON a.supplier_id = s.supplier_id
-            WHERE s.name LIKE ?
+            WHERE s.name ILIKE ?
             GROUP BY s.supplier_id
             ORDER BY s.name, s.supplier_id
             """,
@@ -11996,7 +12083,7 @@ def catalog_search(
                 COUNT(pr.requirement_id) AS requirement_count
             FROM projects p
             LEFT JOIN project_requirements pr ON pr.project_id = p.project_id
-            WHERE p.name LIKE ? OR COALESCE(p.description, '') LIKE ?
+            WHERE p.name ILIKE ? OR COALESCE(p.description, '') ILIKE ?
             GROUP BY p.project_id
             ORDER BY p.created_at DESC, p.project_id DESC
             """,

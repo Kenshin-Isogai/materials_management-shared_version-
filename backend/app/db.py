@@ -1,845 +1,287 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from collections.abc import Mapping as ABCMapping
+from datetime import date, datetime
 from pathlib import Path
+import re
 import sqlite3
-from typing import Iterator
+from typing import Any, Iterator, Mapping, Sequence
 
-from .config import ensure_workspace_layout, resolve_db_path
-from .utils import DATE_PATTERN, normalize_optional_date
+from alembic import command
+from alembic.config import Config
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Connection, Engine, Result
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.pool import QueuePool
 
-SCHEMA_STATEMENTS = [
-    """
-    CREATE TABLE IF NOT EXISTS manufacturers (
-        manufacturer_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL UNIQUE CHECK (trim(name) <> '')
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS suppliers (
-        supplier_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL UNIQUE CHECK (trim(name) <> '')
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS items_master (
-        item_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        item_number TEXT NOT NULL CHECK (trim(item_number) <> ''),
-        manufacturer_id INTEGER NOT NULL,
-        category TEXT,
-        url TEXT,
-        description TEXT,
-        UNIQUE (manufacturer_id, item_number),
-        FOREIGN KEY (manufacturer_id) REFERENCES manufacturers (manufacturer_id)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS inventory_ledger (
-        ledger_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        item_id INTEGER NOT NULL,
-        location TEXT NOT NULL CHECK (trim(location) <> ''),
-        quantity INTEGER NOT NULL CHECK (quantity >= 0),
-        last_updated TEXT,
-        UNIQUE (item_id, location),
-        FOREIGN KEY (item_id) REFERENCES items_master (item_id)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS quotations (
-        quotation_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        supplier_id INTEGER NOT NULL,
-        quotation_number TEXT NOT NULL CHECK (trim(quotation_number) <> ''),
-        issue_date TEXT,
-        pdf_link TEXT,
-        UNIQUE (supplier_id, quotation_number),
-        FOREIGN KEY (supplier_id) REFERENCES suppliers (supplier_id)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS orders (
-        order_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        item_id INTEGER NOT NULL,
-        quotation_id INTEGER NOT NULL,
-        project_id INTEGER,
-        project_id_manual INTEGER NOT NULL DEFAULT 0,
-        order_amount INTEGER NOT NULL CHECK (order_amount > 0),
-        ordered_quantity INTEGER CHECK (ordered_quantity IS NULL OR ordered_quantity > 0),
-        ordered_item_number TEXT,
-        order_date TEXT NOT NULL,
-        expected_arrival TEXT,
-        arrival_date TEXT,
-        status TEXT NOT NULL DEFAULT 'Ordered' CHECK (status IN ('Ordered', 'Arrived')),
-        FOREIGN KEY (item_id) REFERENCES items_master (item_id),
-        FOREIGN KEY (quotation_id) REFERENCES quotations (quotation_id),
-        FOREIGN KEY (project_id) REFERENCES projects (project_id)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS order_lineage_events (
-        event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        event_type TEXT NOT NULL CHECK (event_type IN ('ETA_UPDATE', 'ETA_SPLIT', 'ETA_MERGE', 'ARRIVAL_SPLIT')),
-        source_order_id INTEGER NOT NULL,
-        target_order_id INTEGER,
-        quantity INTEGER,
-        previous_expected_arrival TEXT,
-        new_expected_arrival TEXT,
-        note TEXT,
-        created_at TEXT NOT NULL
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS transaction_log (
-        log_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        timestamp TEXT NOT NULL,
-        operation_type TEXT NOT NULL,
-        item_id INTEGER NOT NULL,
-        quantity INTEGER NOT NULL CHECK (quantity > 0),
-        from_location TEXT,
-        to_location TEXT,
-        note TEXT,
-        is_undone INTEGER NOT NULL DEFAULT 0 CHECK (is_undone IN (0, 1)),
-        undo_of_log_id INTEGER,
-        batch_id TEXT,
-        FOREIGN KEY (item_id) REFERENCES items_master (item_id),
-        FOREIGN KEY (undo_of_log_id) REFERENCES transaction_log (log_id)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS projects (
-        project_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL UNIQUE CHECK (trim(name) <> ''),
-        description TEXT,
-        status TEXT NOT NULL DEFAULT 'PLANNING'
-            CHECK (status IN ('PLANNING', 'CONFIRMED', 'ACTIVE', 'COMPLETED', 'CANCELLED')),
-        planned_start TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS reservations (
-        reservation_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        item_id INTEGER NOT NULL,
-        quantity INTEGER NOT NULL CHECK (quantity > 0),
-        purpose TEXT,
-        deadline TEXT,
-        created_at TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'ACTIVE'
-            CHECK (status IN ('ACTIVE', 'RELEASED', 'CONSUMED')),
-        released_at TEXT,
-        note TEXT,
-        project_id INTEGER,
-        FOREIGN KEY (item_id) REFERENCES items_master (item_id),
-        FOREIGN KEY (project_id) REFERENCES projects (project_id)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS reservation_allocations (
-        allocation_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        reservation_id INTEGER NOT NULL,
-        item_id INTEGER NOT NULL,
-        location TEXT NOT NULL CHECK (trim(location) <> ''),
-        quantity INTEGER NOT NULL CHECK (quantity > 0),
-        status TEXT NOT NULL DEFAULT 'ACTIVE'
-            CHECK (status IN ('ACTIVE', 'RELEASED', 'CONSUMED')),
-        created_at TEXT NOT NULL,
-        released_at TEXT,
-        note TEXT,
-        FOREIGN KEY (reservation_id) REFERENCES reservations (reservation_id) ON DELETE CASCADE,
-        FOREIGN KEY (item_id) REFERENCES items_master (item_id)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS assemblies (
-        assembly_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL UNIQUE CHECK (trim(name) <> ''),
-        description TEXT,
-        created_at TEXT NOT NULL
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS assembly_components (
-        assembly_id INTEGER NOT NULL,
-        item_id INTEGER NOT NULL,
-        quantity INTEGER NOT NULL CHECK (quantity > 0),
-        PRIMARY KEY (assembly_id, item_id),
-        FOREIGN KEY (assembly_id) REFERENCES assemblies (assembly_id) ON DELETE CASCADE,
-        FOREIGN KEY (item_id) REFERENCES items_master (item_id) ON DELETE RESTRICT
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS location_assembly_usage (
-        usage_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        location TEXT NOT NULL CHECK (trim(location) <> ''),
-        assembly_id INTEGER NOT NULL,
-        quantity INTEGER NOT NULL CHECK (quantity > 0),
-        note TEXT,
-        updated_at TEXT NOT NULL,
-        UNIQUE (location, assembly_id),
-        FOREIGN KEY (assembly_id) REFERENCES assemblies (assembly_id) ON DELETE CASCADE
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS project_requirements (
-        requirement_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id INTEGER NOT NULL,
-        assembly_id INTEGER,
-        item_id INTEGER,
-        quantity INTEGER NOT NULL CHECK (quantity > 0),
-        requirement_type TEXT NOT NULL DEFAULT 'INITIAL'
-            CHECK (requirement_type IN ('INITIAL', 'SPARE', 'REPLACEMENT')),
-        note TEXT,
-        created_at TEXT NOT NULL,
-        CHECK (
-            (assembly_id IS NOT NULL AND item_id IS NULL)
-            OR (assembly_id IS NULL AND item_id IS NOT NULL)
-        ),
-        FOREIGN KEY (project_id) REFERENCES projects (project_id) ON DELETE CASCADE,
-        FOREIGN KEY (assembly_id) REFERENCES assemblies (assembly_id),
-        FOREIGN KEY (item_id) REFERENCES items_master (item_id)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS procurement_batches (
-        batch_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT NOT NULL CHECK (trim(title) <> ''),
-        status TEXT NOT NULL DEFAULT 'DRAFT'
-            CHECK (status IN ('DRAFT', 'SENT', 'QUOTED', 'ORDERED', 'CLOSED', 'CANCELLED')),
-        note TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS procurement_lines (
-        line_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        batch_id INTEGER NOT NULL,
-        item_id INTEGER NOT NULL,
-        source_type TEXT NOT NULL CHECK (source_type IN ('PROJECT', 'BOM', 'ADHOC')),
-        source_project_id INTEGER,
-        requested_quantity INTEGER NOT NULL CHECK (requested_quantity > 0),
-        finalized_quantity INTEGER NOT NULL CHECK (finalized_quantity > 0),
-        supplier_name TEXT,
-        expected_arrival TEXT,
-        linked_order_id INTEGER,
-        linked_quotation_id INTEGER,
-        status TEXT NOT NULL DEFAULT 'DRAFT'
-            CHECK (status IN ('DRAFT', 'SENT', 'QUOTED', 'ORDERED', 'CANCELLED')),
-        note TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY (batch_id) REFERENCES procurement_batches (batch_id) ON DELETE CASCADE,
-        FOREIGN KEY (item_id) REFERENCES items_master (item_id),
-        FOREIGN KEY (source_project_id) REFERENCES projects (project_id) ON DELETE SET NULL,
-        FOREIGN KEY (linked_order_id) REFERENCES orders (order_id) ON DELETE SET NULL,
-        FOREIGN KEY (linked_quotation_id) REFERENCES quotations (quotation_id) ON DELETE SET NULL
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS rfq_batches (
-        rfq_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        project_id INTEGER NOT NULL,
-        title TEXT NOT NULL CHECK (trim(title) <> ''),
-        target_date TEXT,
-        status TEXT NOT NULL DEFAULT 'OPEN'
-            CHECK (status IN ('OPEN', 'CLOSED', 'CANCELLED')),
-        note TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY (project_id) REFERENCES projects (project_id) ON DELETE CASCADE
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS rfq_lines (
-        line_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        rfq_id INTEGER NOT NULL,
-        item_id INTEGER NOT NULL,
-        requested_quantity INTEGER NOT NULL CHECK (requested_quantity > 0),
-        finalized_quantity INTEGER NOT NULL CHECK (finalized_quantity > 0),
-        supplier_name TEXT,
-        lead_time_days INTEGER CHECK (lead_time_days IS NULL OR lead_time_days >= 0),
-        expected_arrival TEXT,
-        linked_order_id INTEGER,
-        status TEXT NOT NULL DEFAULT 'DRAFT'
-            CHECK (status IN ('DRAFT', 'SENT', 'QUOTED', 'ORDERED', 'CANCELLED')),
-        note TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY (rfq_id) REFERENCES rfq_batches (rfq_id) ON DELETE CASCADE,
-        FOREIGN KEY (item_id) REFERENCES items_master (item_id),
-        FOREIGN KEY (linked_order_id) REFERENCES orders (order_id) ON DELETE SET NULL
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS purchase_candidates (
-        candidate_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        source_type TEXT NOT NULL CHECK (source_type IN ('BOM', 'PROJECT')),
-        project_id INTEGER,
-        item_id INTEGER,
-        supplier_name TEXT,
-        ordered_item_number TEXT,
-        canonical_item_number TEXT,
-        required_quantity INTEGER NOT NULL CHECK (required_quantity >= 0),
-        available_stock INTEGER NOT NULL CHECK (available_stock >= 0),
-        shortage_quantity INTEGER NOT NULL CHECK (shortage_quantity >= 0),
-        target_date TEXT,
-        status TEXT NOT NULL DEFAULT 'OPEN'
-            CHECK (status IN ('OPEN', 'ORDERING', 'ORDERED', 'CANCELLED')),
-        note TEXT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY (project_id) REFERENCES projects (project_id) ON DELETE SET NULL,
-        FOREIGN KEY (item_id) REFERENCES items_master (item_id)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS supplier_item_aliases (
-        alias_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        supplier_id INTEGER NOT NULL,
-        ordered_item_number TEXT NOT NULL CHECK (trim(ordered_item_number) <> ''),
-        canonical_item_id INTEGER NOT NULL,
-        units_per_order INTEGER NOT NULL CHECK (units_per_order > 0),
-        created_at TEXT NOT NULL,
-        UNIQUE (supplier_id, ordered_item_number),
-        FOREIGN KEY (supplier_id) REFERENCES suppliers (supplier_id),
-        FOREIGN KEY (canonical_item_id) REFERENCES items_master (item_id)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS category_aliases (
-        alias_category TEXT PRIMARY KEY
-            NOT NULL CHECK (trim(alias_category) <> ''),
-        canonical_category TEXT NOT NULL CHECK (trim(canonical_category) <> ''),
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        CHECK (alias_category <> canonical_category)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS import_jobs (
-        import_job_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        import_type TEXT NOT NULL CHECK (import_type IN ('items')),
-        source_name TEXT NOT NULL,
-        source_content TEXT NOT NULL,
-        continue_on_error INTEGER NOT NULL CHECK (continue_on_error IN (0, 1)),
-        status TEXT NOT NULL DEFAULT 'ok'
-            CHECK (status IN ('ok', 'partial', 'error')),
-        processed INTEGER NOT NULL DEFAULT 0,
-        created_count INTEGER NOT NULL DEFAULT 0,
-        duplicate_count INTEGER NOT NULL DEFAULT 0,
-        failed_count INTEGER NOT NULL DEFAULT 0,
-        lifecycle_state TEXT NOT NULL DEFAULT 'active'
-            CHECK (lifecycle_state IN ('active', 'undone')),
-        created_at TEXT NOT NULL,
-        undone_at TEXT,
-        redo_of_job_id INTEGER,
-        last_redo_job_id INTEGER,
-        FOREIGN KEY (redo_of_job_id) REFERENCES import_jobs (import_job_id),
-        FOREIGN KEY (last_redo_job_id) REFERENCES import_jobs (import_job_id)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS import_job_effects (
-        effect_id INTEGER PRIMARY KEY AUTOINCREMENT,
-        import_job_id INTEGER NOT NULL,
-        row_number INTEGER NOT NULL,
-        status TEXT NOT NULL CHECK (status IN ('created', 'duplicate', 'error')),
-        entry_type TEXT CHECK (entry_type IS NULL OR entry_type IN ('item', 'alias')),
-        effect_type TEXT NOT NULL,
-        item_id INTEGER,
-        alias_id INTEGER,
-        supplier_id INTEGER,
-        item_number TEXT,
-        supplier_name TEXT,
-        canonical_item_number TEXT,
-        units_per_order INTEGER,
-        message TEXT,
-        code TEXT,
-        before_state TEXT,
-        after_state TEXT,
-        created_at TEXT NOT NULL,
-        FOREIGN KEY (import_job_id) REFERENCES import_jobs (import_job_id) ON DELETE CASCADE
-    )
-    """,
-]
+from .config import BACKEND_ROOT, DATABASE_URL, ensure_workspace_layout
 
-INDEX_STATEMENTS = [
-    "CREATE INDEX IF NOT EXISTS idx_transaction_log_batch_id ON transaction_log (batch_id)",
-    "CREATE INDEX IF NOT EXISTS idx_transaction_log_undo_of_log_id ON transaction_log (undo_of_log_id)",
-    "CREATE INDEX IF NOT EXISTS idx_reservations_item_id ON reservations (item_id)",
-    "CREATE INDEX IF NOT EXISTS idx_reservations_status ON reservations (status)",
-    "CREATE INDEX IF NOT EXISTS idx_reservations_deadline ON reservations (deadline)",
-    "CREATE INDEX IF NOT EXISTS idx_reservations_project_id ON reservations (project_id)",
-    "CREATE INDEX IF NOT EXISTS idx_reservation_allocations_reservation_id ON reservation_allocations (reservation_id)",
-    "CREATE INDEX IF NOT EXISTS idx_reservation_allocations_item_loc_status ON reservation_allocations (item_id, location, status)",
-    "CREATE INDEX IF NOT EXISTS idx_assembly_components_item_id ON assembly_components (item_id)",
-    "CREATE INDEX IF NOT EXISTS idx_location_assembly_usage_location ON location_assembly_usage (location)",
-    "CREATE INDEX IF NOT EXISTS idx_location_assembly_usage_assembly_id ON location_assembly_usage (assembly_id)",
-    "CREATE INDEX IF NOT EXISTS idx_projects_status ON projects (status)",
-    "CREATE INDEX IF NOT EXISTS idx_projects_planned_start ON projects (planned_start)",
-    "CREATE INDEX IF NOT EXISTS idx_project_requirements_project_id ON project_requirements (project_id)",
-    "CREATE INDEX IF NOT EXISTS idx_project_requirements_assembly_id ON project_requirements (assembly_id)",
-    "CREATE INDEX IF NOT EXISTS idx_project_requirements_item_id ON project_requirements (item_id)",
-    "CREATE INDEX IF NOT EXISTS idx_procurement_batches_status_updated ON procurement_batches (status, updated_at)",
-    "CREATE INDEX IF NOT EXISTS idx_procurement_lines_batch_id ON procurement_lines (batch_id)",
-    "CREATE INDEX IF NOT EXISTS idx_procurement_lines_item_status_expected_arrival ON procurement_lines (item_id, status, expected_arrival)",
-    "CREATE INDEX IF NOT EXISTS idx_procurement_lines_source_project_id ON procurement_lines (source_project_id)",
-    "CREATE INDEX IF NOT EXISTS idx_procurement_lines_linked_order_id ON procurement_lines (linked_order_id)",
-    "CREATE INDEX IF NOT EXISTS idx_rfq_batches_project_id_status ON rfq_batches (project_id, status, target_date)",
-    "CREATE INDEX IF NOT EXISTS idx_rfq_lines_rfq_id ON rfq_lines (rfq_id)",
-    "CREATE INDEX IF NOT EXISTS idx_rfq_lines_item_id_status ON rfq_lines (item_id, status, expected_arrival)",
-    "CREATE INDEX IF NOT EXISTS idx_rfq_lines_linked_order_id ON rfq_lines (linked_order_id)",
-    "CREATE INDEX IF NOT EXISTS idx_purchase_candidates_status_target_date ON purchase_candidates (status, target_date)",
-    "CREATE INDEX IF NOT EXISTS idx_purchase_candidates_source_type ON purchase_candidates (source_type)",
-    "CREATE INDEX IF NOT EXISTS idx_purchase_candidates_project_id ON purchase_candidates (project_id)",
-    "CREATE INDEX IF NOT EXISTS idx_purchase_candidates_item_id ON purchase_candidates (item_id)",
-    "CREATE INDEX IF NOT EXISTS idx_orders_project_id ON orders (project_id)",
-    "CREATE INDEX IF NOT EXISTS idx_orders_ordered_item_number ON orders (ordered_item_number)",
-    "CREATE INDEX IF NOT EXISTS idx_orders_status_expected_arrival ON orders (status, expected_arrival)",
-    "CREATE INDEX IF NOT EXISTS idx_orders_item_status_expected_arrival ON orders (item_id, status, expected_arrival)",
-    "CREATE INDEX IF NOT EXISTS idx_order_lineage_events_source ON order_lineage_events (source_order_id, created_at)",
-    "CREATE INDEX IF NOT EXISTS idx_order_lineage_events_target ON order_lineage_events (target_order_id, created_at)",
-    "CREATE INDEX IF NOT EXISTS idx_order_lineage_events_type_created ON order_lineage_events (event_type, created_at)",
-    "CREATE INDEX IF NOT EXISTS idx_supplier_item_aliases_canonical_item_id ON supplier_item_aliases (canonical_item_id)",
-    "CREATE INDEX IF NOT EXISTS idx_category_aliases_canonical_category ON category_aliases (canonical_category)",
-    "CREATE INDEX IF NOT EXISTS idx_category_aliases_updated_at ON category_aliases (updated_at)",
-    "CREATE INDEX IF NOT EXISTS idx_import_jobs_type_created_at ON import_jobs (import_type, created_at)",
-    "CREATE INDEX IF NOT EXISTS idx_import_jobs_redo_of_job_id ON import_jobs (redo_of_job_id)",
-    "CREATE INDEX IF NOT EXISTS idx_import_job_effects_job_row ON import_job_effects (import_job_id, row_number, effect_id)",
-]
+_ENGINE: Engine | None = None
 
-TRIGGER_STATEMENTS = [
-    """
-    CREATE TRIGGER IF NOT EXISTS trg_orders_validate_insert
-    BEFORE INSERT ON orders
-    FOR EACH ROW
-    BEGIN
-        SELECT CASE
-            WHEN NEW.status IS NOT NULL AND NEW.status NOT IN ('Ordered', 'Arrived')
-            THEN RAISE(ABORT, 'invalid orders.status')
-        END;
-        SELECT CASE
-            WHEN NEW.order_date IS NULL OR NEW.order_date = '' OR NEW.order_date NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
-            THEN RAISE(ABORT, 'invalid orders.order_date')
-        END;
-        SELECT CASE
-            WHEN NEW.expected_arrival IS NOT NULL AND NEW.expected_arrival <> '' AND NEW.expected_arrival NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
-            THEN RAISE(ABORT, 'invalid orders.expected_arrival')
-        END;
-        SELECT CASE
-            WHEN NEW.arrival_date IS NOT NULL AND NEW.arrival_date <> '' AND NEW.arrival_date NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
-            THEN RAISE(ABORT, 'invalid orders.arrival_date')
-        END;
-    END
-    """,
-    """
-    CREATE TRIGGER IF NOT EXISTS trg_orders_validate_update
-    BEFORE UPDATE ON orders
-    FOR EACH ROW
-    BEGIN
-        SELECT CASE
-            WHEN NEW.status IS NOT NULL AND NEW.status NOT IN ('Ordered', 'Arrived')
-            THEN RAISE(ABORT, 'invalid orders.status')
-        END;
-        SELECT CASE
-            WHEN NEW.order_date IS NULL OR NEW.order_date = '' OR NEW.order_date NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
-            THEN RAISE(ABORT, 'invalid orders.order_date')
-        END;
-        SELECT CASE
-            WHEN NEW.expected_arrival IS NOT NULL AND NEW.expected_arrival <> '' AND NEW.expected_arrival NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
-            THEN RAISE(ABORT, 'invalid orders.expected_arrival')
-        END;
-        SELECT CASE
-            WHEN NEW.arrival_date IS NOT NULL AND NEW.arrival_date <> '' AND NEW.arrival_date NOT GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
-            THEN RAISE(ABORT, 'invalid orders.arrival_date')
-        END;
-    END
-    """,
-    """
-    CREATE TRIGGER IF NOT EXISTS trg_orders_autofill_after_insert
-    AFTER INSERT ON orders
-    FOR EACH ROW
-    BEGIN
-        UPDATE orders
-        SET status = COALESCE(NULLIF(status, ''), 'Ordered'),
-            ordered_quantity = COALESCE(ordered_quantity, order_amount),
-            ordered_item_number = COALESCE(
-                NULLIF(ordered_item_number, ''),
-                (SELECT item_number FROM items_master WHERE item_id = NEW.item_id)
-            )
-        WHERE order_id = NEW.order_id;
-    END
-    """,
-]
+_PRIMARY_KEY_BY_TABLE = {
+    "manufacturers": "manufacturer_id",
+    "suppliers": "supplier_id",
+    "items_master": "item_id",
+    "inventory_ledger": "ledger_id",
+    "quotations": "quotation_id",
+    "orders": "order_id",
+    "order_lineage_events": "event_id",
+    "transaction_log": "log_id",
+    "projects": "project_id",
+    "reservations": "reservation_id",
+    "reservation_allocations": "allocation_id",
+    "assemblies": "assembly_id",
+    "location_assembly_usage": "usage_id",
+    "project_requirements": "requirement_id",
+    "procurement_batches": "batch_id",
+    "procurement_lines": "line_id",
+    "rfq_batches": "rfq_id",
+    "rfq_lines": "line_id",
+    "purchase_candidates": "candidate_id",
+    "supplier_item_aliases": "alias_id",
+    "import_jobs": "import_job_id",
+    "import_job_effects": "effect_id",
+    "users": "user_id",
+}
+
+_MANUAL_SAVEPOINT_SQL = re.compile(r"^\s*(SAVEPOINT|ROLLBACK\s+TO|RELEASE)\b", re.IGNORECASE)
 
 
-def _table_exists(conn: sqlite3.Connection, table: str) -> bool:
-    row = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
-        (table,),
-    ).fetchone()
-    return row is not None
+def _normalize_db_url(db_url: str | None = None) -> str:
+    return (db_url or DATABASE_URL).strip()
 
 
-def _column_exists(conn: sqlite3.Connection, table: str, column: str) -> bool:
-    if not _table_exists(conn, table):
-        return False
-    rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    return any(row["name"] == column for row in rows)
+def get_engine(database_url: str | None = None) -> Engine:
+    global _ENGINE
+    normalized = _normalize_db_url(database_url)
+    if _ENGINE is None or str(_ENGINE.url) != normalized:
+        if _ENGINE is not None:
+            _ENGINE.dispose()
+        _ENGINE = create_engine(
+            normalized,
+            poolclass=QueuePool,
+            pool_size=5,
+            max_overflow=10,
+            pool_pre_ping=True,
+            future=True,
+        )
+    return _ENGINE
 
 
-def _ensure_column(conn: sqlite3.Connection, table: str, definition: str) -> None:
-    column = definition.split(" ", 1)[0]
-    if not _column_exists(conn, table, column):
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {definition}")
+def dispose_engine() -> None:
+    global _ENGINE
+    if _ENGINE is not None:
+        _ENGINE.dispose()
+        _ENGINE = None
 
 
-def _normalize_date_column(conn: sqlite3.Connection, table: str, column: str) -> None:
-    if not _column_exists(conn, table, column):
-        return
-    rows = conn.execute(
-        f"SELECT rowid, {column} AS value FROM {table} WHERE {column} IS NOT NULL AND trim({column}) <> ''"
-    ).fetchall()
-    for row in rows:
-        value = row["value"]
-        if value is None:
-            continue
-        if isinstance(value, str) and DATE_PATTERN.match(value.strip()):
-            continue
-        normalized = None
+def _build_alembic_config(database_url: str) -> Config:
+    config = Config(str(BACKEND_ROOT / "alembic.ini"))
+    config.set_main_option("script_location", str(BACKEND_ROOT / "alembic"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    return config
+
+
+def run_migrations(database_url: str | None = None) -> None:
+    config = _build_alembic_config(_normalize_db_url(database_url))
+    command.upgrade(config, "head")
+
+
+class DBRow(ABCMapping[str, Any]):
+    def __init__(self, mapping: Mapping[str, Any], values: Sequence[Any] | None = None):
+        self._mapping = dict(mapping)
+        self._values = tuple(values if values is not None else tuple(mapping.values()))
+
+    def __getitem__(self, key: str | int) -> Any:
+        if isinstance(key, int):
+            return self._values[key]
+        return self._mapping[key]
+
+    def __iter__(self):
+        return iter(self._mapping)
+
+    def __len__(self) -> int:
+        return len(self._mapping)
+
+    def keys(self):
+        return self._mapping.keys()
+
+    def items(self):
+        return self._mapping.items()
+
+    def values(self):
+        return self._mapping.values()
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._mapping
+
+
+class DBCursor:
+    def __init__(
+        self,
+        rows: list[DBRow] | None = None,
+        *,
+        rowcount: int = -1,
+        lastrowid: int | None = None,
+    ) -> None:
+        self._rows = rows or []
+        self.rowcount = rowcount
+        self.lastrowid = lastrowid
+
+    def fetchone(self) -> DBRow | None:
+        if not self._rows:
+            return None
+        return self._rows.pop(0)
+
+    def fetchall(self) -> list[DBRow]:
+        rows = list(self._rows)
+        self._rows.clear()
+        return rows
+
+
+def _sequence_params_to_mapping(statement: str, params: Sequence[Any]) -> tuple[str, dict[str, Any]]:
+    index = 0
+
+    def _replace(_match: re.Match[str]) -> str:
+        nonlocal index
+        token = f"p{index}"
+        index += 1
+        return f":{token}"
+
+    rewritten = re.sub(r"\?", _replace, statement)
+    mapping = {f"p{i}": value for i, value in enumerate(params)}
+    return rewritten, mapping
+
+
+def _append_returning_clause(statement: str) -> tuple[str, str | None]:
+    if re.search(r"\bRETURNING\b", statement, flags=re.IGNORECASE):
+        return statement, None
+    match = re.search(r"^\s*INSERT\s+INTO\s+([a-zA-Z_][a-zA-Z0-9_]*)", statement, flags=re.IGNORECASE)
+    if not match:
+        return statement, None
+    table = match.group(1)
+    primary_key = _PRIMARY_KEY_BY_TABLE.get(table)
+    if primary_key is None:
+        return statement, None
+    stripped = statement.rstrip().rstrip(";")
+    return f"{stripped} RETURNING {primary_key}", primary_key
+
+
+def _materialize_rows(result: Result[Any]) -> list[DBRow]:
+    if not result.returns_rows:
+        return []
+    materialized: list[DBRow] = []
+    for row in result.fetchall():
+        normalized_mapping = {key: _normalize_value(value) for key, value in row._mapping.items()}
+        normalized_values = tuple(_normalize_value(value) for value in tuple(row))
+        materialized.append(DBRow(normalized_mapping, normalized_values))
+    return materialized
+
+
+def _normalize_value(value: Any) -> Any:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return value
+
+
+class DBConnection:
+    def __init__(self, connection: Connection):
+        self._connection = connection
+        self._actor_user_id: int | None = None
+        self._actor_applied = False
+        self._root_transaction = self._connection.begin()
+
+    def set_actor(self, user_id: int | None) -> None:
+        self._actor_user_id = user_id
+        self._actor_applied = False
+
+    def _ensure_actor(self) -> None:
+        if self._actor_applied:
+            return
+        actor_value = "" if self._actor_user_id is None else str(int(self._actor_user_id))
+        self._connection.execute(
+            text("SELECT set_config('app.user_id', :user_id, false)"),
+            {"user_id": actor_value},
+        )
+        self._actor_applied = True
+
+    def execute(self, statement: str, params: Sequence[Any] | Mapping[str, Any] | None = None) -> DBCursor:
+        self._ensure_actor()
+        sql = statement
+        bind_params: Mapping[str, Any]
+        if params is None:
+            bind_params = {}
+        elif isinstance(params, Mapping):
+            bind_params = dict(params)
+        else:
+            sql, bind_params = _sequence_params_to_mapping(statement, list(params))
+
+        lastrowid: int | None = None
+        sql_to_run, returning_pk = _append_returning_clause(sql)
+        if _MANUAL_SAVEPOINT_SQL.match(sql_to_run):
+            result = self._connection.execute(text(sql_to_run), bind_params)
+            rows = _materialize_rows(result)
+            if returning_pk and rows:
+                lastrowid = int(rows[0][returning_pk])
+            return DBCursor(rows, rowcount=result.rowcount, lastrowid=lastrowid)
+        nested = self._connection.begin_nested()
         try:
-            normalized = normalize_optional_date(str(value), f"{table}.{column}")
-        except Exception:  # noqa: BLE001
-            normalized = None
-        conn.execute(
-            f"UPDATE {table} SET {column} = ? WHERE rowid = ?",
-            (normalized, row["rowid"]),
-        )
+            result = self._connection.execute(text(sql_to_run), bind_params)
+            rows = _materialize_rows(result)
+            if returning_pk and rows:
+                lastrowid = int(rows[0][returning_pk])
+            nested.commit()
+            return DBCursor(rows, rowcount=result.rowcount, lastrowid=lastrowid)
+        except IntegrityError as exc:
+            nested.rollback()
+            raise sqlite3.IntegrityError(str(exc)) from exc
+        except Exception:
+            nested.rollback()
+            raise
+
+    def commit(self) -> None:
+        self._root_transaction.commit()
+        self._root_transaction = self._connection.begin()
+        self._actor_applied = False
+
+    def rollback(self) -> None:
+        self._root_transaction.rollback()
+        self._root_transaction = self._connection.begin()
+        self._actor_applied = False
+
+    def close(self) -> None:
+        if self._root_transaction.is_active:
+            self._root_transaction.rollback()
+        self._connection.close()
+
+    @property
+    def connection(self) -> Connection:
+        return self._connection
 
 
-def _recreate_order_lineage_without_fk(conn: sqlite3.Connection) -> None:
-    if not _table_exists(conn, "order_lineage_events"):
-        return
-    fk_rows = conn.execute("PRAGMA foreign_key_list(order_lineage_events)").fetchall()
-    if not fk_rows:
-        return
-    conn.execute(
-        """
-        CREATE TABLE IF NOT EXISTS order_lineage_events_new (
-            event_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            event_type TEXT NOT NULL CHECK (event_type IN ('ETA_UPDATE', 'ETA_SPLIT', 'ETA_MERGE', 'ARRIVAL_SPLIT')),
-            source_order_id INTEGER NOT NULL,
-            target_order_id INTEGER,
-            quantity INTEGER,
-            previous_expected_arrival TEXT,
-            new_expected_arrival TEXT,
-            note TEXT,
-            created_at TEXT NOT NULL
-        )
-        """
-    )
-    conn.execute(
-        """
-        INSERT INTO order_lineage_events_new (
-            event_id, event_type, source_order_id, target_order_id, quantity,
-            previous_expected_arrival, new_expected_arrival, note, created_at
-        )
-        SELECT
-            event_id, event_type, source_order_id, target_order_id, quantity,
-            previous_expected_arrival, new_expected_arrival, note, created_at
-        FROM order_lineage_events
-        """
-    )
-    conn.execute("DROP TABLE order_lineage_events")
-    conn.execute("ALTER TABLE order_lineage_events_new RENAME TO order_lineage_events")
-
-
-def _migrate_legacy_procurement_tables(conn: sqlite3.Connection) -> None:
-    if not _table_exists(conn, "procurement_batches") or not _table_exists(conn, "procurement_lines"):
-        return
-
-    batch_count = int(
-        conn.execute("SELECT COUNT(*) AS c FROM procurement_batches").fetchone()["c"] or 0
-    )
-    if batch_count > 0:
-        return
-
-    now = "1970-01-01T00:00:00+09:00"
-    rfq_batch_map: dict[int, int] = {}
-    if _table_exists(conn, "rfq_batches"):
-        rfq_batches = conn.execute(
-            """
-            SELECT rfq_id, project_id, title, status, note, created_at, updated_at
-            FROM rfq_batches
-            ORDER BY rfq_id
-            """
-        ).fetchall()
-        for row in rfq_batches:
-            legacy_status = str(row["status"] or "OPEN").upper()
-            batch_status = {
-                "OPEN": "DRAFT",
-                "CLOSED": "CLOSED",
-                "CANCELLED": "CANCELLED",
-            }.get(legacy_status, "DRAFT")
-            cur = conn.execute(
-                """
-                INSERT INTO procurement_batches (title, status, note, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    row["title"],
-                    batch_status,
-                    row["note"],
-                    row["created_at"] or now,
-                    row["updated_at"] or row["created_at"] or now,
-                ),
-            )
-            rfq_batch_map[int(row["rfq_id"])] = int(cur.lastrowid)
-
-    if _table_exists(conn, "rfq_lines") and rfq_batch_map:
-        rfq_lines = conn.execute(
-            """
-            SELECT rl.*, rb.project_id
-            FROM rfq_lines rl
-            JOIN rfq_batches rb ON rb.rfq_id = rl.rfq_id
-            ORDER BY rl.line_id
-            """
-        ).fetchall()
-        for row in rfq_lines:
-            batch_id = rfq_batch_map.get(int(row["rfq_id"]))
-            if batch_id is None:
-                continue
-            linked_quotation_id = None
-            if row["linked_order_id"] is not None:
-                linked_order = conn.execute(
-                    "SELECT quotation_id FROM orders WHERE order_id = ?",
-                    (int(row["linked_order_id"]),),
-                ).fetchone()
-                if linked_order is not None:
-                    linked_quotation_id = linked_order["quotation_id"]
-            conn.execute(
-                """
-                INSERT INTO procurement_lines (
-                    batch_id, item_id, source_type, source_project_id, requested_quantity,
-                    finalized_quantity, supplier_name, expected_arrival, linked_order_id,
-                    linked_quotation_id, status, note, created_at, updated_at
-                ) VALUES (?, ?, 'PROJECT', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    batch_id,
-                    row["item_id"],
-                    row["project_id"],
-                    row["requested_quantity"],
-                    (
-                        row["finalized_quantity"]
-                        if "finalized_quantity" in row.keys() and row["finalized_quantity"] is not None
-                        else row["requested_quantity"]
-                    ),
-                    row["supplier_name"] if "supplier_name" in row.keys() else None,
-                    row["expected_arrival"],
-                    row["linked_order_id"],
-                    linked_quotation_id,
-                    row["status"],
-                    row["note"] if "note" in row.keys() else None,
-                    row["created_at"] or now,
-                    row["updated_at"] or row["created_at"] or now,
-                ),
-            )
-
-    if _table_exists(conn, "purchase_candidates"):
-        candidate_rows = conn.execute(
-            """
-            SELECT *
-            FROM purchase_candidates
-            ORDER BY substr(COALESCE(created_at, ''), 1, 10), candidate_id
-            """
-        ).fetchall()
-        batch_by_group: dict[tuple[str, str], int] = {}
-        for row in candidate_rows:
-            created_date = str(row["created_at"] or now)[:10] or "unknown"
-            source_type = str(row["source_type"] or "ADHOC").upper()
-            batch_key = (created_date, source_type)
-            batch_id = batch_by_group.get(batch_key)
-            if batch_id is None:
-                cur = conn.execute(
-                    """
-                    INSERT INTO procurement_batches (title, status, note, created_at, updated_at)
-                    VALUES (?, 'DRAFT', ?, ?, ?)
-                    """,
-                    (
-                        f"Migrated from purchase_candidates - {created_date}",
-                        "Migrated legacy purchase candidates",
-                        row["created_at"] or now,
-                        row["updated_at"] or row["created_at"] or now,
-                    ),
-                )
-                batch_id = int(cur.lastrowid)
-                batch_by_group[batch_key] = batch_id
-            line_status = {
-                "OPEN": "DRAFT",
-                "ORDERING": "SENT",
-                "ORDERED": "ORDERED",
-                "CANCELLED": "CANCELLED",
-            }.get(str(row["status"] or "OPEN").upper(), "DRAFT")
-            requested_quantity = int(row["shortage_quantity"] or row["required_quantity"] or 0)
-            item_id = row["item_id"]
-            if not item_id or requested_quantity <= 0:
-                continue
-            conn.execute(
-                """
-                INSERT INTO procurement_lines (
-                    batch_id, item_id, source_type, source_project_id, requested_quantity,
-                    finalized_quantity, supplier_name, expected_arrival, linked_order_id,
-                    linked_quotation_id, status, note, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)
-                """,
-                (
-                    batch_id,
-                    item_id,
-                    "PROJECT" if source_type == "PROJECT" else "BOM",
-                    row["project_id"],
-                    requested_quantity,
-                    requested_quantity,
-                    row["supplier_name"],
-                    row["target_date"],
-                    line_status,
-                    row["note"],
-                    row["created_at"] or now,
-                    row["updated_at"] or row["created_at"] or now,
-                ),
-            )
-
-
-def _apply_schema(conn: sqlite3.Connection) -> None:
-    for statement in SCHEMA_STATEMENTS:
-        conn.execute(statement)
-    for statement in INDEX_STATEMENTS:
-        conn.execute(statement)
-    for statement in TRIGGER_STATEMENTS:
-        conn.execute(statement)
-
-
-def migrate_db(conn: sqlite3.Connection) -> None:
-    # Keep migration idempotent so startup can run this each time.
-    _apply_schema(conn)
-    _recreate_order_lineage_without_fk(conn)
-    _migrate_legacy_procurement_tables(conn)
-    for statement in INDEX_STATEMENTS:
-        conn.execute(statement)
-    for definition in (
-        "project_id INTEGER REFERENCES projects (project_id)",
-        "project_id_manual INTEGER NOT NULL DEFAULT 0",
-        "ordered_quantity INTEGER",
-        "ordered_item_number TEXT",
-        "status TEXT",
-        "expected_arrival TEXT",
-        "arrival_date TEXT",
-    ):
-        _ensure_column(conn, "orders", definition)
-
-    # Backfill legacy rows (created before project_id_manual existed):
-    # if an order still has project linkage but has no ORDERED RFQ ownership,
-    # treat it as manual so RFQ unlink sync does not clear the assignment.
-    conn.execute(
-        """
-        UPDATE orders
-        SET project_id_manual = 1
-        WHERE project_id IS NOT NULL
-          AND COALESCE(project_id_manual, 0) = 0
-          AND NOT EXISTS (
-              SELECT 1
-              FROM procurement_lines pl
-              WHERE pl.linked_order_id = orders.order_id
-                AND pl.status = 'ORDERED'
-          )
-          AND NOT EXISTS (
-              SELECT 1
-              FROM rfq_lines rl
-              WHERE rl.linked_order_id = orders.order_id
-                AND rl.status = 'ORDERED'
-          )
-        """
-    )
-
-    conn.execute(
-        """
-        UPDATE orders
-        SET status = CASE
-            WHEN status IS NULL OR trim(status) = '' THEN 'Ordered'
-            WHEN lower(status) = 'arrived' THEN 'Arrived'
-            ELSE 'Ordered'
-        END
-        """
-    )
-    conn.execute("UPDATE orders SET ordered_quantity = COALESCE(ordered_quantity, order_amount)")
-    conn.execute(
-        """
-        UPDATE orders
-        SET ordered_item_number = COALESCE(
-            NULLIF(ordered_item_number, ''),
-            (SELECT item_number FROM items_master WHERE items_master.item_id = orders.item_id)
-        )
-        """
-    )
-    _normalize_date_column(conn, "orders", "order_date")
-    _normalize_date_column(conn, "orders", "expected_arrival")
-    _normalize_date_column(conn, "orders", "arrival_date")
-    _normalize_date_column(conn, "quotations", "issue_date")
-    _normalize_date_column(conn, "projects", "planned_start")
-    _normalize_date_column(conn, "reservations", "deadline")
-    _normalize_date_column(conn, "procurement_lines", "expected_arrival")
-    _normalize_date_column(conn, "rfq_batches", "target_date")
-    _normalize_date_column(conn, "rfq_lines", "expected_arrival")
-    _normalize_date_column(conn, "purchase_candidates", "target_date")
-
-    # Migrate legacy pdf_link paths: quotations/... → imports/orders/...
-    _has_pdf_link = any(
-        row[1] == "pdf_link"
-        for row in conn.execute("PRAGMA table_info(quotations)").fetchall()
-    )
-    if _has_pdf_link:
-        conn.execute(
-            """
-            UPDATE quotations
-            SET pdf_link = 'imports/orders' || substr(pdf_link, length('quotations') + 1)
-            WHERE pdf_link LIKE 'quotations/%'
-            """
-        )
-
-    conn.commit()
-
-
-def init_db(db_path: str | None = None) -> Path:
+def init_db(database_url: str | None = None) -> str:
     ensure_workspace_layout()
-    resolved = resolve_db_path(db_path)
-    resolved.parent.mkdir(parents=True, exist_ok=True)
-    conn = get_connection(str(resolved))
-    try:
-        migrate_db(conn)
-    finally:
-        conn.close()
-    return resolved
+    normalized = _normalize_db_url(database_url)
+    get_engine(normalized)
+    run_migrations(normalized)
+    return normalized
 
 
-def get_connection(db_path: str | None = None) -> sqlite3.Connection:
-    resolved = resolve_db_path(db_path)
-    resolved.parent.mkdir(parents=True, exist_ok=True)
-    # FastAPI may execute dependency setup and endpoint body on different worker threads.
-    conn = sqlite3.connect(resolved, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA synchronous = NORMAL")
-    return conn
+def get_connection(database_url: str | None = None) -> DBConnection:
+    engine = get_engine(database_url)
+    return DBConnection(engine.connect())
 
 
 @contextmanager
-def transaction(conn: sqlite3.Connection) -> Iterator[sqlite3.Connection]:
+def transaction(conn: DBConnection) -> Iterator[DBConnection]:
+    tx = conn.connection.begin_nested() if conn.connection.in_transaction() else conn.connection.begin()
     try:
-        conn.execute("BEGIN")
         yield conn
     except Exception:
-        conn.rollback()
+        tx.rollback()
         raise
     else:
-        conn.commit()
+        tx.commit()
