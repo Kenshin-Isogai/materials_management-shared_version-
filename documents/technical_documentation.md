@@ -425,6 +425,11 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
   - `undo_transaction`
   - `get_inventory_snapshot` (past/future logic)
   - any dashboard/reporting code that depends on operation semantics
+- Snapshot basis contract:
+  - `basis=raw` preserves location-state reconstruction semantics
+  - `basis=net_available` is a future/current residual-stock view built from `available = inventory_ledger.on_hand - active_allocations`, plus open orders due by the selected date
+  - `basis=net_available` rows also expose a compact occupation summary (`allocated_quantity`, `active_reservation_count`, `allocated_project_names`) for the same `(item, location)` so Snapshot can answer "who is occupying this stock?" at a glance without duplicating Workspace-level allocation detail
+  - do not claim historical `net_available` support unless allocation-history reconstruction is implemented; the current API rejects `mode=past&basis=net_available`
 
 ### 3) Item identity immutability
 

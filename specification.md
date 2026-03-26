@@ -867,6 +867,18 @@ Projected Available =
 2. Add pending orders where `date(expected_arrival) <= date(target_date)` and `status != 'Arrived'`
 3. Subtract active reservations where `deadline <= date` (assumed consumed)
 
+**Availability Basis:**
+- `basis=raw` (default): return physical snapshot rows from the location-state projection described above
+- `basis=net_available`: future/current-only view that returns residual free quantity by location after subtracting current active reservation allocations from on-hand stock, then adding open orders due by the selected date
+- `basis=net_available` with `mode=past` is rejected because the current model does not provide authoritative historical allocation-state reconstruction
+
+When `basis=net_available`, snapshot rows may also include compact occupation context for the same `(item, location)`:
+- `allocated_quantity`
+- `active_reservation_count`
+- `allocated_project_names`
+
+These are summary-only fields for quick scanning, not a full allocation-explainer replacement for Workspace.
+
 ---
 
 ## **5. Interface Specifications**
@@ -894,7 +906,7 @@ All management pages handling CRUD operations (Items, Orders, Reservations, etc.
 | Assemblies | Define assemblies, location usage, requirements |
 | Items | Bulk edit item attributes; soft-merge categories via alias mapping |
 | History | Transaction log, undo operations |
-| **Snapshot** | **Past/future inventory state reconstruction, CSV export** |
+| **Snapshot** | **Past/future inventory state reconstruction, searchable residual-stock review via `net_available`, CSV export** |
 
 ### **5.2 CLI Commands (Deprecated / Removed For PostgreSQL Deployment)**
 
@@ -1001,7 +1013,7 @@ Base URL: `http://localhost:8000/api`
 | GET | `/inventory/import-template` | Download header-only movement import template CSV (UTF-8 with BOM) |
 | GET | `/inventory/import-reference` | Download live movement reference CSV (item ids and current locations/quantities) |
 | POST | `/inventory/import-preview` | Preview movement CSV validation and simulated stock effects before commit |
-| GET | `/inventory/snapshot` | Get inventory snapshot (supports `?date=`, `?mode=past|future`) |
+| GET | `/inventory/snapshot` | Get inventory snapshot (supports `?date=`, `?mode=past|future`, `?basis=raw|net_available`) |
 | POST | `/inventory/move` | Move items between locations |
 | POST | `/inventory/consume` | Consume items from location |
 | POST | `/inventory/adjust` | Adjust inventory quantity |

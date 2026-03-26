@@ -517,9 +517,10 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
     def get_inventory_snapshot(
         date: str | None = None,
         mode: str | None = None,
+        basis: str | None = None,
         conn= db,
     ):
-        return ok(service.get_inventory_snapshot(conn, target_date=date, mode=mode))
+        return ok(service.get_inventory_snapshot(conn, target_date=date, mode=mode, basis=basis))
 
     @app.post("/api/inventory/move")
     def post_inventory_move(body: InventoryMoveRequest, conn= db):

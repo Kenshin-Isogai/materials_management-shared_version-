@@ -3221,3 +3221,72 @@ def test_import_orders_deduplicates_missing_rows_for_same_item(conn, tmp_path: P
     )
     assert len(result["rows"]) == 1
     assert result["rows"][0]["item_number"] == "DEDUP-ITEM-001"
+
+
+def test_inventory_snapshot_net_available_returns_residual_stock(conn):
+    item = _create_basic_item(conn, item_number="ITEM-SNAPSHOT-NET")
+    project = service.create_project(
+        conn,
+        {
+            "name": "SNAPSHOT-NET-PROJECT",
+            "status": "CONFIRMED",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [],
+        },
+    )
+    service.adjust_inventory(
+        conn,
+        item_id=item["item_id"],
+        quantity_delta=10,
+        location="STOCK",
+        note="seed snapshot stock",
+    )
+    service.create_reservation(
+        conn,
+        {
+            "item_id": item["item_id"],
+            "quantity": 4,
+            "purpose": "occupy stock",
+            "deadline": FUTURE_TARGET_DATE,
+            "project_id": project["project_id"],
+        },
+    )
+    service.import_orders_from_content(
+        conn,
+        content=(
+            "item_number,quantity,quotation_number,issue_date,order_date,expected_arrival,pdf_link\n"
+            f"{item['item_number']},3,Q-SNAPSHOT-NET-001,2026-03-01,2026-03-02,{FUTURE_TARGET_DATE},\n"
+        ).encode("utf-8"),
+        supplier_name="SNAPSHOT-SUPPLIER",
+        source_name="snapshot_net_available.csv",
+    )
+    conn.commit()
+
+    snapshot = service.get_inventory_snapshot(
+        conn,
+        target_date=FUTURE_TARGET_DATE,
+        mode="future",
+        basis="net_available",
+    )
+
+    assert snapshot["basis"] == "net_available"
+    assert snapshot["mode"] == "future"
+    matching_rows = [row for row in snapshot["rows"] if int(row["item_id"]) == item["item_id"]]
+    assert len(matching_rows) == 1
+    assert matching_rows[0]["location"] == "STOCK"
+    assert int(matching_rows[0]["quantity"]) == 9
+    assert int(matching_rows[0]["allocated_quantity"]) == 4
+    assert int(matching_rows[0]["active_reservation_count"]) == 1
+    assert matching_rows[0]["allocated_project_names"] == ["SNAPSHOT-NET-PROJECT"]
+
+
+def test_inventory_snapshot_net_available_rejects_past_mode(conn):
+    with pytest.raises(AppError) as exc_info:
+        service.get_inventory_snapshot(
+            conn,
+            target_date="2020-01-01",
+            mode="past",
+            basis="net_available",
+        )
+
+    assert exc_info.value.code == "SNAPSHOT_BASIS_MODE_UNSUPPORTED"

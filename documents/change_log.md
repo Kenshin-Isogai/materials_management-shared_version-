@@ -1,3 +1,31 @@
+## 2026-03-26
+
+### Added
+
+- Added `start-app.ps1` at the repository root.
+  - Starts the Docker app stack on Windows using `docker-compose.yml` by default.
+  - Checks `.env` and Docker availability before startup.
+  - Supports `-IncludeDevOverride` for the local development override when explicitly requested.
+- Added `stop-app.ps1` at the repository root.
+  - Stops the same Docker app stack on Windows using the same compose-file selection rules.
+  - Supports `-RemoveVolumes` when the operator explicitly wants `docker compose down -v`.
+
+### Changed
+
+- Snapshot now supports an availability-basis selector instead of introducing a separate residual-items page.
+  - `GET /api/inventory/snapshot` now accepts `basis=raw|net_available`.
+  - `raw` preserves the existing physical location-state reconstruction behavior.
+  - `net_available` returns residual free quantity for current/future snapshots by subtracting current active reservation allocations from on-hand inventory, then adding open orders due by the selected date.
+  - `net_available` rows now also include a compact occupation summary: `allocated_quantity`, `active_reservation_count`, and `allocated_project_names`.
+  - `mode=past` with `basis=net_available` now returns a controlled `422` because the current model does not support authoritative historical allocation-state reconstruction.
+- Snapshot frontend now exposes `raw inventory` vs `net available` directly on the existing page, keeping the inventory-analysis UI consolidated instead of adding a duplicate feature surface.
+
+### Tests
+
+- Backend targeted snapshot regressions added for:
+  - `basis=net_available` residual-stock calculation
+  - rejection of `mode=past&basis=net_available`
+
 ## 2026-03-25
 
 ### Fixed

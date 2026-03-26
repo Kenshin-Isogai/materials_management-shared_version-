@@ -851,6 +851,56 @@ def _get_total_available_inventory(conn: sqlite3.Connection, item_id: int) -> in
     return sum(qty for _, qty in _list_item_available_inventory(conn, item_id))
 
 
+def _get_active_allocation_summary_by_item_location(
+    conn: sqlite3.Connection,
+    item_ids: list[int],
+) -> dict[tuple[int, str], dict[str, Any]]:
+    if not item_ids:
+        return {}
+    placeholders = ",".join("?" for _ in item_ids)
+    rows = conn.execute(
+        f"""
+        SELECT
+            ra.item_id,
+            ra.location,
+            ra.quantity,
+            ra.reservation_id,
+            p.name AS project_name
+        FROM reservation_allocations ra
+        LEFT JOIN reservations r ON r.reservation_id = ra.reservation_id
+        LEFT JOIN projects p ON p.project_id = r.project_id
+        WHERE ra.status = 'ACTIVE'
+          AND ra.item_id IN ({placeholders})
+        ORDER BY ra.item_id, ra.location, ra.reservation_id
+        """,
+        tuple(item_ids),
+    ).fetchall()
+    summary: dict[tuple[int, str], dict[str, Any]] = {}
+    for row in rows:
+        key = (int(row["item_id"]), str(row["location"]))
+        current = summary.setdefault(
+            key,
+            {
+                "allocated_quantity": 0,
+                "reservation_ids": set(),
+                "project_names": [],
+            },
+        )
+        current["allocated_quantity"] += int(row["quantity"] or 0)
+        current["reservation_ids"].add(int(row["reservation_id"]))
+        project_name = str(row["project_name"]).strip() if row["project_name"] is not None else ""
+        if project_name and project_name not in current["project_names"]:
+            current["project_names"].append(project_name)
+    normalized: dict[tuple[int, str], dict[str, Any]] = {}
+    for key, value in summary.items():
+        normalized[key] = {
+            "allocated_quantity": int(value["allocated_quantity"]),
+            "active_reservation_count": len(value["reservation_ids"]),
+            "allocated_project_names": list(value["project_names"]),
+        }
+    return normalized
+
+
 def _get_pending_arrival_quantity_by_date(
     conn: sqlite3.Connection,
     item_id: int,
@@ -12091,6 +12141,7 @@ def get_inventory_snapshot(
     *,
     target_date: str | None = None,
     mode: str | None = None,
+    basis: str | None = None,
 ) -> dict[str, Any]:
     if target_date is None:
         target_date = today_jst()
@@ -12103,6 +12154,19 @@ def get_inventory_snapshot(
         raise AppError(
             code="INVALID_SNAPSHOT_MODE",
             message="mode must be one of: past, future",
+            status_code=422,
+        )
+    effective_basis = basis or "raw"
+    if effective_basis not in {"raw", "net_available"}:
+        raise AppError(
+            code="INVALID_SNAPSHOT_BASIS",
+            message="basis must be one of: raw, net_available",
+            status_code=422,
+        )
+    if effective_basis == "net_available" and effective_mode == "past":
+        raise AppError(
+            code="SNAPSHOT_BASIS_MODE_UNSUPPORTED",
+            message="basis=net_available is only supported for current/future snapshots",
             status_code=422,
         )
 
@@ -12145,6 +12209,15 @@ def get_inventory_snapshot(
                     _state_apply(state, (item_id, to_location), -quantity)
                     _state_apply(state, (item_id, from_location), quantity)
     else:
+        if effective_basis == "net_available":
+            available_state: dict[tuple[int, str], int] = {}
+            for (item_id, location), quantity in state.items():
+                if quantity <= 0 or location == "RESERVED":
+                    continue
+                available_qty = _get_available_inventory_quantity(conn, item_id, location)
+                if available_qty > 0:
+                    available_state[(item_id, location)] = available_qty
+            state = available_state
         pending_orders = conn.execute(
             """
             SELECT item_id, SUM(order_amount) AS qty
@@ -12158,22 +12231,23 @@ def get_inventory_snapshot(
         ).fetchall()
         for row in pending_orders:
             _state_apply(state, (int(row["item_id"]), "STOCK"), int(row["qty"]))
-        pending_consumption = conn.execute(
-            """
-            SELECT item_id, SUM(quantity) AS qty
-            FROM reservations
-            WHERE status = 'ACTIVE'
-              AND deadline IS NOT NULL
-              AND date(deadline) <= date(?)
-            GROUP BY item_id
-            """,
-            (normalized_target,),
-        ).fetchall()
-        for row in pending_consumption:
-            _state_apply(state, (int(row["item_id"]), "RESERVED"), -int(row["qty"]))
+        if effective_basis == "raw":
+            pending_consumption = conn.execute(
+                """
+                SELECT item_id, SUM(quantity) AS qty
+                FROM reservations
+                WHERE status = 'ACTIVE'
+                  AND deadline IS NOT NULL
+                  AND date(deadline) <= date(?)
+                GROUP BY item_id
+                """,
+                (normalized_target,),
+            ).fetchall()
+            for row in pending_consumption:
+                _state_apply(state, (int(row["item_id"]), "RESERVED"), -int(row["qty"]))
 
     if not state:
-        return {"date": normalized_target, "mode": effective_mode, "rows": []}
+        return {"date": normalized_target, "mode": effective_mode, "basis": effective_basis, "rows": []}
 
     item_ids = sorted({item_id for item_id, _ in state.keys()})
     placeholder = ",".join("?" for _ in item_ids)
@@ -12193,12 +12267,16 @@ def get_inventory_snapshot(
         tuple(item_ids),
     ).fetchall()
     item_map = {int(row["item_id"]): dict(row) for row in item_map_rows}
+    allocation_summary: dict[tuple[int, str], dict[str, Any]] = {}
+    if effective_basis == "net_available":
+        allocation_summary = _get_active_allocation_summary_by_item_location(conn, item_ids)
 
     rows: list[dict[str, Any]] = []
     for (item_id, location), quantity in sorted(state.items(), key=lambda r: (r[0][1], r[0][0])):
         if quantity <= 0:
             continue
         item = item_map.get(item_id)
+        allocation = allocation_summary.get((item_id, location))
         rows.append(
             {
                 "item_id": item_id,
@@ -12208,9 +12286,12 @@ def get_inventory_snapshot(
                 "description": item["description"] if item else None,
                 "location": location,
                 "quantity": quantity,
+                "allocated_quantity": int(allocation["allocated_quantity"]) if allocation else 0,
+                "active_reservation_count": int(allocation["active_reservation_count"]) if allocation else 0,
+                "allocated_project_names": list(allocation["allocated_project_names"]) if allocation else [],
             }
         )
-    return {"date": normalized_target, "mode": effective_mode, "rows": rows}
+    return {"date": normalized_target, "mode": effective_mode, "basis": effective_basis, "rows": rows}
 
 
 def list_manufacturers(conn: sqlite3.Connection) -> list[dict[str, Any]]:

@@ -1,6 +1,6 @@
 # Source Current State
 
-Last updated: 2026-03-25 (JST)
+Last updated: 2026-03-26 (JST)
 
 ## 1. System Snapshot
 
@@ -30,6 +30,9 @@ Last updated: 2026-03-25 (JST)
   - `source_current_state.md` (this file)
   - `change_log.md`
   - `postgresql_windows_server_instructions.md`
+- Root scripts:
+  - `start-app.ps1`: Windows helper that starts the base Docker Compose app stack, defaulting to `docker-compose.yml` and only including the dev override when `-IncludeDevOverride` is requested
+  - `stop-app.ps1`: matching Windows helper that stops the same app stack and optionally removes volumes with `-RemoveVolumes`
 
 ## 3. Backend State
 
@@ -192,6 +195,11 @@ Last updated: 2026-03-25 (JST)
 - `CatalogPicker` single-select inputs now resync their visible text when parent state changes while the picker is open, and preview flows preserve explicit cleared selections instead of silently reverting to stale suggested matches.
 - Preview/analyze/import actions for BOM, Projects quick-entry, Items, Orders, Movements, and Reservations now surface API failures through in-page status messages instead of relying on uncaught promise errors.
 - Snapshot page supports client-side quick search, location/category filtering, low-stock/shortage-only threshold filtering, description-substring filtering, and table-column sorting (item, location, quantity, category) to accelerate planning and purchase checks from projected inventory states.
+- Snapshot page now also supports `basis=raw|net_available`.
+  - `raw` keeps the existing location-state reconstruction behavior
+  - `net_available` is the residual-stock view for current/future snapshots, subtracting current active reservation allocations before adding open orders due by the selected date
+  - `net_available` rows now also surface compact occupation summary fields (`allocated_quantity`, `active_reservation_count`, `allocated_project_names`) instead of requiring full Workspace drill-in for every scan
+  - `mode=past` with `basis=net_available` is blocked in both API and UI because historical allocation-state reconstruction is not authoritative in the current model
 - BOM analysis endpoint now supports optional `target_date` projection (`current net available + open orders arriving by date`) while BOM reserve remains current-availability execution behavior.
 - Project planning now has two layers:
   - `GET /api/projects/{id}/planning-analysis` for sequential multi-project netting with backlog carry-forward
