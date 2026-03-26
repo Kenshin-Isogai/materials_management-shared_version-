@@ -726,6 +726,7 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
   - Movements entry now uses `CatalogPicker` for item selection in the unified single/batch movement table
   - Adding a new movement row inherits the latest completed `from/to` locations to speed repeated transfer entry
   - Reservations entry now uses `CatalogPicker` for item selection
+  - Reservations entry now also supports optional project selection for provisional project linkage on reservation create
   - Items, Orders, Movements, and Reservations import preview rows now use the same catalog-search payload for reconciliation corrections
   - Orders import supplier selection also uses the same picker/search contract
   - preview-first flows now preserve an explicit cleared selection instead of silently falling back to a stale suggested match

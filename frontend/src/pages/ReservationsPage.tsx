@@ -3,7 +3,7 @@ import useSWR from "swr";
 import { apiDownload, apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
 import { CatalogPicker } from "../components/CatalogPicker";
 import { formatActionError, resolvePreviewSelection } from "../lib/previewState";
-import type { CatalogSearchResult, Item, Reservation } from "../lib/types";
+import type { CatalogSearchResult, Item, ProjectRow, Reservation } from "../lib/types";
 
 type ReservationRow = {
   item_id: string;
@@ -11,6 +11,7 @@ type ReservationRow = {
   purpose: string;
   deadline: string;
   note: string;
+  project_id: string;
 };
 
 type ReservationImportPreviewRow = {
@@ -56,7 +57,8 @@ const blankRow = (): ReservationRow => ({
   quantity: "",
   purpose: "",
   deadline: "",
-  note: ""
+  note: "",
+  project_id: "",
 });
 
 function itemToCatalogResult(item: Item): CatalogSearchResult {
@@ -90,7 +92,11 @@ export function ReservationsPage() {
   const { data: itemsResp } = useSWR("/items-options-reservations", () =>
     apiGetWithPagination<Item[]>("/items?per_page=1000")
   );
+  const { data: projectsResp } = useSWR("/projects-options-reservations", () =>
+    apiGetWithPagination<ProjectRow[]>("/projects?per_page=200")
+  );
   const items = useMemo(() => itemsResp?.data ?? [], [itemsResp]);
+  const projects = useMemo(() => projectsResp?.data ?? [], [projectsResp]);
   const itemCatalogById = useMemo(
     () => new Map(items.map((item) => [item.item_id, itemToCatalogResult(item)])),
     [items]
@@ -151,7 +157,8 @@ export function ReservationsPage() {
         quantity: Number(row.quantity),
         purpose: row.purpose.trim() || null,
         deadline: row.deadline.trim() || null,
-        note: row.note.trim() || null
+        note: row.note.trim() || null,
+        project_id: row.project_id ? Number(row.project_id) : null,
       }));
     if (!reservations.length) return;
     setLoading(true);
@@ -494,6 +501,7 @@ export function ReservationsPage() {
                 <th className="px-2 py-2">Purpose</th>
                 <th className="px-2 py-2">Deadline</th>
                 <th className="px-2 py-2">Note</th>
+                <th className="px-2 py-2">Project (optional)</th>
                 <th className="px-2 py-2">-</th>
               </tr>
             </thead>
@@ -543,6 +551,20 @@ export function ReservationsPage() {
                     />
                   </td>
                   <td className="px-2 py-2">
+                    <select
+                      className="input"
+                      value={row.project_id}
+                      onChange={(e) => updateBulkRow(idx, { project_id: e.target.value })}
+                    >
+                      <option value="">Generic (no project)</option>
+                      {projects.map((project) => (
+                        <option key={project.project_id} value={project.project_id}>
+                          {project.name} (#{project.project_id}, {project.status})
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="px-2 py-2">
                     <button className="button-subtle" onClick={() => removeBulkRow(idx)}>
                       Del
                     </button>
@@ -571,6 +593,7 @@ export function ReservationsPage() {
                   <th className="px-2 py-2">Qty</th>
                   <th className="px-2 py-2">Purpose</th>
                   <th className="px-2 py-2">Deadline</th>
+                  <th className="px-2 py-2">Project</th>
                   <th className="px-2 py-2">Status</th>
                   <th className="px-2 py-2">Actions</th>
                 </tr>
@@ -583,6 +606,9 @@ export function ReservationsPage() {
                     <td className="px-2 py-2">{row.quantity}</td>
                     <td className="px-2 py-2">{row.purpose ?? "-"}</td>
                     <td className="px-2 py-2">{row.deadline ?? "-"}</td>
+                    <td className="px-2 py-2">
+                      {row.project_id ? `${row.project_name ?? "(unnamed)"} (#${row.project_id})` : "-"}
+                    </td>
                     <td className="px-2 py-2">{row.status}</td>
                     <td className="px-2 py-2">
                       {row.status === "ACTIVE" ? (

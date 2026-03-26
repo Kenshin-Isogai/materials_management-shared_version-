@@ -27,6 +27,16 @@
   - `net_available` rows now also include a compact occupation summary: `allocated_quantity`, `active_reservation_count`, and `allocated_project_names`.
   - `mode=past` with `basis=net_available` now returns a controlled `422` because the current model does not support authoritative historical allocation-state reconstruction.
 - Snapshot frontend now exposes `raw inventory` vs `net available` directly on the existing page, keeping the inventory-analysis UI consolidated instead of adding a duplicate feature surface.
+- Improved provisional project-link UX on Reservations.
+  - Reservation Entry now includes optional project selection in the main multi-row UI.
+  - Batch create payload now submits optional `project_id` from that UI.
+  - Reservation List now shows linked project name/id when present.
+  - Backend reservation create now validates provided `project_id` and returns controlled `PROJECT_NOT_FOUND` when invalid.
+
+### Documentation
+
+- Added phased rollout plan document for provisional allocation UX improvements:
+  - `documents/provisional_allocation_plan.md`
 
 ### Tests
 

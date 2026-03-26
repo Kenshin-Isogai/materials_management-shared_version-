@@ -7777,6 +7777,17 @@ def get_reservation(conn: sqlite3.Connection, reservation_id: int) -> dict[str, 
 def create_reservation(conn: sqlite3.Connection, payload: dict[str, Any]) -> dict[str, Any]:
     item_id = int(payload["item_id"])
     quantity = require_positive_int(int(payload["quantity"]), "quantity")
+    project_id = payload.get("project_id")
+    if project_id is not None:
+        project_id = int(project_id)
+        _get_entity_or_404(
+            conn,
+            "projects",
+            "project_id",
+            project_id,
+            "PROJECT_NOT_FOUND",
+            f"Project with id {project_id} not found",
+        )
     _get_entity_or_404(
         conn,
         "items_master",
@@ -7811,7 +7822,7 @@ def create_reservation(conn: sqlite3.Connection, payload: dict[str, Any]) -> dic
             normalize_optional_date(payload.get("deadline"), "deadline"),
             now_jst_iso(),
             payload.get("note"),
-            payload.get("project_id"),
+            project_id,
         ),
     )
     _log_transaction(

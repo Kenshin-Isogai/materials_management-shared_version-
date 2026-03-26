@@ -167,6 +167,7 @@ npm run build
   - columns: `operation_type,item_id,quantity,from_location,to_location,location,note`
 - Reservations CSV upload: `POST /api/reservations/import-csv`
   - columns: `item_id` or `assembly`, `quantity`, optional `assembly_quantity,purpose,deadline,note,project_id`
+- Reservations page `Reservation Entry` now also supports optional project selection directly in the UI for provisional project linkage.
 
 ### Catalog search shortcut
 
