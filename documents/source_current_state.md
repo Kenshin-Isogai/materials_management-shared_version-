@@ -92,7 +92,7 @@ Last updated: 2026-03-26 (JST)
   - supports browser-side create, edit, activate, and deactivate flows against the existing `/api/users` endpoints
   - the global header user picker now refreshes after user mutations and automatically falls back to the next active user if the selected one is deactivated
 - Shared-server batch workflows are now upload-first on the main Items and Orders pages.
-  - Items page now exposes `Upload Batch CSVs`, posting multi-file form data to `POST /api/items/batch-upload`
+  - Items page now distinguishes `General Items CSV Import` from `Register Missing-Item Batch CSVs`, with the batch upload control posting multi-file form data to `POST /api/items/batch-upload`
   - Orders page now exposes `Upload Orders ZIP`, posting one ZIP package to `POST /api/orders/batch-upload`
   - upload-first Orders ZIP guidance now tells users to keep CSV `pdf_link` blank or filename-only instead of teaching server paths
   - both pages keep existing server-resident batch operations only as advanced fallback controls
@@ -151,6 +151,7 @@ Last updated: 2026-03-26 (JST)
   - preview confirmation can send per-row `canonical_item_number` / `units_per_order` overrides back through `POST /api/items/import`
   - the Items page can select multiple CSV files, preview them as one combined review set, then import them sequentially in one action
   - successful or partially successful manual item CSV imports are archived into `imports/items/registered/<YYYY-MM>/` and folded into the monthly `items_YYYY-MM_NNN.csv` consolidation flow
+- Missing-item batch registration now shares the same underlying item/alias write logic as manual item import after normalizing its generated CSV rows, reducing drift between the two item-registration paths while preserving batch-only unresolved-skip and file-move behavior.
 - Movements CSV import is now preview-first:
   - `POST /api/inventory/import-preview` validates operation/location rules, simulates inventory effects row-by-row, and flags unresolved item ids or stock shortages before commit
   - preview confirmation can send per-row `item_id` overrides back through `POST /api/inventory/import-csv`

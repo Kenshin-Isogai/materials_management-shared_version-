@@ -12,6 +12,14 @@
 
 ### Changed
 
+- Reduced duplication between Items manual CSV import and missing-item batch registration.
+  - Missing-item batch registration now normalizes batch CSV rows into the shared item/alias import write path instead of maintaining a separate create/upsert implementation.
+  - Batch-specific semantics remain unchanged where they matter operationally: unresolved `new_item` rows can still be skipped, already-registered `new_item` rows remain no-op, and staged/unregistered files still move through the existing batch archive flow.
+- Clarified Items page import wording so the two CSV paths read as different workflows instead of duplicates.
+  - `Import Items CSV` is now labeled `General Items CSV Import`.
+  - `Upload Batch CSVs` is now labeled `Register Missing-Item Batch CSVs`.
+  - Helper text now explicitly routes hand-made/ad hoc CSVs to the general import path and reserves the batch path for generated missing-item registration files.
+
 - Snapshot now supports an availability-basis selector instead of introducing a separate residual-items page.
   - `GET /api/inventory/snapshot` now accepts `basis=raw|net_available`.
   - `raw` preserves the existing physical location-state reconstruction behavior.
