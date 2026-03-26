@@ -7365,28 +7365,40 @@ def register_missing_items_from_rows(
     *,
     skip_unresolved: bool = False,
 ) -> dict[str, Any]:
-    created_items = 0
-    created_aliases = 0
+    normalized_rows: list[dict[str, str]] = []
     skipped_unresolved = 0
-    local_item_map: dict[tuple[int, str], int] = {}
-    deferred_alias_rows: list[dict[str, str]] = []
+    seen_new_items: set[tuple[str, str]] = set()
 
-    for row in rows:
-        if not any(str(value or "").strip() for value in row.values()):
+    for raw_row in rows:
+        if not any(str(value or "").strip() for value in raw_row.values()):
+            normalized_rows.append({})
             continue
+
+        row = dict(raw_row)
         supplier = require_non_empty(str(row.get("supplier", "")), "supplier")
-        supplier_id = _get_or_create_supplier(conn, supplier)
         item_number = require_non_empty(str(row.get("item_number", "")), "item_number")
-        resolution_type = (row.get("resolution_type") or "new_item").strip().lower()
-        if resolution_type == "alias":
-            deferred_alias_rows.append(row | {"_supplier_id": supplier_id, "_item_number": item_number})
+        raw_row_type = str(row.get("resolution_type") or row.get("row_type") or "new_item").strip().lower()
+        row_type = "alias" if raw_row_type == "alias" else "item"
+
+        if row_type == "alias":
+            normalized_rows.append(
+                {
+                    "row_type": "alias",
+                    "supplier": supplier,
+                    "item_number": item_number,
+                    "canonical_item_number": str(row.get("canonical_item_number") or "").strip(),
+                    "units_per_order": str(row.get("units_per_order") or "").strip() or "1",
+                }
+            )
             continue
+
         category_value = str(row.get("category") or "").strip()
         url_value = str(row.get("url") or "").strip()
         description_value = str(row.get("description") or "").strip()
         if not any((category_value, url_value, description_value)):
             if skip_unresolved:
                 skipped_unresolved += 1
+                normalized_rows.append({})
                 continue
             raise AppError(
                 code="MISSING_ITEM_UNRESOLVED",
@@ -7398,86 +7410,40 @@ def register_missing_items_from_rows(
                 details={"supplier": supplier, "item_number": item_number},
             )
 
-        manufacturer_name = str(
-            row.get("manufacturer_name")
-            or row.get("manufacturer")
-            or ""
-        ).strip() or "UNKNOWN"
-        manufacturer_id = _get_or_create_manufacturer(conn, manufacturer_name)
-        existing = conn.execute(
-            """
-            SELECT item_id
-            FROM items_master
-            WHERE manufacturer_id = ? AND item_number = ?
-            """,
-            (manufacturer_id, item_number),
-        ).fetchone()
-        if existing:
-            item_id = int(existing["item_id"])
-        else:
-            cur = conn.execute(
-                """
-                INSERT INTO items_master (
-                    item_number, manufacturer_id, category, url, description
-                ) VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    item_number,
-                    manufacturer_id,
-                    category_value or None,
-                    url_value or None,
-                    description_value or None,
-                ),
-            )
-            item_id = int(cur.lastrowid)
-            created_items += 1
-        local_item_map[(supplier_id, item_number)] = item_id
-
-    for row in deferred_alias_rows:
-        supplier_id = int(row["_supplier_id"])
-        ordered_item_number = row["_item_number"]
-        if _resolve_item_by_number(conn, ordered_item_number) is not None:
-            raise AppError(
-                code="ALIAS_CONFLICT_DIRECT_ITEM",
-                message=(
-                    f"ordered_item_number '{ordered_item_number}' matches an existing direct item_number; "
-                    "alias would never be used"
-                ),
-                status_code=409,
-            )
-        canonical_item_number = require_non_empty(
-            str(row.get("canonical_item_number", "")),
-            "canonical_item_number",
+        manufacturer_name = str(row.get("manufacturer_name") or row.get("manufacturer") or "").strip() or "UNKNOWN"
+        existing_item = _get_item_by_number_and_manufacturer(
+            conn,
+            item_number=item_number,
+            manufacturer_name=manufacturer_name,
         )
-        units_per_order = int(row.get("units_per_order") or 1)
-        require_positive_int(units_per_order, "units_per_order")
-        canonical_item_id = local_item_map.get((supplier_id, canonical_item_number))
-        if canonical_item_id is None:
-            canonical_item_id = _resolve_item_by_number(conn, canonical_item_number)
-        if canonical_item_id is None:
-            raise AppError(
-                code="CANONICAL_ITEM_NOT_FOUND",
-                message=f"canonical_item_number '{canonical_item_number}' not found",
-                status_code=422,
-            )
-        conn.execute(
-            """
-            INSERT INTO supplier_item_aliases (
-                supplier_id,
-                ordered_item_number,
-                canonical_item_id,
-                units_per_order,
-                created_at
-            ) VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT (supplier_id, ordered_item_number)
-            DO UPDATE SET
-                canonical_item_id = excluded.canonical_item_id,
-                units_per_order = excluded.units_per_order
-            """,
-            (supplier_id, ordered_item_number, canonical_item_id, units_per_order, now_jst_iso()),
-        )
-        created_aliases += 1
+        item_key = (manufacturer_name.casefold(), item_number.casefold())
+        if existing_item is not None or item_key in seen_new_items:
+            normalized_rows.append({})
+            continue
 
+        seen_new_items.add(item_key)
+        normalized_rows.append(
+            {
+                "row_type": "item",
+                "item_number": item_number,
+                "manufacturer_name": manufacturer_name,
+                "category": category_value,
+                "url": url_value,
+                "description": description_value,
+            }
+        )
+
+    import_result = import_items_from_rows(
+        conn,
+        rows=normalized_rows,
+        continue_on_error=False,
+    )
+    created_items = sum(
+        1 for row in import_result["rows"] if row.get("status") == "created" and row.get("entry_type") == "item"
+    )
+    created_aliases = sum(
+        1 for row in import_result["rows"] if row.get("status") == "created" and row.get("entry_type") == "alias"
+    )
     return {
         "created_items": created_items,
         "created_aliases": created_aliases,

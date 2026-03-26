@@ -742,6 +742,39 @@ def test_register_missing_new_item_uses_manufacturer_from_csv(conn):
     assert row is not None
     assert row["manufacturer_name"] == "MFG-SPEC"
 
+def test_register_missing_new_item_existing_row_is_noop(conn):
+    manufacturer = service.create_manufacturer(conn, "MFG-EXISTING")
+    service.create_item(
+        conn,
+        {
+            "item_number": "EXISTING-MISSING-001",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Lens",
+        },
+    )
+
+    result = service.register_missing_items_from_rows(
+        conn,
+        [
+            {
+                "supplier": "SupplierA",
+                "item_number": "EXISTING-MISSING-001",
+                "manufacturer_name": "MFG-EXISTING",
+                "resolution_type": "new_item",
+                "category": "Lens",
+                "url": "",
+                "description": "already registered",
+            }
+        ],
+    )
+
+    assert result == {
+        "created_items": 0,
+        "created_aliases": 0,
+        "skipped_unresolved": 0,
+        "is_completely_unresolved": False,
+    }
+
 def test_register_missing_content_skips_unresolved_when_requested(conn):
     content = "\n".join(
         [
@@ -861,6 +894,36 @@ def test_register_missing_items_alias_uses_case_insensitive_supplier_lookup(conn
     aliases = service.list_supplier_item_aliases(conn, int(supplier["supplier_id"]))
     assert len(aliases) == 1
     assert aliases[0]["ordered_item_number"] == "CASE-ALIAS-001"
+
+def test_register_missing_items_accepts_legacy_row_type_alias(conn):
+    supplier = service.create_supplier(conn, "SupplierLegacy")
+    manufacturer = service.create_manufacturer(conn, "MFG-LEGACY")
+    service.create_item(
+        conn,
+        {
+            "item_number": "LEGACY-CANONICAL-001",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Mirror",
+        },
+    )
+
+    result = service.register_missing_items_from_rows(
+        conn,
+        [
+            {
+                "supplier": "SupplierLegacy",
+                "item_number": "LEGACY-ALIAS-001",
+                "row_type": "alias",
+                "canonical_item_number": "LEGACY-CANONICAL-001",
+                "units_per_order": "4",
+            }
+        ],
+    )
+
+    assert result["created_aliases"] == 1
+    aliases = service.list_supplier_item_aliases(conn, int(supplier["supplier_id"]))
+    assert len(aliases) == 1
+    assert aliases[0]["ordered_item_number"] == "LEGACY-ALIAS-001"
 
 def test_import_orders_resolves_alias_with_dash_variant_item_number(conn):
     supplier = service.create_supplier(conn, "SupplierDash")
