@@ -925,6 +925,27 @@ def test_register_missing_items_accepts_legacy_row_type_alias(conn):
     assert len(aliases) == 1
     assert aliases[0]["ordered_item_number"] == "LEGACY-ALIAS-001"
 
+def test_register_missing_items_propagates_alias_import_failures(conn):
+    with pytest.raises(AppError) as exc_info:
+        service.register_missing_items_from_rows(
+            conn,
+            [
+                {
+                    "supplier": "SupplierFail",
+                    "item_number": "ALIAS-FAIL-001",
+                    "resolution_type": "alias",
+                    "canonical_item_number": "DOES-NOT-EXIST",
+                    "units_per_order": "1",
+                }
+            ],
+        )
+
+    assert exc_info.value.code == "MISSING_ITEMS_IMPORT_FAILED"
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.details is not None
+    assert exc_info.value.details["failed_count"] == 1
+    assert exc_info.value.details["status"] == "error"
+
 def test_import_orders_resolves_alias_with_dash_variant_item_number(conn):
     supplier = service.create_supplier(conn, "SupplierDash")
     manufacturer = service.create_manufacturer(conn, "MFG-DASH")

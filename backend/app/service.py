@@ -7438,6 +7438,23 @@ def register_missing_items_from_rows(
         rows=normalized_rows,
         continue_on_error=False,
     )
+    if int(import_result.get("failed_count", 0)) > 0 or str(import_result.get("status") or "").lower() == "error":
+        error_rows = [row for row in import_result.get("rows", []) if row.get("status") == "error"]
+        first_error = error_rows[0] if error_rows else None
+        raise AppError(
+            code="MISSING_ITEMS_IMPORT_FAILED",
+            message=(
+                first_error.get("error")
+                if isinstance(first_error, dict) and first_error.get("error")
+                else "Failed to register missing items from batch rows"
+            ),
+            status_code=422,
+            details={
+                "status": import_result.get("status"),
+                "failed_count": int(import_result.get("failed_count", 0)),
+                "rows": import_result.get("rows", []),
+            },
+        )
     created_items = sum(
         1 for row in import_result["rows"] if row.get("status") == "created" and row.get("entry_type") == "item"
     )
