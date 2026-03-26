@@ -46,6 +46,20 @@ The workspace drawers now complete the main planning loop in place:
 docker compose up --build
 ```
 
+Or use the Windows helper script for the base compose stack:
+
+```powershell
+.\start-app.ps1
+```
+
+Use `.\start-app.ps1 -IncludeDevOverride` only when you explicitly want the local dev override (`backend:8000`, `frontend-dev:5173`).
+
+Stop the stack with:
+
+```powershell
+.\stop-app.ps1
+```
+
 3. Open:
 - Frontend: `http://127.0.0.1/`
 - API: `http://127.0.0.1/api`

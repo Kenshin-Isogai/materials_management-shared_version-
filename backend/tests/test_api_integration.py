@@ -42,6 +42,67 @@ def test_health_endpoint(client):
     assert payload["data"]["healthy"] is True
 
 
+def test_inventory_snapshot_endpoint_supports_net_available_basis(client):
+    manufacturer = client.post("/api/manufacturers", json={"name": "API-SNAPSHOT-MFG"}).json()["data"]
+    project = client.post(
+        "/api/projects",
+        json={
+            "name": "API-SNAPSHOT-PROJECT",
+            "status": "CONFIRMED",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [],
+        },
+    ).json()["data"]
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-SNAPSHOT-ITEM",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Lens",
+        },
+    ).json()["data"]
+    client.post(
+        "/api/inventory/adjust",
+        json={
+            "item_id": item["item_id"],
+            "quantity_delta": 8,
+            "location": "STOCK",
+            "note": "seed snapshot api stock",
+        },
+    )
+    client.post(
+        "/api/reservations",
+        json={
+            "item_id": item["item_id"],
+            "quantity": 3,
+            "purpose": "reserve snapshot api stock",
+            "deadline": FUTURE_TARGET_DATE,
+            "project_id": project["project_id"],
+        },
+    )
+
+    response = client.get(f"/api/inventory/snapshot?mode=future&basis=net_available&date={FUTURE_TARGET_DATE}")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["basis"] == "net_available"
+    matching_row = next(row for row in payload["rows"] if int(row["item_id"]) == item["item_id"])
+    assert matching_row["location"] == "STOCK"
+    assert int(matching_row["quantity"]) == 5
+    assert int(matching_row["allocated_quantity"]) == 3
+    assert int(matching_row["active_reservation_count"]) == 1
+    assert matching_row["allocated_project_names"] == ["API-SNAPSHOT-PROJECT"]
+
+
+def test_inventory_snapshot_endpoint_rejects_past_net_available_basis(client):
+    response = client.get("/api/inventory/snapshot?mode=past&basis=net_available&date=2020-01-01")
+
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["error"]["code"] == "SNAPSHOT_BASIS_MODE_UNSUPPORTED"
+
+
 def test_catalog_search_item_summary_includes_description(client):
     manufacturer = client.post("/api/manufacturers", json={"name": "API-CATALOG-MFG"}).json()["data"]
     item = client.post(

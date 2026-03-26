@@ -8,19 +8,25 @@ type SnapshotRow = {
   quantity: number;
   category: string | null;
   description: string | null;
+  allocated_quantity: number;
+  active_reservation_count: number;
+  allocated_project_names: string[];
 };
 
 type SnapshotResponse = {
   date: string;
   mode: "past" | "future";
+  basis: "raw" | "net_available";
   rows: SnapshotRow[];
 };
 
 export function SnapshotPage() {
   const [date, setDate] = useState("");
   const [mode, setMode] = useState<"past" | "future">("future");
+  const [basis, setBasis] = useState<"raw" | "net_available">("raw");
   const [data, setData] = useState<SnapshotResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [message, setMessage] = useState("");
   const [query, setQuery] = useState("");
   const ALL_FILTER = "__ALL__";
   const [locationFilter, setLocationFilter] = useState(ALL_FILTER);
@@ -54,6 +60,7 @@ export function SnapshotPage() {
       if (descriptionFilter.trim() && !normalizedDescription.includes(descriptionFilter.trim().toLowerCase())) return false;
       if (!normalizedQuery) return true;
       return [row.item_number, row.location, normalizedCategory, row.description ?? "", String(row.quantity)]
+        .concat(row.allocated_project_names ?? [])
         .join(" ")
         .toLowerCase()
         .includes(normalizedQuery);
@@ -87,13 +94,24 @@ export function SnapshotPage() {
   }
 
   async function run() {
+    if (basis === "net_available" && mode === "past") {
+      setMessage("Net available is supported for current/future snapshots only. Switch mode to future.");
+      return;
+    }
     const params = new URLSearchParams();
     if (date) params.set("date", date);
     params.set("mode", mode);
+    params.set("basis", basis);
     setLoading(true);
+    setMessage("");
     try {
       const result = await apiGet<SnapshotResponse>(`/inventory/snapshot?${params.toString()}`);
       setData(result);
+      if (basis === "net_available") {
+        setMessage(
+          "Net available subtracts current active reservation allocations from on-hand inventory, then adds open orders due by the selected date.",
+        );
+      }
     } finally {
       setLoading(false);
     }
@@ -104,12 +122,12 @@ export function SnapshotPage() {
       <section>
         <h1 className="font-display text-3xl font-bold">Snapshot</h1>
         <p className="mt-1 text-sm text-slate-600">
-          Reconstruct past inventory or project future inventory at a target date.
+          Reconstruct raw inventory or review net available residual stock at a target date.
         </p>
       </section>
 
       <section className="panel p-4">
-        <div className="grid gap-3 md:grid-cols-4">
+        <div className="grid gap-3 md:grid-cols-5">
           <input
             className="input"
             type="date"
@@ -120,10 +138,22 @@ export function SnapshotPage() {
             <option value="past">past</option>
             <option value="future">future</option>
           </select>
+          <select
+            className="input"
+            value={basis}
+            onChange={(e) => setBasis(e.target.value as "raw" | "net_available")}
+          >
+            <option value="raw">raw inventory</option>
+            <option value="net_available">net available</option>
+          </select>
           <button className="button md:col-span-2" disabled={loading} onClick={run}>
             Generate Snapshot
           </button>
         </div>
+        <p className="mt-3 text-xs text-slate-500">
+          Use <strong>raw inventory</strong> for location state reconstruction. Use <strong>net available</strong> to focus on residual stock not currently occupied by active reservations.
+        </p>
+        {message && <p className="mt-2 text-sm text-slate-600">{message}</p>}
       </section>
 
       <section className="panel p-4">
@@ -131,7 +161,7 @@ export function SnapshotPage() {
         {data && (
           <>
             <p className="mb-3 text-sm text-slate-600">
-              Mode: <strong>{data.mode}</strong> / Date: <strong>{data.date}</strong> / Rows:{" "}
+              Basis: <strong>{data.basis}</strong> / Mode: <strong>{data.mode}</strong> / Date: <strong>{data.date}</strong> / Rows:{" "}
               <strong>{filteredSortedRows.length}</strong> / <strong>{data.rows.length}</strong>
             </p>
             <div className="mb-3 grid gap-3 md:grid-cols-6">
@@ -205,6 +235,9 @@ export function SnapshotPage() {
                     <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("item_number")}>Item {sortIndicator("item_number")}</button></th>
                     <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("location")}>Location {sortIndicator("location")}</button></th>
                     <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("quantity")}>Quantity {sortIndicator("quantity")}</button></th>
+                    {data.basis === "net_available" && <th className="px-2 py-2">Allocated</th>}
+                    {data.basis === "net_available" && <th className="px-2 py-2">Reservations</th>}
+                    {data.basis === "net_available" && <th className="px-2 py-2">Projects</th>}
                     <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("category")}>Category {sortIndicator("category")}</button></th>
                     <th className="px-2 py-2">Description</th>
                   </tr>
@@ -215,6 +248,13 @@ export function SnapshotPage() {
                       <td className="px-2 py-2">{row.item_number}</td>
                       <td className="px-2 py-2">{row.location}</td>
                       <td className="px-2 py-2">{row.quantity}</td>
+                      {data.basis === "net_available" && <td className="px-2 py-2">{row.allocated_quantity}</td>}
+                      {data.basis === "net_available" && <td className="px-2 py-2">{row.active_reservation_count}</td>}
+                      {data.basis === "net_available" && (
+                        <td className="px-2 py-2 text-slate-600">
+                          {row.allocated_project_names.length ? row.allocated_project_names.join(", ") : "-"}
+                        </td>
+                      )}
                       <td className="px-2 py-2">{row.category ?? "-"}</td>
                       <td className="px-2 py-2 text-slate-600">{row.description ?? "-"}</td>
                     </tr>
