@@ -1,5 +1,10 @@
 ## 2026-03-26
 
+### Fixed
+
+- Reservations provisional-allocation summary now revalidates immediately after reservation create/import/release/consume actions on the same page.
+  - This keeps the `Provisional Allocation Summary` panel and its CSV export aligned with the refreshed Reservation List instead of showing stale totals until focus/refresh.
+
 ### Added
 
 - Added `start-app.ps1` at the repository root.

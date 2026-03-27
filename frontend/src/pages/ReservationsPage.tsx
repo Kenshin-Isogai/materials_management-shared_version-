@@ -88,7 +88,7 @@ export function ReservationsPage() {
   const [reservationPreviewSelections, setReservationPreviewSelections] = useState<
     Record<number, CatalogSearchResult | null>
   >({});
-  const { data, error, isLoading, mutate } = useSWR("/reservations", () =>
+  const { data, error, isLoading, mutate: mutateReservations } = useSWR("/reservations", () =>
     apiGetWithPagination<Reservation[]>("/reservations?per_page=200")
   );
   const { data: itemsResp } = useSWR("/items-options-reservations", () =>
@@ -100,8 +100,9 @@ export function ReservationsPage() {
   const { data: openOrders } = useSWR("/orders-open-options-reservations", () =>
     apiGetAllPages<Order>("/orders?include_arrived=false&per_page=200")
   );
-  const { data: allReservations } = useSWR("/reservations-summary-options", () =>
-    apiGetAllPages<Reservation>("/reservations?per_page=200")
+  const { data: allReservations, mutate: mutateReservationSummary } = useSWR(
+    "/reservations-summary-options",
+    () => apiGetAllPages<Reservation>("/reservations?per_page=200")
   );
   const items = useMemo(() => itemsResp?.data ?? [], [itemsResp]);
   const projects = useMemo(() => projectsResp ?? [], [projectsResp]);
@@ -315,6 +316,10 @@ export function ReservationsPage() {
     }
   }
 
+  async function revalidateReservationViews() {
+    await Promise.all([mutateReservations(), mutateReservationSummary()]);
+  }
+
   async function createBulk() {
     const reservations = bulkRows
       .filter((row) => row.item_id && row.quantity)
@@ -334,7 +339,7 @@ export function ReservationsPage() {
         body: JSON.stringify({ reservations })
       });
       setBulkRows([blankRow(), blankRow(), blankRow(), blankRow()]);
-      await mutate();
+      await revalidateReservationViews();
     } finally {
       setLoading(false);
     }
@@ -411,7 +416,7 @@ export function ReservationsPage() {
       setReservationMessage(`Imported ${result.length} reservation row(s).`);
       setReservationCsvFile(null);
       resetReservationPreview();
-      await mutate();
+      await revalidateReservationViews();
     } catch (error) {
       setReservationMessage(formatActionError("Import failed", error));
     } finally {
@@ -440,7 +445,7 @@ export function ReservationsPage() {
         method: "POST",
         body: JSON.stringify(quantity === null ? {} : { quantity })
       });
-      await mutate();
+      await revalidateReservationViews();
     } finally {
       setLoading(false);
     }
@@ -467,7 +472,7 @@ export function ReservationsPage() {
         method: "POST",
         body: JSON.stringify(quantity === null ? {} : { quantity })
       });
-      await mutate();
+      await revalidateReservationViews();
     } finally {
       setLoading(false);
     }
