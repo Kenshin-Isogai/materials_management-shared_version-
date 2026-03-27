@@ -2,6 +2,8 @@
 
 ### Fixed
 
+- Reservations provisional-allocation summary now revalidates immediately after reservation create/import/release/consume actions on the same page.
+  - This keeps the `Provisional Allocation Summary` panel and its CSV export aligned with the refreshed Reservation List instead of showing stale totals until focus/refresh.
 - Restored first-user bootstrap in shared-server mode.
   - `POST /api/users` is now allowed without `X-User-Name` only when there are zero active users.
   - The Users page now allows first-user creation without a header selection and shows explicit bootstrap guidance when no active users exist.
@@ -39,6 +41,23 @@
   - `net_available` rows now also include a compact occupation summary: `allocated_quantity`, `active_reservation_count`, and `allocated_project_names`.
   - `mode=past` with `basis=net_available` now returns a controlled `422` because the current model does not support authoritative historical allocation-state reconstruction.
 - Snapshot frontend now exposes `raw inventory` vs `net available` directly on the existing page, keeping the inventory-analysis UI consolidated instead of adding a duplicate feature surface.
+- Improved provisional project-link UX on Reservations.
+  - Reservation Entry now includes optional project selection in the main multi-row UI.
+  - Batch create payload now submits optional `project_id` from that UI.
+  - Reservation List now shows linked project name/id when present.
+  - Backend reservation create now validates provided `project_id` and returns controlled `PROJECT_NOT_FOUND` when invalid.
+  - Reservations project selector now loads all project pages (`apiGetAllPages`) so older projects are not silently omitted when total project count exceeds a single page.
+- Started phase-2 provisional-allocation UX stream with an Orders-side entry path.
+  - Orders `Order Details` now exposes `Create Provisional Reservation…`, which opens the Reservations page with prefilled draft fields (`item_id`, `quantity`, optional `project_id`, and source-order context) for faster stock-backed provisional linking.
+- Implemented phase-3 provisional-allocation summary/export UX on Reservations.
+  - Added `Provisional Allocation Summary` panel with project-level active provisional reservation totals/counts.
+  - Added open incoming supply split metrics (`dedicated` vs `uncommitted`) based on open orders.
+  - Added `Export Summary CSV` for provisional-allocation review handoff.
+
+### Documentation
+
+- Added phased rollout plan document for provisional allocation UX improvements:
+  - `documents/provisional_allocation_plan.md`
 
 ### Tests
 

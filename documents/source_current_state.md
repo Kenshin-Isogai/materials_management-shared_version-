@@ -129,6 +129,8 @@ Last updated: 2026-03-26 (JST)
 - Adding a new row in `Movement Entry` now inherits the latest completed `from/to` locations so repeated transfers do not require retyping the same pair each time.
 - Reservations page supports partial release/consume via quantity prompt.
 - Reservations page now uses a single expanded `Reservation Entry` table for both one-off and multi-row reservation creation (the separate `Single Reservation` form was removed).
+- Reservations `Reservation Entry` now includes optional project selection for provisional project linkage, and Reservation List now shows linked project names/ids when present.
+- Reservations page now includes `Provisional Allocation Summary` with project-level provisional reserved totals plus open incoming dedicated/uncommitted supply metrics, and supports `Export Summary CSV` for review handoff.
 - Reservations and Projects page headers now include guidance clarifying scope: Reservations is execution-time allocation, Projects is future-demand planning.
 - Added typed catalog search endpoint `/api/catalog/search` for write-flow selectors (`item`, `assembly`, `supplier`, `project`).
 - Projects page requirement entry now uses `CatalogPicker` for item and assembly targets instead of ad hoc `#id` text matching/datalist suggestions.
@@ -183,6 +185,7 @@ Last updated: 2026-03-26 (JST)
 - ETA edit flow supports partial postponement using split quantity (e.g., postpone 30 of 50), which creates a second open-order row with the new ETA while preserving traceability-safe quantities.
 - The same edit flow now lets users assign or clear `project_id` unless the order is controlled by an ORDERED RFQ/procurement link.
 - When split ETA editing is combined with project selection from the Orders page, the UI now performs the split first and then assigns only the created consumed child order.
+- Orders page `Order Details` now includes `Create Provisional Reservation…`, which opens Reservations with prefilled draft fields (`item_id`, `quantity`, optional `project_id`, and source-order context note/purpose) to reduce context switching for provisional stock-link workflows.
 - Backend now persists split/merge/partial-arrival order lineage in `order_lineage_events`; API exposes `POST /api/orders/merge` and `GET /api/orders/{order_id}/lineage` for durable traceability and future scale-out reporting.
 - Orders manual CSV import is now preview-first:
   - `POST /api/orders/import-preview` classifies each row as `exact`, `high_confidence`, `needs_review`, or `unresolved`

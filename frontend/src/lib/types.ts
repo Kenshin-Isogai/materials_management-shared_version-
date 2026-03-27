@@ -64,6 +64,8 @@ export type Reservation = {
   status: "ACTIVE" | "RELEASED" | "CONSUMED";
   note: string | null;
   created_at: string;
+  project_id?: number | null;
+  project_name?: string | null;
 };
 
 export type Order = {
