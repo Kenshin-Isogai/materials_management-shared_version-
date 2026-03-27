@@ -1,5 +1,18 @@
 ## 2026-03-27
 
+### Documentation
+
+- Added a new GCP rollout documentation set under `documents/gcp_cloud_run_rollout/`.
+  - `README.md`
+  - `implementation_plan.md`
+  - `migration_checklist.md`
+  - `target_architecture.md`
+  - `security_and_cost_considerations.md`
+  - `task_breakdown_by_file.md`
+  - `environment_and_runtime_matrix.md`
+  - `implementation_slices.md`
+- The new document set explicitly treats backward compatibility as out of scope for the planned Cloud Run + Cloud SQL + GCS rollout work.
+
 ### Fixed
 
 - Hardened manual order import job tracking for failure paths.
