@@ -1,5 +1,17 @@
 ## 2026-03-26
 
+### Fixed
+
+- Restored first-user bootstrap in shared-server mode.
+  - `POST /api/users` is now allowed without `X-User-Name` only when there are zero active users.
+  - The Users page now allows first-user creation without a header selection and shows explicit bootstrap guidance when no active users exist.
+
+### Tests
+
+- Added backend API regression coverage for:
+  - creating the first active user without `X-User-Name`
+  - rejecting anonymous user creation again after an active user exists
+
 ### Added
 
 - Added `start-app.ps1` at the repository root.

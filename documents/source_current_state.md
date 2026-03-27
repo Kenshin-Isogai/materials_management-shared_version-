@@ -45,6 +45,7 @@ Last updated: 2026-03-26 (JST)
 - Mutation requests now pass through `UserIdentityMiddleware`.
   - read methods stay anonymous
   - write methods require `X-User-Name`
+  - bootstrap exception: when there are zero active users, `POST /api/users` is allowed without a selected header user so the first browser user can be created
   - basic user endpoints now exist under `/api/users`
   - `GET /api/users` returns active picker rows; `GET /api/users?include_inactive=true` returns the full management list
 - Planning snapshot hot paths now batch project/requirement loads, assembly component expansion (including legacy assembly-only project requirements), and per-item inventory totals; item planning context further narrows expansion to the requested item.

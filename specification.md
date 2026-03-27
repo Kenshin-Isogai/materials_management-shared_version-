@@ -37,7 +37,7 @@ The Optical Component Inventory Management System provides comprehensive lifecyc
 | Package Manager (Frontend) | npm |
 | Frontend Builder | Vite |
 | User Model | Shared-server operation on trusted internal network, with forward compatibility for fuller RBAC deployment |
-| Authentication/Authorization | Anonymous reads; mutation requests require `X-User-Name` for a pre-registered active user. Roadmap: RBAC (`admin`, `operator`, `viewer`) |
+| Authentication/Authorization | Anonymous reads; mutation requests require `X-User-Name` for a pre-registered active user. Bootstrap exception: `POST /api/users` may omit `X-User-Name` only when zero active users exist. Roadmap: RBAC (`admin`, `operator`, `viewer`) |
 | Timezone | Fixed JST for all date/time fields |
 | CSV Encoding | UTF-8 (no BOM) |
 | Expected Scale | Items: 10,000 / Orders: 5,000 / Transactions: ~100,000 |

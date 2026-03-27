@@ -393,6 +393,19 @@ def get_active_user_by_username(conn: sqlite3.Connection, username: str) -> dict
     return dict(row) if row is not None else None
 
 
+def has_active_users(conn: sqlite3.Connection) -> bool:
+    row = conn.execute(
+        """
+        SELECT EXISTS(
+            SELECT 1
+            FROM users
+            WHERE is_active = TRUE
+        ) AS has_active_users
+        """
+    ).fetchone()
+    return bool(row[0]) if row is not None else False
+
+
 def create_user(conn: sqlite3.Connection, data: dict[str, Any]) -> dict[str, Any]:
     username = require_non_empty(str(data.get("username") or ""), "username")
     display_name = require_non_empty(str(data.get("display_name") or ""), "display_name")

@@ -141,6 +141,10 @@ def _is_read_only_request(request: Request) -> bool:
     return request.method in {"GET", "HEAD", "OPTIONS"} or request.url.path == "/api/health"
 
 
+def _allows_first_user_bootstrap(request: Request) -> bool:
+    return request.method == "POST" and request.url.path == "/api/users"
+
+
 class UserIdentityMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         request.state.user = None
@@ -149,6 +153,13 @@ class UserIdentityMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         if not username:
+            if _allows_first_user_bootstrap(request):
+                conn = get_connection(request.app.state.database_url)
+                try:
+                    if not service.has_active_users(conn):
+                        return await call_next(request)
+                finally:
+                    conn.close()
             return JSONResponse(
                 status_code=403,
                 content={
