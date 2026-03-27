@@ -122,6 +122,7 @@ npm run dev
 - Cloud Run should run Alembic as a deployment step; request-serving startup should keep `AUTO_MIGRATE_ON_STARTUP=0`
 - manual order-import missing-item outputs are now exposed through artifact metadata/download endpoints rather than raw path fields
 - Legacy ZIP/PDF compatibility import remains a local/shared-server workflow, not the target Cloud Run path
+- Concrete first-rollout deploy steps are documented in [documents/gcp_cloud_run_rollout/cloud_run_deployment_runbook.md](documents/gcp_cloud_run_rollout/cloud_run_deployment_runbook.md)
 
 ## API
 
@@ -177,7 +178,7 @@ For targeted backend slices from the repo root, keep the same `TEST_DATABASE_URL
   - `POST /api/items/import-preview`
   - previews duplicate item rows, alias create/update behavior, and canonical-item reconciliation before final `POST /api/items/import`
   - the Items page can preview/import one or more CSV files in a single run
-  - final item import accepts optional per-row `row_overrides` (`canonical_item_number`, `units_per_order`) and archives successful manual-import CSV content into `imports/items/registered/<YYYY-MM>/` before monthly consolidation
+  - final item import accepts optional per-row `row_overrides` (`canonical_item_number`, `units_per_order`) and archives successful manual-import CSV content into `imports/items/registered/<YYYY-MM>/` as durable history without a follow-up folder rescan
   - `POST /api/inventory/import-preview`
   - validates movement rows, simulates stock balance changes, and allows per-row `item_id` correction before final `POST /api/inventory/import-csv`
   - `POST /api/orders/import-preview`

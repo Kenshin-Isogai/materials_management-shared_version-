@@ -27,8 +27,8 @@ Remove persistent business-critical dependence on Cloud Run local disk.
 - Workspace roots are still materialized by `ensure_workspace_layout()` in `backend\app\config.py`.
 - Generated artifacts are tracked in `generated_artifacts` and served through backend endpoints wired in `backend\app\api.py`.
 - File-heavy business flows live in `backend\app\service.py`, including:
-  - `register_unregistered_item_csvs()`
-  - `consolidate_registered_item_csvs()`
+  - `upload_and_register_item_batch_csvs()`
+  - `_archive_imported_items_csv()`
   - `_build_project_planning_snapshot()` for heavier planning work
 
 ### Work items

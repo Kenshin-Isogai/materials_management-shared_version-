@@ -2,6 +2,20 @@
 
 ### Changed
 
+- Removed the remaining repo-local item-batch compatibility path.
+  - deleted `POST /api/items/register-unregistered-batch`
+  - removed the Items-page `Run Existing Imported Batch` fallback
+  - Cloud-facing missing-item registration is now upload-only through `POST /api/items/batch-upload`
+- Removed the remaining archive-rescan behavior from item and order compatibility flows.
+  - item import archives under `imports/items/registered/<YYYY-MM>/` are now stored as historical files without monthly consolidation rescans
+  - order and quotation mutation flows no longer rescan or rewrite archived order CSV files after update/delete/split/merge actions
+  - delete responses still expose `csv_sync`, but only as an explicit `enabled=false` compatibility marker
+- Removed a remaining cloud-sensitive local staging dependency from the Items batch upload path.
+  - `POST /api/items/batch-upload` now processes uploaded missing-item CSV bytes directly instead of writing them into a server-side staging directory first
+  - successful batch-upload archives still flow through the durable storage boundary, so Cloud Run can keep the upload path stateless
+- Added a concrete first-rollout Cloud Run deployment runbook.
+  - `documents/gcp_cloud_run_rollout/cloud_run_deployment_runbook.md`
+  - documents build/push, migration, deploy, environment, and post-deploy validation steps for frontend + backend Cloud Run services
 - Completed the next Cloud Run-essential storage slice.
   - `backend/app/storage.py` now supports both `local://...` and `gcs://...` durable object refs
   - backend durable writes/moves can now target GCS when `STORAGE_BACKEND=gcs` with `GCS_BUCKET`
@@ -46,6 +60,7 @@
 ### Tests
 
 - Added backend regression coverage for:
+  - direct Items batch-upload archiving while the durable storage backend is set to GCS
   - GCS-backed storage write/read/move/delete behavior through the storage abstraction
 - Added backend regression coverage for:
   - runtime parsing of upload-limit, concurrency, Cloud SQL, public-URL, and GCS/storage config

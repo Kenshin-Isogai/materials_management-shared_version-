@@ -19,7 +19,7 @@ If a legacy compatibility path conflicts with the target GCP model, prefer remov
 - [x] Introduce a backend storage abstraction for persistent file operations
   Current implementation status: generated artifacts, item-import archive metadata, default registered item archive moves, and default registered order CSV/PDF moves now go through the storage layer.
 - [ ] Remove business-critical dependence on repo-local `imports/` and `exports/`
-  Remaining gap: durable storage is now GCS-capable, but some staging and compatibility workflows still assume repo-local directory scanning.
+  Remaining gap: durable storage is now GCS-capable and the Items batch-upload path no longer depends on server-side staging, but some compatibility and directory-scan workflows still assume repo-local paths.
 - [x] Replace path-derived artifact identifiers with durable DB/object identifiers where needed
   Current implementation status: browser-facing artifact retrieval uses opaque `artifact_id` values; public API responses no longer depend on workspace-relative paths.
 - [Decision] Define naming conventions for GCS buckets and object prefixes
@@ -39,7 +39,8 @@ If a legacy compatibility path conflicts with the target GCP model, prefer remov
   Current implementation status: runtime now exposes `HEAVY_REQUEST_TARGET_SECONDS` and surfaces it via `/api/health` for deployment validation.
 - [Decision] Confirm that no request requires durable local state across instances
   Current decision: no cross-request workflow may depend on instance-local disk; any upload/preview-confirm state that must survive across requests uses GCS-backed staging instead.
-  Remaining implementation gap: repo-local staging/archive implementations still need a GCS-backed storage provider before this can be treated as Cloud Run-complete.
+  Current implementation status: the Items batch-upload path now processes uploaded CSV bytes directly instead of creating a server-side staging directory first.
+  Remaining implementation gap: older compatibility flows still need the same treatment before this can be treated as Cloud Run-complete.
 
 ## 3. Frontend Runtime
 
@@ -116,3 +117,4 @@ If a legacy compatibility path conflicts with the target GCP model, prefer remov
 - [x] Update `documents\technical_documentation.md` when architecture or maintenance guidance changes
 - [x] Update `documents\source_current_state.md` when runtime behavior changes
 - [x] Update `documents\change_log.md` with meaningful migration-related progress
+- [x] Add a concrete Cloud Run deployment runbook

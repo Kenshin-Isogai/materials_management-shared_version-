@@ -19,6 +19,60 @@ from .conftest import _reset_database
 FUTURE_TARGET_DATE = "2999-12-31"
 
 
+class _FakeBlob:
+    def __init__(self, objects: dict[str, bytes], timestamps: dict[str, object], name: str):
+        self._objects = objects
+        self._timestamps = timestamps
+        self.name = name
+
+    def exists(self) -> bool:
+        return self.name in self._objects
+
+    def upload_from_string(self, content: bytes) -> None:
+        self._objects[self.name] = bytes(content)
+        self._timestamps[self.name] = today_jst()
+
+    def download_as_bytes(self) -> bytes:
+        return self._objects[self.name]
+
+    def delete(self) -> None:
+        self._objects.pop(self.name, None)
+        self._timestamps.pop(self.name, None)
+
+    @property
+    def size(self) -> int:
+        return len(self._objects[self.name])
+
+    @property
+    def updated(self):
+        from datetime import datetime
+
+        return datetime(2026, 3, 28, 12, 0, 0)
+
+
+class _FakeBucket:
+    def __init__(self, objects: dict[str, bytes], timestamps: dict[str, object]):
+        self._objects = objects
+        self._timestamps = timestamps
+
+    def blob(self, name: str) -> _FakeBlob:
+        return _FakeBlob(self._objects, self._timestamps, name)
+
+    def get_blob(self, name: str) -> _FakeBlob | None:
+        if name not in self._objects:
+            return None
+        return _FakeBlob(self._objects, self._timestamps, name)
+
+
+class _FakeStorageClient:
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.timestamps: dict[str, object] = {}
+
+    def bucket(self, _name: str) -> _FakeBucket:
+        return _FakeBucket(self.objects, self.timestamps)
+
+
 def read_csv_response(response):
     reader = csv.DictReader(StringIO(response.content.decode("utf-8-sig")))
     return reader.fieldnames or [], list(reader)
@@ -1637,16 +1691,15 @@ def test_items_import_endpoint_archives_uploaded_csv_into_registered_month_folde
     assert "archive_storage_ref" not in payload["archive"]
     assert "cleanup_unreg_file" not in payload["archive"]
     assert payload["archive"]["archived_filename"] == "items_archive.csv"
-    assert payload["archive"]["consolidation"]["consolidated"] == 1
+    assert payload["archive"]["consolidation"]["disabled"] is True
 
     month_dir = workspace_roots["items_registered_root"] / today_jst()[:7]
-    archived = month_dir / f"items_{today_jst()[:7]}_001.csv"
+    archived = month_dir / "items_archive.csv"
     assert archived.exists()
 
     rows = service._load_csv_rows_from_path(archived)
     assert len(rows) == 1
     assert rows[0]["item_number"] == "CSV-ARCHIVE-001"
-    assert not (month_dir / "items_archive.csv").exists()
 
 
 def test_items_batch_upload_endpoint_stages_and_registers_csvs(client, workspace_roots: dict[str, Path]):
@@ -1729,6 +1782,59 @@ def test_items_batch_upload_endpoint_accepts_non_ascii_csv_filename(client):
     assert payload["succeeded"] == 1
     assert any(str(path).endswith(".csv") for path in payload["uploaded_files"])
     assert all("\\" not in path and "/" not in path for path in payload["uploaded_files"])
+
+
+def test_items_batch_upload_endpoint_can_archive_directly_to_gcs(client, monkeypatch):
+    from app import storage as storage_module
+
+    fake_storage_client = _FakeStorageClient()
+    monkeypatch.setattr(storage_module.config, "GCS_BUCKET", "materials-dev")
+    monkeypatch.setattr(storage_module.config, "GCS_OBJECT_PREFIX", "materials/dev")
+    monkeypatch.setattr(
+        storage_module.config,
+        "get_storage_backend",
+        lambda: storage_module.config.STORAGE_BACKEND_GCS,
+    )
+    monkeypatch.setattr(storage_module, "_get_gcs_client", lambda: fake_storage_client)
+
+    batch = make_csv_bytes(
+        ["supplier", "item_number", "resolution_type", "category", "url", "description"],
+        [
+            {
+                "supplier": "Upload Supplier Cloud",
+                "item_number": "UPLOAD-BATCH-GCS-001",
+                "resolution_type": "new_item",
+                "category": "Lens",
+                "url": "",
+                "description": "cloud upload batch row",
+            }
+        ],
+    )
+
+    response = client.post(
+        "/api/items/batch-upload",
+        files=[("files", ("batch_missing_items_registration_cloud.csv", batch, "text/csv"))],
+        data={"continue_on_error": "true"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["status"] == "ok"
+    assert payload["succeeded"] == 1
+    assert payload["uploaded_files"] == ["batch_missing_items_registration_cloud.csv"]
+    assert any(
+        key.endswith("batch_missing_items_registration_cloud.csv")
+        for key in fake_storage_client.objects
+    )
+
+
+def test_items_register_unregistered_batch_endpoint_is_removed(client):
+    response = client.post(
+        "/api/items/register-unregistered-batch",
+        json={"continue_on_error": True},
+    )
+
+    assert response.status_code == 405
 
 
 def test_items_import_preview_endpoint_classifies_duplicate_and_alias_resolution(client):

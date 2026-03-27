@@ -111,10 +111,6 @@ class QuotationUpdateRequest(BaseModel):
     quotation_document_url: str | None = None
 
 
-class UnregisteredItemBatchRequest(BaseModel):
-    continue_on_error: bool = False
-
-
 class MissingItemRegistrationRow(BaseModel):
     item_number: str = Field(min_length=1)
     supplier: str = Field(min_length=1)

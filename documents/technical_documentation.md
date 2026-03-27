@@ -34,7 +34,7 @@ This document explains the implemented architecture of the Materials Management 
   - `GET /api/users?include_inactive=true` backs the management screen
   - create/update/deactivate flows emit a frontend refresh signal so the shared header picker stays aligned
 - Upload-first shared-server batch import adapters remain only for missing-item registration workflows.
-  - `POST /api/items/batch-upload` stages uploaded CSVs under `imports/staging/items/<job-id>/...` and reuses `register_unregistered_item_csvs(...)`
+  - `POST /api/items/batch-upload` now processes uploaded CSV bytes directly and archives successful results through the same durable storage boundary used by the batch-registration flow
   - the Orders page no longer exposes or depends on ZIP/PDF batch upload behavior
 - Manual Orders CSV import now uses external document URLs as the primary contract.
   - `quotation_document_url` is required and validated as `https://...`
@@ -46,7 +46,7 @@ This document explains the implemented architecture of the Materials Management 
   - current implementation persists generated artifacts under a local storage reference (`local://generated_artifacts/...`) so the API no longer depends on browser-visible workspace paths
   - storage now supports both `local://...` and `gcs://...` refs; Cloud Run durable storage can use `STORAGE_BACKEND=gcs` with `GCS_BUCKET` and `GCS_OBJECT_PREFIX`
   - the Orders UI now treats artifact entries as download-only records and no longer displays workspace-relative paths
-- Manual Items CSV import archives now use the same storage boundary for their archive reference metadata, while still writing into the current registered-month folder so consolidation behavior stays unchanged during the rollout.
+- Manual Items CSV import archives now use the same storage boundary for their archive reference metadata, and the registered-month folder is treated as read-only history instead of a consolidation work queue.
 - Default durable move targets for registered item CSVs and registered order CSV/PDF files now also route through the storage layer, while request-scoped staging remains local-path based.
 - Retired order-batch compatibility internals have been removed.
   - no `orders_legacy_batch` import-job mode remains in the schema
@@ -155,8 +155,8 @@ flowchart LR
 3. Filesystem-aware order ingestion.
     Orders are imported from CSV/PDF folders, then moved to canonical registered paths to preserve auditability.
    Legacy CSV `pdf_link` text is now treated as compatibility-import input only, not as persisted quotation metadata.
-   The order-layout migration no longer rewrites archived CSVs or quotation DB rows just to keep path text aligned.
-   Shared-server upload adapters now stage browser uploads under `imports/staging/...` first, then materialize them into the same folder shape that the existing domain import logic already understands.
+   Imported order CSVs are historical artifacts only; order and quotation edits now use database state as the source of truth and do not rescan or rewrite archived CSV content.
+   Shared-server upload adapters are now limited to request-scoped temporary files where needed; the Items missing-item batch path processes uploaded CSV bytes directly.
    Generated artifact retrieval is now routed through a storage boundary so the public API can use opaque artifact IDs instead of raw file locations.
 4. Reversible and inspectable bulk imports.
    Item imports store job and row-level effects (`import_jobs`, `import_job_effects`) so undo/redo can be state-checked and safe.
@@ -478,8 +478,7 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
   - `quotation_document_url` is required and must be `https://...`
   - `purchase_order_document_url` is optional and, when present, must be `https://...`
 - Unregistered batch import resolves/moves CSV and PDF files, but no longer rewrites archived CSV content or quotation DB rows just to keep filesystem paths canonical.
-- Upload-first adapters stage browser payloads under:
-  - `imports/staging/items/<job-id>/unregistered/`
+- Upload-first order-batch adapters stage browser payloads under:
   - `imports/staging/orders/<job-id>/unregistered/csv_files/<supplier>/`
   - `imports/staging/orders/<job-id>/unregistered/pdf_files/<supplier>/`
 - Orders ZIP staging accepts either canonical `csv_files/...` + `pdf_files/...` paths or simpler supplier-subfolder layouts, then normalizes them into the canonical unregistered structure before domain import starts.
@@ -497,20 +496,19 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 - Generated artifact lookup is now DB-backed (`generated_artifacts`) with opaque `artifact_id` values rather than filesystem-derived IDs or folder scans.
 - Consolidated missing-item rows are de-duplicated by `(supplier, manufacturer_name, item_number)` so repeated unresolved rows across quotations are emitted once per batch register CSV.
 - Batch consolidation uses collision-safe temporary per-file register naming (supplier-prefixed) and deletes temporary files only after consolidated-register write succeeds.
-- Consolidated register files may include rows from multiple suppliers; successful unregistered-item registration moves the processed CSV into `imports/items/registered/<YYYY-MM>/` while preserving row-level supplier columns.
-- Manual Items-page CSV imports follow the same archive root: every successful or partially successful `POST /api/items/import` stores a registered copy under `imports/items/registered/<YYYY-MM>/` and immediately re-runs monthly consolidation so ad-hoc imports and batch registrations share one archive history.
-- After a fully successful batch registration, `consolidate_registered_item_csvs()` automatically merges small CSVs in each `imports/items/registered/<YYYY-MM>/` subfolder into larger consolidated files named `items_YYYY-MM_NNN.csv` (e.g., `items_2026-03_001.csv`). Maximum rows per file is controlled by `ITEMS_IMPORT_MAX_CONSOLIDATED_ROWS` (default 5,000) in `config.py`. Files already matching the consolidated naming pattern are included in the merge pass. Consolidation now stages replacement files and only swaps them into place after all chunk writes succeed; original non-consolidated source files are deleted only after that successful swap, and header-only inputs are removed without creating an empty archive. Consolidated CSVs are import-history archives only — UI edits to item attributes affect the database, not the CSV archives.
-- Per-file registered-item batch failures stay atomic through the savepoint boundary: if a source CSV has already been moved into `imports/items/registered/<YYYY-MM>/` but report construction or another per-file step fails before the savepoint is released, the file is moved back to the unregistered location and that file's DB work is rolled back.
+- Consolidated register files may include rows from multiple suppliers.
+- Manual Items-page CSV imports store a registered copy under `imports/items/registered/<YYYY-MM>/` as import history, but the runtime no longer rescans that archive tree for follow-up consolidation work.
+- Batch-uploaded missing-item registration CSVs are archived the same way after successful processing, and the old server-root "run existing imported batch" path has been removed.
+- Registered item CSV archives are historical evidence only — UI edits and order/quotation mutations do not rewrite those archived CSVs.
 - In `missing_items_registration.csv`, `supplier` means the supplier alias namespace for ordered SKU resolution. `new_item` rows may optionally provide `manufacturer_name` (or `manufacturer`); blank values default to `UNKNOWN`. The Items-page missing-order resolver now surfaces both manufacturer and alias-supplier fields so its new-item editing surface matches Bulk Item Entry while still preserving alias registration context.
 - Missing-item registration now reuses the same core item/alias write path as the preview-first Items CSV import after normalizing the batch-specific CSV contract. Batch-only rules still apply first: unresolved `new_item` rows can be skipped, existing new-item rows remain no-op, and file staging/archive behavior stays specific to the batch workflow.
 - Registration inputs accept both `resolution_type` (`new_item`/`alias`) and legacy `row_type` (`item`/`alias`) to avoid mixed-template confusion; `row_type=item` is normalized to `resolution_type=new_item`.
-- Content/file-based missing-item registration must preserve the same `skip_unresolved` behavior as path-based batch registration so API upload, CLI, and batch retry flows stay aligned.
+- Content/file-based missing-item registration uses the same `skip_unresolved` behavior as the uploaded batch path; there is no longer a server-root batch rescanning endpoint in the public API.
 - Manual and batch order imports reject quotations already imported for the same supplier (same `quotation_number` with existing orders), returning a conflict to avoid duplicate order ingestion.
 - Per-file unregistered import must keep filesystem moves atomic: if any move fails, rollback already moved files for that CSV and return file-level error.
 - File collisions are handled by non-destructive renaming (`_1`, `_2`, ...).
 - Missing/unresolved PDF links are surfaced as warnings, not silent failures.
 - Keep canonical layout:
-  - `imports/staging/items/<job-id>/...`
   - `imports/staging/orders/<job-id>/...`
   - `imports/orders/unregistered/csv_files/<supplier>/`
   - `imports/orders/unregistered/pdf_files/<supplier>/`

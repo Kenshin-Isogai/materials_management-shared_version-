@@ -26,6 +26,7 @@ That means implementation work may remove compatibility-only behavior, legacy fo
 - `task_breakdown_by_file.md`: concrete engineering work mapped to repository files and functions
 - `environment_and_runtime_matrix.md`: environment variables, service ownership, secrecy, and rollout recommendations
 - `implementation_slices.md`: practical end-to-end delivery slices that still finish the full target rollout
+- `cloud_run_deployment_runbook.md`: concrete build/deploy/migration/validation steps for the first Cloud Run rollout
 
 ## How To Use This Folder
 
@@ -38,8 +39,8 @@ That means implementation work may remove compatibility-only behavior, legacy fo
 
 - The backend already distinguishes `local` vs `cloud_run` runtime posture through `APP_RUNTIME_TARGET`.
 - Mutation requests currently require `X-User-Name`.
-- The current implementation still depends heavily on filesystem-backed import and export flows under `imports/` and `exports/`.
-- Cloud Run runtime safety has started, but persistent storage abstraction is not complete.
+- The current implementation still has some remaining local directory-scan and compatibility flows, but durable storage now supports GCS-backed object refs.
+- Cloud Run runtime safety has started, and a first deployment runbook now exists in this folder.
 
 ## Decision Summary
 

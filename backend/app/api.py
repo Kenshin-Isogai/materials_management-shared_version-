@@ -59,7 +59,6 @@ from .schemas import (
     ProcurementBatchUpdate,
     ProcurementLineUpdate,
     QuotationUpdateRequest,
-    UnregisteredItemBatchRequest,
     ProjectCreate,
     ProjectRequirementUnresolvedItemsCsvRequest,
     ProjectRequirementPreviewRequest,
@@ -593,15 +592,6 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         service.delete_item(conn, item_id)
         conn.commit()
         return ok({"deleted": True})
-
-    @app.post("/api/items/register-unregistered-batch")
-    def post_register_unregistered_item_csvs(body: UnregisteredItemBatchRequest, conn= db):
-        result = service.register_unregistered_item_csvs(
-            conn,
-            continue_on_error=body.continue_on_error,
-        )
-        conn.commit()
-        return ok(_public_item_batch_result(result))
 
     @app.post("/api/items/batch-upload")
     async def post_items_batch_upload(

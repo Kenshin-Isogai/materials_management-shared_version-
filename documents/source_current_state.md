@@ -106,6 +106,7 @@ Last updated: 2026-03-28 (JST)
   - the global header user picker now refreshes after user mutations and automatically falls back to the next active user if the selected one is deactivated
 - Shared-server batch workflows are now upload-first on the main Items and Orders pages.
   - Items page now distinguishes `General Items CSV Import` from `Register Missing-Item Batch CSVs`, with the batch upload control posting multi-file form data to `POST /api/items/batch-upload`
+  - the batch upload endpoint now processes uploaded CSV bytes directly instead of creating a server-side staging directory first
 - Orders manual CSV import and quotation maintenance now use external document URLs as the primary contract.
   - `quotation_document_url` is required for manual order CSV import
   - `purchase_order_document_url` is optional on orders
@@ -182,7 +183,7 @@ Last updated: 2026-03-28 (JST)
   - `POST /api/items/import-preview` classifies duplicate item rows, alias create/update rows, and unresolved canonical alias rows before commit
   - preview confirmation can send per-row `canonical_item_number` / `units_per_order` overrides back through `POST /api/items/import`
   - the Items page can select multiple CSV files, preview them as one combined review set, then import them sequentially in one action
-  - successful or partially successful manual item CSV imports are archived into `imports/items/registered/<YYYY-MM>/` and folded into the monthly `items_YYYY-MM_NNN.csv` consolidation flow
+  - successful or partially successful manual item CSV imports are archived into `imports/items/registered/<YYYY-MM>/` as durable import history without a follow-up archive rescan
 - Missing-item batch registration now shares the same underlying item/alias write logic as manual item import after normalizing its generated CSV rows, reducing drift between the two item-registration paths while preserving batch-only unresolved-skip and file-move behavior.
 - Movements CSV import is now preview-first:
   - `POST /api/inventory/import-preview` validates operation/location rules, simulates inventory effects row-by-row, and flags unresolved item ids or stock shortages before commit
@@ -289,7 +290,6 @@ Last updated: 2026-03-28 (JST)
 
 - Canonical order import folder layout is active:
   - staging roots:
-    - `imports/staging/items/<job-id>/unregistered/`
     - `imports/staging/orders/<job-id>/orders_batch.zip`
     - `imports/staging/orders/<job-id>/unregistered/csv_files/<supplier>/`
     - `imports/staging/orders/<job-id>/unregistered/pdf_files/<supplier>/`
@@ -297,7 +297,7 @@ Last updated: 2026-03-28 (JST)
   - `imports/orders/unregistered/pdf_files/<supplier>/`
   - `imports/orders/registered/csv_files/<supplier>/`
   - `imports/orders/registered/pdf_files/<supplier>/`
-- Items batch upload now stages browser-uploaded missing-item registration CSVs under `imports/staging/items/<job-id>/...` and then reuses the existing batch registration flow.
+- Items batch upload now processes browser-uploaded missing-item registration CSVs directly from request bytes and archives the uploaded content after successful processing.
 - Batch-generated missing-item register CSVs now carry artifact metadata in API responses and can be re-listed/downloaded through the artifact endpoints without exposing server filesystem paths.
 - Unregistered batch order import writes missing-item rows into one consolidated register CSV per run under `imports/items/unregistered/`; source CSV/PDF files remain in place for unresolved quotations.
 - Consolidated missing-item registers de-duplicate repeated unresolved rows by `(supplier, manufacturer_name, item_number)` across all quotations in the same batch run.
@@ -307,8 +307,8 @@ Last updated: 2026-03-28 (JST)
 - Fully empty CSV rows are ignored during order import to avoid false validation failures from trailing blank lines.
 - Missing-item registration now rejects unresolved `new_item` rows with all metadata blank, preventing accidental `UNKNOWN` placeholder item creation.
 - Manual and unregistered batch order imports reject duplicate quotation re-import for the same supplier when existing orders already reference that quotation.
-- Missing-item batch registration now reads unregistered CSVs from `imports/items/unregistered/` and moves successfully processed files into `imports/items/registered/<YYYY-MM>/`; if a per-file failure occurs after the move but before the savepoint is released, the CSV is restored to the unregistered location and that file's DB work is rolled back.
-- After a fully successful batch registration, registered item CSVs in each `imports/items/registered/<YYYY-MM>/` subfolder are automatically consolidated into larger files named `items_YYYY-MM_NNN.csv` (e.g., `items_2026-03_001.csv`, max 5,000 rows each). Files matching the consolidated pattern are merged into subsequent passes; replacements are staged and swapped atomically before the original unconsolidated files are deleted, and header-only inputs are removed without producing an empty archive. Consolidated CSVs are read-only import-history archives (UI edits only affect the database).
+- Missing-item batch registration is upload-only in the public API. Successful uploads are archived into `imports/items/registered/<YYYY-MM>/`, but the application no longer rescans server-resident item batch folders or rewrites archive files after processing.
+- Archived order CSVs and archived item-registration CSVs are read-only historical records. Order updates, quotation updates, merges, splits, and deletes now rely on database state and lineage tables instead of mutating those archived files.
 - `missing_items_registration.csv` uses `supplier` for alias-scope resolution, but `new_item` rows may also specify `manufacturer_name` (or `manufacturer`) and default to `UNKNOWN` when blank; the Items-page missing-order resolver now exposes both manufacturer and alias-supplier columns so it matches Bulk Item Entry for new-item registration.
 - File-upload missing-item registration endpoint (`POST /api/register-missing`) accepts optional multipart form field `skip_unresolved=true` to skip unresolved `new_item` rows instead of failing the whole upload.
 - JSON missing-item registration endpoint (`/api/register-missing/rows`) accepts both `manufacturer_name` and `manufacturer` fields for `new_item` rows.
