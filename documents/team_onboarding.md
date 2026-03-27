@@ -1,6 +1,6 @@
 # Team Onboarding Guide
 
-Last updated: 2026-03-25 (JST)
+Last updated: 2026-03-27 (JST)
 
 ## 1. Who This Is For
 
@@ -121,21 +121,39 @@ docker compose down
 ### Step 8 (local alternative): Start with helper script
 
 ```powershell
-.\start-dev.bat
+.\start-app.ps1
 ```
 
-Expected:
+This starts the base Docker Compose stack (`db` + `backend` + `nginx`). To include the dev override (hot reload, exposed backend/frontend-dev ports):
 
-- Frontend: `http://127.0.0.1:5173`
-- Backend API: first free port in `8000, 8001, 8010, 18000`
+```powershell
+.\start-app.ps1 -IncludeDevOverride
+```
+
+Expected access points (base stack):
+
+- Frontend (nginx): `http://127.0.0.1/`
+- API (nginx): `http://127.0.0.1/api`
+- Swagger docs: `http://127.0.0.1/docs`
+
+With `-IncludeDevOverride`, the additional dev ports are also available:
+
+- Backend API (direct): `http://127.0.0.1:8000/api`
+- Frontend Vite dev: `http://127.0.0.1:5173`
 
 To stop:
 
 ```powershell
-.\stop-dev.bat
+.\stop-app.ps1
 ```
 
-> **Note:** Even with `start-dev.bat`, the PostgreSQL database must be running (`docker compose up -d db`).
+To stop and remove volumes (database data will be lost):
+
+```powershell
+.\stop-app.ps1 -RemoveVolumes
+```
+
+> **Note:** You can also use the batch wrappers `launch-start-app.bat` and `launch-stop-app.bat` which open a PowerShell window with the correct execution policy.
 
 ## 5. Verify the Setup
 

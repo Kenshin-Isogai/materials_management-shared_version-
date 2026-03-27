@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from io import StringIO
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,27 @@ def _create_basic_item(conn, item_number: str = "ITEM-001") -> dict:
     )
     return item
 
+
+def _make_orders_csv_bytes(rows: list[dict[str, str]]) -> bytes:
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "item_number",
+            "quantity",
+            "quotation_number",
+            "issue_date",
+            "quotation_document_url",
+            "purchase_order_document_url",
+            "order_date",
+            "expected_arrival",
+        ],
+    )
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(row)
+    return output.getvalue().encode("utf-8")
+
 def test_move_and_undo_restores_quantities(conn):
     item = _create_basic_item(conn)
     service.adjust_inventory(
@@ -52,6 +74,73 @@ def test_move_and_undo_restores_quantities(conn):
     assert undo_result["applied_quantity"] == 4
     assert _inventory_qty(conn, item["item_id"], "STOCK") == 10
     assert _inventory_qty(conn, item["item_id"], "BENCH_A") == 0
+
+
+def test_order_import_job_tracks_undecodable_csv_failures(conn):
+    def _raise_decode_error(_content: bytes) -> str:
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(service, "_decode_csv_bytes", _raise_decode_error)
+    with pytest.raises(UnicodeDecodeError):
+        service.import_orders_from_content_with_job(
+            conn,
+            supplier_name="SupplierBadEncoding",
+            content=b"\xff",
+            source_name="broken-orders.csv",
+        )
+    monkeypatch.undo()
+    conn.commit()
+
+    jobs, _ = service.list_order_import_jobs(conn)
+    assert len(jobs) == 1
+    assert jobs[0]["source_name"] == "broken-orders.csv"
+    assert jobs[0]["status"] == "error"
+    assert jobs[0]["failed_count"] == 1
+
+
+def test_order_import_job_rolls_back_partial_changes_on_unexpected_error(conn, monkeypatch: pytest.MonkeyPatch):
+    content = _make_orders_csv_bytes(
+        [
+            {
+                "item_number": "ROLLBACK-ITEM",
+                "quantity": "1",
+                "quotation_number": "Q-ROLLBACK-001",
+                "issue_date": "2026-03-01",
+                "quotation_document_url": "https://example.com/q-rollback-001",
+                "purchase_order_document_url": "",
+                "order_date": "2026-03-02",
+                "expected_arrival": "2026-03-10",
+            }
+        ]
+    )
+
+    def _raise_after_side_effect(*args, **kwargs):
+        conn.execute("INSERT INTO suppliers (name) VALUES (?)", ("SHOULD-ROLLBACK",))
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(service, "import_orders_from_content", _raise_after_side_effect)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        service.import_orders_from_content_with_job(
+            conn,
+            supplier_name="SupplierRollback",
+            content=content,
+            source_name="rollback-orders.csv",
+        )
+    conn.commit()
+
+    jobs, _ = service.list_order_import_jobs(conn)
+    assert len(jobs) == 1
+    assert jobs[0]["source_name"] == "rollback-orders.csv"
+    assert jobs[0]["status"] == "error"
+    assert jobs[0]["failed_count"] == 1
+
+    rolled_back = conn.execute(
+        "SELECT supplier_id FROM suppliers WHERE name = ?",
+        ("SHOULD-ROLLBACK",),
+    ).fetchone()
+    assert rolled_back is None
 
 def test_reservation_release_roundtrip(conn):
     item = _create_basic_item(conn, item_number="ITEM-RES-001")
@@ -266,434 +355,6 @@ def test_item_flow_ignores_allocation_only_reserve_logs(conn):
     ]
 
     assert [event["delta"] for event in transaction_events] == [10]
-
-def test_import_unregistered_orders_moves_csv_and_pdf(conn, tmp_path: Path):
-    item = _create_basic_item(conn, item_number="U-ITEM-001")
-
-    unregistered_root = tmp_path / "quotations" / "unregistered"
-    registered_root = tmp_path / "quotations" / "registered"
-    supplier_csv_dir = unregistered_root / "csv_files" / "SupplierA"
-    supplier_pdf_dir = unregistered_root / "pdf_files" / "SupplierA"
-    supplier_csv_dir.mkdir(parents=True, exist_ok=True)
-    supplier_pdf_dir.mkdir(parents=True, exist_ok=True)
-
-    pdf_path = supplier_pdf_dir / "Q-001.pdf"
-    pdf_path.write_bytes(b"%PDF-1.4\n%test\n")
-
-    csv_path = supplier_csv_dir / "Q-001.csv"
-    with csv_path.open("w", encoding="utf-8", newline="") as fp:
-        writer = csv.DictWriter(
-            fp,
-            fieldnames=[
-                "item_number",
-                "quantity",
-                "quotation_number",
-                "issue_date",
-                "order_date",
-                "expected_arrival",
-                "pdf_link",
-            ],
-        )
-        writer.writeheader()
-        writer.writerow(
-            {
-                "item_number": item["item_number"],
-                "quantity": "15",
-                "quotation_number": "Q-001",
-                "issue_date": "2026-02-20",
-                "order_date": "2026-02-21",
-                "expected_arrival": "2026-02-28",
-                "pdf_link": "Q-001.pdf",
-            }
-        )
-
-    result = service.import_unregistered_order_csvs(
-        conn,
-        unregistered_root=unregistered_root,
-        registered_root=registered_root,
-    )
-    conn.commit()
-
-    assert result["status"] == "ok"
-    assert result["succeeded"] == 1
-    assert not csv_path.exists()
-    assert not pdf_path.exists()
-    registered_csv = registered_root / "csv_files" / "SupplierA" / "Q-001.csv"
-    registered_pdf = registered_root / "pdf_files" / "SupplierA" / "Q-001.pdf"
-    assert registered_csv.exists()
-    assert registered_pdf.exists()
-    assert not (registered_root / "csv_files" / "UNKNOWN").exists()
-
-    row = conn.execute(
-        """
-        SELECT o.order_amount, o.ordered_quantity, q.pdf_link
-        FROM quotations q
-        JOIN orders o ON o.quotation_id = q.quotation_id
-        JOIN suppliers s ON s.supplier_id = q.supplier_id
-        WHERE s.name = ? AND q.quotation_number = ?
-        """,
-        ("SupplierA", "Q-001"),
-    ).fetchone()
-    assert row is not None
-    assert int(row["order_amount"]) == 15
-    assert int(row["ordered_quantity"]) == 15
-    assert str(row["pdf_link"]).endswith("Q-001.pdf")
-
-    with registered_csv.open("r", encoding="utf-8-sig", newline="") as fp:
-        archived_rows = list(csv.DictReader(fp))
-
-    assert archived_rows == [
-        {
-            "item_number": item["item_number"],
-            "quantity": "15",
-            "quotation_number": "Q-001",
-            "issue_date": "2026-02-20",
-            "order_date": "2026-02-21",
-            "expected_arrival": "2026-02-28",
-            "pdf_link": str(row["pdf_link"]),
-        }
-    ]
-
-def test_import_unregistered_orders_missing_items_keeps_source_files(conn, tmp_path: Path):
-    unregistered_root = tmp_path / "quotations" / "unregistered"
-    registered_root = tmp_path / "quotations" / "registered"
-    supplier_csv_dir = unregistered_root / "csv_files" / "SupplierMissing"
-    supplier_pdf_dir = unregistered_root / "pdf_files" / "SupplierMissing"
-    supplier_csv_dir.mkdir(parents=True, exist_ok=True)
-    supplier_pdf_dir.mkdir(parents=True, exist_ok=True)
-
-    pdf_path = supplier_pdf_dir / "Q-MISS-001.pdf"
-    pdf_path.write_bytes(b"%PDF-1.4\n%missing\n")
-
-    csv_path = supplier_csv_dir / "Q-MISS-001.csv"
-    with csv_path.open("w", encoding="utf-8", newline="") as fp:
-        writer = csv.DictWriter(
-            fp,
-            fieldnames=[
-                "item_number",
-                "quantity",
-                "quotation_number",
-                "issue_date",
-                "order_date",
-                "expected_arrival",
-                "pdf_link",
-            ],
-        )
-        writer.writeheader()
-        writer.writerow(
-            {
-                "item_number": "MISSING-ITEM-001",
-                "quantity": "2",
-                "quotation_number": "Q-MISS-001",
-                "issue_date": "2026-02-20",
-                "order_date": "2026-02-21",
-                "expected_arrival": "2026-02-28",
-                "pdf_link": "Q-MISS-001.pdf",
-            }
-        )
-
-    items_unregistered_root = tmp_path / "imports" / "items" / "unregistered"
-    result = service.import_unregistered_order_csvs(
-        conn,
-        unregistered_root=unregistered_root,
-        registered_root=registered_root,
-        items_unregistered_root=items_unregistered_root,
-    )
-    conn.commit()
-
-    assert result["status"] == "ok"
-    assert result["succeeded"] == 0
-    assert result["missing_items"] == 1
-    assert csv_path.exists()
-    assert pdf_path.exists()
-    assert not (registered_root / "csv_files" / "SupplierMissing" / "Q-MISS-001.csv").exists()
-    assert not (registered_root / "pdf_files" / "SupplierMissing" / "Q-MISS-001.pdf").exists()
-
-    register_path = result.get("missing_items_register_csv")
-    assert register_path is not None
-    register_file = Path(register_path)
-    assert register_file.exists()
-    assert register_file.parent == items_unregistered_root.resolve()
-
-    with register_file.open("r", encoding="utf-8", newline="") as fp:
-        reader = csv.DictReader(fp)
-        rows = list(reader)
-
-    assert len(rows) == 1
-    assert rows[0]["source_supplier"] == "SupplierMissing"
-    assert rows[0]["source_csv"].endswith("Q-MISS-001.csv")
-    assert rows[0]["item_number"] == "MISSING-ITEM-001"
-
-def test_import_unregistered_orders_rolls_back_pdf_move_on_csv_move_failure(
-    conn,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    item = _create_basic_item(conn, item_number="U-ITEM-FAIL-001")
-
-    unregistered_root = tmp_path / "quotations" / "unregistered"
-    registered_root = tmp_path / "quotations" / "registered"
-    supplier_csv_dir = unregistered_root / "csv_files" / "SupplierFail"
-    supplier_pdf_dir = unregistered_root / "pdf_files" / "SupplierFail"
-    supplier_csv_dir.mkdir(parents=True, exist_ok=True)
-    supplier_pdf_dir.mkdir(parents=True, exist_ok=True)
-
-    pdf_path = supplier_pdf_dir / "Q-FAIL.pdf"
-    pdf_path.write_bytes(b"%PDF-1.4\n%rollback\n")
-
-    csv_path = supplier_csv_dir / "Q-FAIL.csv"
-    with csv_path.open("w", encoding="utf-8", newline="") as fp:
-        writer = csv.DictWriter(
-            fp,
-            fieldnames=[
-                "item_number",
-                "quantity",
-                "quotation_number",
-                "issue_date",
-                "order_date",
-                "expected_arrival",
-                "pdf_link",
-            ],
-        )
-        writer.writeheader()
-        writer.writerow(
-            {
-                "item_number": item["item_number"],
-                "quantity": "2",
-                "quotation_number": "Q-FAIL",
-                "issue_date": "2026-02-20",
-                "order_date": "2026-02-21",
-                "expected_arrival": "2026-02-28",
-                "pdf_link": "Q-FAIL.pdf",
-            }
-        )
-
-    original_move = service.shutil.move
-
-    def _fail_csv_move(src: str, dst: str) -> str:
-        if Path(src).name == "Q-FAIL.csv":
-            raise OSError("simulated csv move failure")
-        return original_move(src, dst)
-
-    monkeypatch.setattr(service.shutil, "move", _fail_csv_move)
-
-    result = service.import_unregistered_order_csvs(
-        conn,
-        unregistered_root=unregistered_root,
-        registered_root=registered_root,
-    )
-
-    assert result["status"] == "error"
-    assert result["failed"] == 1
-    assert result["files"][0]["status"] == "error"
-
-    # Source files remain in unregistered when the per-file move phase fails.
-    assert csv_path.exists()
-    assert pdf_path.exists()
-    assert not (registered_root / "csv_files" / "SupplierFail" / "Q-FAIL.csv").exists()
-    assert not (registered_root / "pdf_files" / "SupplierFail" / "Q-FAIL.pdf").exists()
-
-    row = conn.execute("SELECT COUNT(*) AS c FROM orders").fetchone()
-    assert row is not None
-    assert int(row["c"]) == 0
-
-def test_migrate_quotations_layout_dry_run_apply_and_idempotent(conn, tmp_path: Path):
-    unregistered_root = tmp_path / "quotations" / "unregistered"
-    registered_root = tmp_path / "quotations" / "registered"
-    legacy_supplier_dir = unregistered_root / "SupplierLegacy"
-    legacy_supplier_dir.mkdir(parents=True, exist_ok=True)
-
-    legacy_pdf = legacy_supplier_dir / "Q-100.pdf"
-    legacy_pdf.write_bytes(b"%PDF-1.4\n%legacy\n")
-
-    legacy_csv = legacy_supplier_dir / "Q-100.csv"
-    with legacy_csv.open("w", encoding="utf-8", newline="") as fp:
-        writer = csv.DictWriter(
-            fp,
-            fieldnames=[
-                "item_number",
-                "quantity",
-                "quotation_number",
-                "issue_date",
-                "order_date",
-                "expected_arrival",
-                "pdf_link",
-            ],
-        )
-        writer.writeheader()
-        writer.writerow(
-            {
-                "item_number": "LEG-ITEM-001",
-                "quantity": "1",
-                "quotation_number": "Q-100",
-                "issue_date": "2026-02-20",
-                "order_date": "2026-02-21",
-                "expected_arrival": "2026-03-01",
-                "pdf_link": "quatations/unregistred/pdf_files/SupplierLegacy/Q-100.pdf",
-            }
-        )
-
-    supplier = service.create_supplier(conn, "SupplierLegacy")
-    conn.execute(
-        """
-        INSERT INTO quotations (supplier_id, quotation_number, issue_date, pdf_link)
-        VALUES (?, ?, ?, ?)
-        """,
-        (
-            supplier["supplier_id"],
-            "Q-100",
-            "2026-02-20",
-            "quatations/unregistred/pdf_files/SupplierLegacy/Q-100.pdf",
-        ),
-    )
-    conn.commit()
-
-    preview = service.migrate_orders_import_layout(
-        conn,
-        unregistered_root=unregistered_root,
-        registered_root=registered_root,
-        apply=False,
-    )
-    assert preview["mode"] == "dry_run"
-    assert preview["planned_moves"] >= 2
-    assert preview["moved"] == 0
-    assert legacy_csv.exists()
-    assert legacy_pdf.exists()
-
-    applied = service.migrate_orders_import_layout(
-        conn,
-        unregistered_root=unregistered_root,
-        registered_root=registered_root,
-        apply=True,
-    )
-    conn.commit()
-    assert applied["mode"] == "apply"
-    assert applied["moved"] >= 2
-    assert not legacy_csv.exists()
-    assert not legacy_pdf.exists()
-    migrated_csv = unregistered_root / "csv_files" / "SupplierLegacy" / "Q-100.csv"
-    migrated_pdf = unregistered_root / "pdf_files" / "SupplierLegacy" / "Q-100.pdf"
-    assert migrated_csv.exists()
-    assert migrated_pdf.exists()
-
-    with migrated_csv.open("r", encoding="utf-8-sig", newline="") as fp:
-        reader = csv.DictReader(fp)
-        first = next(reader)
-    assert first is not None
-    assert "quatations" not in str(first["pdf_link"])
-    assert str(first["pdf_link"]).endswith("Q-100.pdf")
-
-    row = conn.execute(
-        "SELECT pdf_link FROM quotations WHERE quotation_number = ?",
-        ("Q-100",),
-    ).fetchone()
-    assert row is not None
-    assert "quatations" not in str(row["pdf_link"])
-    assert str(row["pdf_link"]).endswith("Q-100.pdf")
-
-    rerun = service.migrate_orders_import_layout(
-        conn,
-        unregistered_root=unregistered_root,
-        registered_root=registered_root,
-        apply=True,
-    )
-    assert rerun["moved"] == 0
-    assert rerun["planned_csv_rewrites"] == 0
-    assert rerun["planned_db_rewrites"] == 0
-
-
-def test_migrate_orders_import_layout_rewrites_registered_csv_pdf_links(conn, tmp_path: Path):
-    unregistered_root = tmp_path / "imports" / "orders" / "unregistered"
-    registered_root = tmp_path / "imports" / "orders" / "registered"
-    registered_csv = registered_root / "csv_files" / "SupplierRegistered" / "Q-REG-100.csv"
-    registered_pdf = registered_root / "pdf_files" / "SupplierRegistered" / "Q-REG-100.pdf"
-    registered_csv.parent.mkdir(parents=True, exist_ok=True)
-    registered_pdf.parent.mkdir(parents=True, exist_ok=True)
-    registered_pdf.write_bytes(b"%PDF-1.4\n%registered\n")
-
-    with registered_csv.open("w", encoding="utf-8", newline="") as fp:
-        writer = csv.DictWriter(
-            fp,
-            fieldnames=[
-                "item_number",
-                "quantity",
-                "quotation_number",
-                "issue_date",
-                "order_date",
-                "expected_arrival",
-                "pdf_link",
-            ],
-        )
-        writer.writeheader()
-        writer.writerow(
-            {
-                "item_number": "REG-ITEM-001",
-                "quantity": "1",
-                "quotation_number": "Q-REG-100",
-                "issue_date": "2026-03-01",
-                "order_date": "2026-03-02",
-                "expected_arrival": "2026-03-10",
-                "pdf_link": "quotations/unregistered/pdf_files/supplierregistered/Q-REG-100.pdf",
-            }
-        )
-
-    supplier = service.create_supplier(conn, "SupplierRegistered")
-    conn.execute(
-        """
-        INSERT INTO quotations (supplier_id, quotation_number, issue_date, pdf_link)
-        VALUES (?, ?, ?, ?)
-        """,
-        (
-            supplier["supplier_id"],
-            "Q-REG-100",
-            "2026-03-01",
-            "quotations/unregistered/pdf_files/supplierregistered/Q-REG-100.pdf",
-        ),
-    )
-    conn.commit()
-
-    preview = service.migrate_orders_import_layout(
-        conn,
-        unregistered_root=unregistered_root,
-        registered_root=registered_root,
-        apply=False,
-    )
-    assert preview["mode"] == "dry_run"
-    assert preview["planned_moves"] == 0
-    assert preview["planned_csv_rewrites"] == 1
-    assert preview["planned_db_rewrites"] == 1
-
-    applied = service.migrate_orders_import_layout(
-        conn,
-        unregistered_root=unregistered_root,
-        registered_root=registered_root,
-        apply=True,
-    )
-    conn.commit()
-    assert applied["mode"] == "apply"
-    assert applied["planned_moves"] == 0
-    assert applied["csv_rewrites_applied"] == 1
-    assert applied["db_rewrites_applied"] == 1
-
-    with registered_csv.open("r", encoding="utf-8-sig", newline="") as fp:
-        reader = csv.DictReader(fp)
-        first = next(reader)
-    assert first is not None
-    assert "quotations/unregistered" not in str(first["pdf_link"])
-    assert str(first["pdf_link"]).endswith(
-        "imports/orders/registered/pdf_files/SupplierRegistered/Q-REG-100.pdf"
-    )
-
-    row = conn.execute(
-        "SELECT pdf_link FROM quotations WHERE quotation_number = ?",
-        ("Q-REG-100",),
-    ).fetchone()
-    assert row is not None
-    assert "quotations/unregistered" not in str(row["pdf_link"])
-    assert str(row["pdf_link"]).endswith(
-        "imports/orders/registered/pdf_files/SupplierRegistered/Q-REG-100.pdf"
-    )
-
 
 def test_register_missing_requires_details_for_new_item(conn):
     with pytest.raises(AppError) as exc_info:
@@ -1338,180 +999,6 @@ def test_register_unregistered_item_csvs_skips_consolidation_when_error_stops_ba
     assert invalid_csv.exists()
     assert not consolidated.exists()
 
-def test_import_unregistered_orders_missing_items_same_csv_name_different_suppliers_preserves_rows(conn, tmp_path: Path):
-    unregistered_root = tmp_path / "quotations" / "unregistered"
-    registered_root = tmp_path / "quotations" / "registered"
-
-    for supplier in ("SupplierA", "SupplierB"):
-        supplier_csv_dir = unregistered_root / "csv_files" / supplier
-        supplier_csv_dir.mkdir(parents=True, exist_ok=True)
-        csv_path = supplier_csv_dir / "Q-001.csv"
-        with csv_path.open("w", encoding="utf-8", newline="") as fp:
-            writer = csv.DictWriter(
-                fp,
-                fieldnames=[
-                    "item_number",
-                    "quantity",
-                    "quotation_number",
-                    "issue_date",
-                    "order_date",
-                    "expected_arrival",
-                    "pdf_link",
-                ],
-            )
-            writer.writeheader()
-            writer.writerow(
-                {
-                    "item_number": f"MISSING-{supplier}",
-                    "quantity": "1",
-                    "quotation_number": f"Q-{supplier}",
-                    "issue_date": "2026-02-20",
-                    "order_date": "2026-02-21",
-                    "expected_arrival": "2026-02-28",
-                    "pdf_link": "",
-                }
-            )
-
-    captured_paths: list[str] = []
-    original_writer = service._write_batch_missing_items_register
-
-    def _capture_missing_paths(missing_reports, *, output_dir):
-        captured_paths.extend(str(report.get("missing_csv_path", "")) for report in missing_reports)
-        return original_writer(missing_reports, output_dir=output_dir)
-
-    monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(service, "_write_batch_missing_items_register", _capture_missing_paths)
-    try:
-        result = service.import_unregistered_order_csvs(
-            conn,
-            unregistered_root=unregistered_root,
-            registered_root=registered_root,
-        )
-    finally:
-        monkeypatch.undo()
-
-    assert result["status"] == "ok"
-    assert result["missing_items"] == 2
-    register_path = result.get("missing_items_register_csv")
-    assert register_path is not None
-
-    with Path(register_path).open("r", encoding="utf-8", newline="") as fp:
-        rows = list(csv.DictReader(fp))
-
-    assert len(rows) == 2
-    assert {row["source_supplier"] for row in rows} == {"SupplierA", "SupplierB"}
-    assert any("SupplierA__Q-001_missing_items_registration.csv" in path for path in captured_paths)
-    assert any("SupplierB__Q-001_missing_items_registration.csv" in path for path in captured_paths)
-
-def test_import_unregistered_orders_missing_items_batch_register_deduplicates_by_supplier_manufacturer_and_item_number(
-    conn,
-    tmp_path: Path,
-):
-    unregistered_root = tmp_path / "quotations" / "unregistered"
-    registered_root = tmp_path / "quotations" / "registered"
-
-    for supplier in ("SupplierA", "SupplierB"):
-        supplier_csv_dir = unregistered_root / "csv_files" / supplier
-        supplier_csv_dir.mkdir(parents=True, exist_ok=True)
-        csv_path = supplier_csv_dir / f"{supplier}.csv"
-        with csv_path.open("w", encoding="utf-8", newline="") as fp:
-            writer = csv.DictWriter(
-                fp,
-                fieldnames=[
-                    "item_number",
-                    "quantity",
-                    "quotation_number",
-                    "issue_date",
-                    "order_date",
-                    "expected_arrival",
-                    "pdf_link",
-                ],
-            )
-            writer.writeheader()
-            writer.writerow(
-                {
-                    "item_number": "DUP-001",
-                    "quantity": "1",
-                    "quotation_number": f"Q-{supplier}",
-                    "issue_date": "2026-02-20",
-                    "order_date": "2026-02-21",
-                    "expected_arrival": "2026-02-28",
-                    "pdf_link": "",
-                }
-            )
-
-    result = service.import_unregistered_order_csvs(
-        conn,
-        unregistered_root=unregistered_root,
-        registered_root=registered_root,
-    )
-
-    register_path = result.get("missing_items_register_csv")
-    assert register_path is not None
-
-    with Path(register_path).open("r", encoding="utf-8", newline="") as fp:
-        rows = list(csv.DictReader(fp))
-
-    assert result["missing_items"] == 2
-    assert len(rows) == 2
-    assert {row["source_supplier"] for row in rows} == {"SupplierA", "SupplierB"}
-    assert {row["item_number"] for row in rows} == {"DUP-001"}
-    assert {row["manufacturer_name"] for row in rows} == {""}
-
-def test_import_unregistered_orders_keeps_per_file_missing_csv_when_batch_register_write_fails(
-    conn,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    unregistered_root = tmp_path / "quotations" / "unregistered"
-    registered_root = tmp_path / "quotations" / "registered"
-    supplier_csv_dir = unregistered_root / "csv_files" / "SupplierFail"
-    supplier_csv_dir.mkdir(parents=True, exist_ok=True)
-
-    csv_path = supplier_csv_dir / "Q-FAIL-MISSING.csv"
-    with csv_path.open("w", encoding="utf-8", newline="") as fp:
-        writer = csv.DictWriter(
-            fp,
-            fieldnames=[
-                "item_number",
-                "quantity",
-                "quotation_number",
-                "issue_date",
-                "order_date",
-                "expected_arrival",
-                "pdf_link",
-            ],
-        )
-        writer.writeheader()
-        writer.writerow(
-            {
-                "item_number": "MISSING-FAIL-001",
-                "quantity": "1",
-                "quotation_number": "Q-FAIL-MISSING",
-                "issue_date": "2026-02-20",
-                "order_date": "2026-02-21",
-                "expected_arrival": "2026-02-28",
-                "pdf_link": "",
-            }
-        )
-
-    def _raise_write(*args, **kwargs):
-        raise OSError("simulated batch write failure")
-
-    monkeypatch.setattr(service, "_write_batch_missing_items_register", _raise_write)
-
-    items_unregistered_root = tmp_path / "imports" / "items" / "unregistered"
-    with pytest.raises(OSError, match="simulated batch write failure"):
-        service.import_unregistered_order_csvs(
-            conn,
-            unregistered_root=unregistered_root,
-            registered_root=registered_root,
-            items_unregistered_root=items_unregistered_root,
-        )
-
-    temp_register = items_unregistered_root / "SupplierFail__Q-FAIL-MISSING_missing_items_registration.csv"
-    assert temp_register.exists()
-
 def test_update_and_delete_quotation_syncs_csv_and_db(conn, tmp_path: Path, monkeypatch):
     item = _create_basic_item(conn, item_number="SYNC-ITEM-001")
     roots = service.build_roots(
@@ -1532,6 +1019,7 @@ def test_update_and_delete_quotation_syncs_csv_and_db(conn, tmp_path: Path, monk
                 "quantity",
                 "quotation_number",
                 "issue_date",
+                "quotation_document_url",
                 "order_date",
                 "expected_arrival",
                 "pdf_link",
@@ -1542,12 +1030,13 @@ def test_update_and_delete_quotation_syncs_csv_and_db(conn, tmp_path: Path, monk
             {
                 "supplier": "SupplierSync",
                 "item_number": item["item_number"],
-                "quantity": "3",
-                "quotation_number": "Q-SYNC-001",
-                "issue_date": "2026-03-01",
-                "order_date": "2026-03-01",
-                "expected_arrival": "2026-03-10",
-                "pdf_link": "",
+                    "quantity": "3",
+                    "quotation_number": "Q-SYNC-001",
+                    "issue_date": "2026-03-01",
+                    "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-SYNC-001",
+                    "order_date": "2026-03-01",
+                    "expected_arrival": "2026-03-10",
+                    "pdf_link": "",
             }
         )
 
@@ -1565,16 +1054,16 @@ def test_update_and_delete_quotation_syncs_csv_and_db(conn, tmp_path: Path, monk
         int(order["quotation_id"]),
         {
             "issue_date": "2026-03-05",
-            "pdf_link": "imports/orders/registered/pdf_files/SupplierSync/Q-SYNC-001.pdf",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-SYNC-001",
         },
     )
     assert updated["issue_date"] == "2026-03-05"
-    assert updated["pdf_link"] == "imports/orders/registered/pdf_files/SupplierSync/Q-SYNC-001.pdf"
+    assert updated["quotation_document_url"] == "https://example.sharepoint.com/sites/procurement/Q-SYNC-001"
 
     with csv_path.open("r", encoding="utf-8", newline="") as fp:
         rows = list(csv.DictReader(fp))
     assert rows[0]["issue_date"] == "2026-03-05"
-    assert rows[0]["pdf_link"] == "imports/orders/registered/pdf_files/SupplierSync/Q-SYNC-001.pdf"
+    assert rows[0]["quotation_document_url"] == "https://example.sharepoint.com/sites/procurement/Q-SYNC-001"
 
     delete_result = service.delete_quotation(conn, int(order["quotation_id"]))
     assert delete_result["deleted"] is True

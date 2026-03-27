@@ -15,20 +15,12 @@ import type {
 
 const PENDING_MISSING_ITEMS_KEY = "mm.pending_missing_items";
 const PENDING_ORDER_IMPORT_KEY = "mm.pending_order_import";
-const PENDING_BATCH_RETRY_KEY = "mm.pending_batch_retry";
 
 type PendingOrderImport = {
   supplier_name: string;
   default_order_date: string;
   file_name: string;
   file_text: string;
-};
-
-type PendingBatchRetry = {
-  csv_path: string;
-  unregistered_root: string;
-  registered_root: string;
-  default_order_date: string;
 };
 
 function normalizeMissingRows(
@@ -64,9 +56,10 @@ type GeneratedArtifact = {
   artifact_id: string;
   artifact_type: string;
   filename: string;
-  relative_path: string;
   size_bytes: number;
   created_at: string;
+  detail_path?: string;
+  download_path?: string;
   source_job_type?: string;
   source_job_id?: string;
 };
@@ -94,7 +87,8 @@ type OrderImportPreviewRow = {
   issue_date: string | null;
   order_date: string;
   expected_arrival: string | null;
-  pdf_link: string | null;
+  quotation_document_url: string | null;
+  purchase_order_document_url: string | null;
   status: OrderImportPreviewStatus;
   confidence_score: number | null;
   suggested_match: OrderImportPreviewMatch | null;
@@ -125,58 +119,6 @@ type OrderImportPreview = {
   duplicate_quotation_numbers: string[];
   can_auto_accept: boolean;
   rows: OrderImportPreviewRow[];
-};
-
-type BatchNormalization = {
-  kind?: string;
-  from: string;
-  to: string;
-  file?: string;
-  quotation_number?: string;
-  row?: string;
-  quotation_id?: string;
-};
-
-type UnregisteredFileReport = {
-  file: string;
-  supplier?: string;
-  status: string;
-  error?: string;
-  missing_count?: number;
-  missing_csv_path?: string;
-  missing_artifact?: GeneratedArtifact;
-  missing_rows?: MissingItemResolverRow[];
-  warnings?: string[];
-  normalizations?: BatchNormalization[];
-};
-
-type BatchErrorReport = {
-  phase: "register" | "import";
-  file: string;
-  supplier?: string;
-  error: string;
-};
-
-type RegisterBatchResult = {
-  status: string;
-  processed: number;
-  succeeded: number;
-  failed: number;
-  files?: UnregisteredFileReport[];
-  warnings?: string[];
-  normalizations?: BatchNormalization[];
-};
-
-type ImportBatchResult = {
-  status: string;
-  processed: number;
-  succeeded: number;
-  missing_items: number;
-  failed: number;
-  missing_items_register_artifact?: GeneratedArtifact;
-  files?: UnregisteredFileReport[];
-  warnings?: string[];
-  normalizations?: BatchNormalization[];
 };
 
 type OrderSplitUpdateResult = {
@@ -231,6 +173,26 @@ function previewStatusTone(status: OrderImportPreviewStatus): string {
   }
 }
 
+function renderDocumentLink(url: string | null | undefined, label = "Open document") {
+  if (!url) return "-";
+  return (
+    <a
+      className="text-sky-700 underline underline-offset-2"
+      href={url}
+      target="_blank"
+      rel="noreferrer noopener"
+    >
+      {label}
+    </a>
+  );
+}
+
+function formatTimestamp(value: string): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleString();
+}
+
 export function OrdersPage() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -238,9 +200,6 @@ export function OrdersPage() {
   const [supplierSelection, setSupplierSelection] = useState<CatalogSearchResult | null>(null);
   const [defaultDate, setDefaultDate] = useState("");
   const [file, setFile] = useState<File | null>(null);
-  const [batchZipFile, setBatchZipFile] = useState<File | null>(null);
-  const [unregisteredRoot, setUnregisteredRoot] = useState("");
-  const [registeredRoot, setRegisteredRoot] = useState("");
   const [message, setMessage] = useState<string>("");
   const [latestGeneratedArtifact, setLatestGeneratedArtifact] = useState<GeneratedArtifact | null>(null);
   const [missingRows, setMissingRows] = useState<MissingItemResolverRow[]>([]);
@@ -248,18 +207,13 @@ export function OrdersPage() {
   const [previewSelections, setPreviewSelections] = useState<Record<number, CatalogSearchResult | null>>({});
   const [previewUnits, setPreviewUnits] = useState<Record<number, string>>({});
   const [previewAliasSaves, setPreviewAliasSaves] = useState<Record<number, boolean>>({});
-  const [batchMissingReports, setBatchMissingReports] = useState<UnregisteredFileReport[]>([]);
-  const [batchErrorReports, setBatchErrorReports] = useState<BatchErrorReport[]>([]);
-  const [batchWarnings, setBatchWarnings] = useState<string[]>([]);
-  const [batchNormalizations, setBatchNormalizations] = useState<BatchNormalization[]>([]);
-  const [showAdvancedBatch, setShowAdvancedBatch] = useState(false);
   const [loading, setLoading] = useState(false);
   const [editingQuotationId, setEditingQuotationId] = useState<number | null>(null);
-  const [editingQuotationPdfLink, setEditingQuotationPdfLink] = useState("");
+  const [editingQuotationDocumentUrl, setEditingQuotationDocumentUrl] = useState("");
   const [editingQuotationIssueDate, setEditingQuotationIssueDate] = useState("");
   const [sortKey, setSortKey] = useState<"order_id" | "supplier_name" | "project_name" | "canonical_item_number" | "order_amount" | "expected_arrival" | "status">("order_id");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("desc");
-  const [quotationSortKey, setQuotationSortKey] = useState<"quotation_id" | "supplier_name" | "quotation_number" | "issue_date" | "pdf_link">("quotation_id");
+  const [quotationSortKey, setQuotationSortKey] = useState<"quotation_id" | "supplier_name" | "quotation_number" | "issue_date" | "quotation_document_url">("quotation_id");
   const [quotationSortDirection, setQuotationSortDirection] = useState<"asc" | "desc">("desc");
   const [orderPrimarySearch, setOrderPrimarySearch] = useState("");
   const [orderFilter, setOrderFilter] = useState("");
@@ -348,8 +302,8 @@ export function OrdersPage() {
 
       if (!filterQuery) return true;
       const issueDate = row.issue_date ?? "";
-      const pdfLink = row.pdf_link ?? "";
-      return [row.supplier_name, issueDate, pdfLink]
+      const quotationDocumentUrl = row.quotation_document_url ?? "";
+      return [row.supplier_name, issueDate, quotationDocumentUrl]
         .join(" ")
         .toLowerCase()
         .includes(filterQuery);
@@ -494,36 +448,6 @@ export function OrdersPage() {
     });
   }
 
-  function uniqueWarnings(values: string[]): string[] {
-    return Array.from(new Set(values.filter((value) => value.trim())));
-  }
-
-  function uniqueNormalizations(values: BatchNormalization[]): BatchNormalization[] {
-    const seen = new Set<string>();
-    const result: BatchNormalization[] = [];
-    for (const value of values) {
-      const key = JSON.stringify(value);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      result.push(value);
-    }
-    return result;
-  }
-
-  function toBatchErrorReports(
-    phase: "register" | "import",
-    files: UnregisteredFileReport[] | undefined
-  ): BatchErrorReport[] {
-    return (files ?? [])
-      .filter((entry) => entry.status === "error" && String(entry.error ?? "").trim())
-      .map((entry) => ({
-        phase,
-        file: entry.file,
-        supplier: entry.supplier,
-        error: String(entry.error),
-      }));
-  }
-
   function resetImportPreview() {
     setImportPreview(null);
     setPreviewSelections({});
@@ -605,7 +529,6 @@ export function OrdersPage() {
     setLatestGeneratedArtifact(null);
     setMissingRows([]);
     resetImportPreview();
-    sessionStorage.removeItem(PENDING_BATCH_RETRY_KEY);
     try {
       const form = new FormData();
       form.append("file", file);
@@ -623,15 +546,7 @@ export function OrdersPage() {
           : `Preview ready: ${result.summary.total_rows} row(s), review=${result.summary.needs_review}, unresolved=${result.summary.unresolved}.`
       );
     } catch (error) {
-      const messageText = String(error ?? "");
-      if (messageText.includes("imports/orders/registered/pdf_files")) {
-        setMessage(
-          "Preview failed: Manual import requires pdf_link to be blank, filename-only, or imports/orders/registered/pdf_files/<supplier>/<file>.pdf. " +
-            "If the PDF is part of the same browser upload, use 'Upload Orders ZIP'."
-        );
-      } else {
-        setMessage(formatActionError("Preview failed", error));
-      }
+      setMessage(formatActionError("Preview failed", error));
     } finally {
       setLoading(false);
     }
@@ -694,7 +609,6 @@ export function OrdersPage() {
     setLoading(true);
     setMessage("");
     setMissingRows([]);
-    sessionStorage.removeItem(PENDING_BATCH_RETRY_KEY);
     try {
       const form = new FormData();
       form.append("file", file);
@@ -731,7 +645,6 @@ export function OrdersPage() {
         setMissingRows([]);
         sessionStorage.removeItem(PENDING_MISSING_ITEMS_KEY);
         sessionStorage.removeItem(PENDING_ORDER_IMPORT_KEY);
-        sessionStorage.removeItem(PENDING_BATCH_RETRY_KEY);
         const savedAliasCount = result.saved_alias_count ?? 0;
         setMessage(
           savedAliasCount > 0
@@ -741,15 +654,7 @@ export function OrdersPage() {
       }
       await Promise.all([mutateOrders(), mutateQuotations()]);
     } catch (error) {
-      const messageText = String(error ?? "");
-      if (messageText.includes("imports/orders/registered/pdf_files")) {
-        setMessage(
-          "Import failed: Manual import requires pdf_link to be blank, filename-only, or imports/orders/registered/pdf_files/<supplier>/<file>.pdf. " +
-            "If the PDF is part of the same browser upload, use 'Upload Orders ZIP'."
-        );
-      } else {
-        setMessage(formatActionError("Import failed", error));
-      }
+      setMessage(formatActionError("Import failed", error));
     } finally {
       setLoading(false);
     }
@@ -868,7 +773,7 @@ export function OrdersPage() {
 
   function beginEditQuotation(row: Quotation) {
     setEditingQuotationId(row.quotation_id);
-    setEditingQuotationPdfLink(row.pdf_link ?? "");
+    setEditingQuotationDocumentUrl(row.quotation_document_url ?? "");
     setEditingQuotationIssueDate(row.issue_date ?? "");
   }
 
@@ -879,7 +784,7 @@ export function OrdersPage() {
         method: "PUT",
         body: JSON.stringify({
           issue_date: editingQuotationIssueDate.trim() || null,
-          pdf_link: editingQuotationPdfLink.trim() || null,
+          quotation_document_url: editingQuotationDocumentUrl.trim() || null,
         }),
       });
       setMessage(`Updated quotation #${quotationId}.`);
@@ -905,135 +810,6 @@ export function OrdersPage() {
       setLoading(false);
     }
   }
-
-
-
-  async function runImportUnregisteredOrders() {
-    setLoading(true);
-    setMessage("");
-    setLatestGeneratedArtifact(null);
-    setBatchMissingReports([]);
-    setBatchErrorReports([]);
-    setBatchWarnings([]);
-    setBatchNormalizations([]);
-    try {
-      const result = await apiSend<ImportBatchResult>("/orders/import-unregistered", {
-        method: "POST",
-        body: JSON.stringify({
-          unregistered_root: unregisteredRoot || null,
-          registered_root: registeredRoot || null,
-          default_order_date: defaultDate || null,
-          continue_on_error: true
-        })
-      });
-      setBatchMissingReports(
-        (result.files ?? []).filter((entry) => entry.status === "missing_items")
-      );
-      setLatestGeneratedArtifact(result.missing_items_register_artifact ?? null);
-      setBatchErrorReports(toBatchErrorReports("import", result.files));
-      setBatchWarnings(uniqueWarnings(result.warnings ?? []));
-      setBatchNormalizations(uniqueNormalizations(result.normalizations ?? []));
-      setMessage(
-        `Unregistered import batch: status=${result.status}, processed=${result.processed}, succeeded=${result.succeeded}, missing_items=${result.missing_items}, failed=${result.failed}`
-      );
-      await Promise.all([mutateOrders(), mutateQuotations(), mutateGeneratedArtifacts()]);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function runDefaultUnregisteredBatch() {
-    setLoading(true);
-    setMessage("");
-    setLatestGeneratedArtifact(null);
-    setBatchMissingReports([]);
-    setBatchErrorReports([]);
-    setBatchWarnings([]);
-    setBatchNormalizations([]);
-    try {
-      const importResult = await apiSend<ImportBatchResult>("/orders/import-unregistered", {
-        method: "POST",
-        body: JSON.stringify({
-          unregistered_root: null,
-          registered_root: null,
-          default_order_date: defaultDate || null,
-          continue_on_error: true
-        })
-      });
-      setBatchMissingReports(
-        (importResult.files ?? []).filter((entry) => entry.status === "missing_items")
-      );
-      setLatestGeneratedArtifact(importResult.missing_items_register_artifact ?? null);
-      setBatchErrorReports(toBatchErrorReports("import", importResult.files));
-
-      const mergedWarnings = uniqueWarnings(importResult.warnings ?? []);
-      const mergedNormalizations = uniqueNormalizations(importResult.normalizations ?? []);
-      setBatchWarnings(mergedWarnings);
-      setBatchNormalizations(mergedNormalizations);
-      setMessage(
-        `Unregistered batch complete: import(status=${importResult.status}, processed=${importResult.processed}, succeeded=${importResult.succeeded}, missing_items=${importResult.missing_items}, failed=${importResult.failed})`
-      );
-      await Promise.all([mutateOrders(), mutateQuotations(), mutateGeneratedArtifacts()]);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function uploadOrdersBatchZip(event: FormEvent) {
-    event.preventDefault();
-    if (!batchZipFile) {
-      setMessage("Select an orders ZIP file to upload.");
-      return;
-    }
-    setLoading(true);
-    setMessage("");
-    setLatestGeneratedArtifact(null);
-    setBatchMissingReports([]);
-    setBatchErrorReports([]);
-    setBatchWarnings([]);
-    setBatchNormalizations([]);
-    try {
-      const form = new FormData();
-      form.append("file", batchZipFile);
-      if (defaultDate.trim()) {
-        form.append("default_order_date", defaultDate.trim());
-      }
-      form.append("continue_on_error", "true");
-      const result = await apiSendForm<ImportBatchResult & { upload_job_id?: string }>(
-        "/orders/batch-upload",
-        form
-      );
-      setBatchMissingReports((result.files ?? []).filter((entry) => entry.status === "missing_items"));
-      setLatestGeneratedArtifact(result.missing_items_register_artifact ?? null);
-      setBatchErrorReports(toBatchErrorReports("import", result.files));
-      setBatchWarnings(uniqueWarnings(result.warnings ?? []));
-      setBatchNormalizations(uniqueNormalizations(result.normalizations ?? []));
-      setMessage(
-        `Orders ZIP upload: status=${result.status}, processed=${result.processed}, succeeded=${result.succeeded}, missing_items=${result.missing_items}, failed=${result.failed}${result.upload_job_id ? `, job=${result.upload_job_id}` : ""}`
-      );
-      setBatchZipFile(null);
-      await Promise.all([mutateOrders(), mutateQuotations(), mutateGeneratedArtifacts()]);
-    } catch (error) {
-      setMessage(formatActionError("Orders ZIP upload failed", error));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  function openBatchEntryResolver(entry: UnregisteredFileReport) {
-    const fallbackSupplier = (entry.supplier ?? supplier).trim() || "UNKNOWN";
-    const unresolved = normalizeMissingRows(entry.missing_rows, fallbackSupplier);
-    sessionStorage.removeItem(PENDING_ORDER_IMPORT_KEY);
-    const retryContext: PendingBatchRetry = {
-      csv_path: entry.file,
-      unregistered_root: unregisteredRoot || "",
-      registered_root: registeredRoot || "",
-      default_order_date: defaultDate || "",
-    };
-    sessionStorage.setItem(PENDING_BATCH_RETRY_KEY, JSON.stringify(retryContext));
-    openMissingResolver(unresolved);
-  }
-
   return (
     <div className="space-y-6">
       <section>
@@ -1052,17 +828,17 @@ export function OrdersPage() {
             <code>quotation_number</code>, <code>issue_date</code>
           </p>
           <p>
-            Optional columns: <code>order_date</code>, <code>expected_arrival</code>,{" "}
-            <code>pdf_link</code>
-          </p>
-          <p className="mt-1">
-            For browser/shared-server use, keep <code>pdf_link</code> blank or use a
-            filename only, such as <code>Q-2026-001.pdf</code>.
+            Required document column: <code>quotation_document_url</code>
           </p>
           <p>
-            If the PDF is part of the same upload package, prefer <strong>Upload Orders ZIP</strong>.
-            Canonical server paths remain accepted only as a compatibility fallback for existing
-            server-side files.
+            Optional columns: <code>order_date</code>, <code>expected_arrival</code>,{" "}
+            <code>purchase_order_document_url</code>
+          </p>
+          <p className="mt-1">
+            Use full HTTPS document URLs, such as a SharePoint link, for quotation and purchase-order references.
+          </p>
+          <p>
+            This import path is metadata-only. Documents remain in the external document system and are not uploaded into this application.
           </p>
           <div className="mt-2 flex flex-wrap gap-2">
             <button
@@ -1225,8 +1001,11 @@ export function OrdersPage() {
                               order {row.order_date}
                               {row.expected_arrival ? ` | eta ${row.expected_arrival}` : ""}
                             </p>
-                            {row.pdf_link && (
-                              <p className="text-xs text-slate-500">{row.pdf_link}</p>
+                            {row.quotation_document_url && (
+                              <p className="text-xs text-slate-500 break-all">{row.quotation_document_url}</p>
+                            )}
+                            {row.purchase_order_document_url && (
+                              <p className="text-xs text-slate-500 break-all">{row.purchase_order_document_url}</p>
                             )}
                             {row.warnings.map((warning, index) => (
                               <p key={`${warning}-${index}`} className="text-xs font-semibold text-red-600">
@@ -1384,207 +1163,12 @@ export function OrdersPage() {
       </section>
 
       <section className="panel p-4">
-        <h2 className="mb-3 font-display text-lg font-semibold">Upload Orders ZIP</h2>
-        <p className="mb-3 text-sm text-slate-600">
-          Upload a ZIP package containing order CSV files and quotation PDFs. The server stages the package and runs the existing unregistered import flow.
-        </p>
-        <form className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3" onSubmit={uploadOrdersBatchZip}>
-          <input
-            className="input"
-            type="file"
-            accept=".zip,application/zip"
-            onChange={(event) => setBatchZipFile(event.target.files?.[0] ?? null)}
-          />
-          <p className="text-xs text-slate-600">
-            Supported layouts include <code>csv_files/&lt;supplier&gt;/...</code> and <code>pdf_files/&lt;supplier&gt;/...</code>. Plain supplier subfolders are also accepted for backward-compatible ZIPs.
-          </p>
-          <p className="text-xs text-slate-600">
-            Inside uploaded CSVs, <code>pdf_link</code> should be blank or filename-only such as{" "}
-            <code>Q-2026-001.pdf</code>. Server paths are unnecessary in this flow and are only
-            normalized for compatibility.
-          </p>
-          <div className="flex flex-wrap gap-2">
-            <button className="button" type="submit" disabled={loading}>
-              Upload Orders ZIP
-            </button>
-            <span className="self-center text-xs text-slate-500">
-              {batchZipFile ? batchZipFile.name : "Select one ZIP archive"}
-            </span>
-          </div>
-        </form>
-        <div className="mt-4 border-t border-slate-200 pt-4">
-          <p className="mb-3 text-sm text-slate-600">
-            Advanced fallback: run the existing server-resident batch inputs, or open advanced controls for explicit roots.
-          </p>
-          <p className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-700">
-            Advanced root layout:
-            {" "}
-            <code>{"imports/orders/unregistered/csv_files/<supplier>/*.csv"}</code>
-            {" "}
-            and
-            {" "}
-            <code>{"imports/orders/unregistered/pdf_files/<supplier>/*"}</code>
-            .
-          </p>
-        <div className="mt-3 flex flex-wrap gap-2">
-          <button className="button" onClick={runDefaultUnregisteredBatch} disabled={loading}>
-            Run Existing Imported Batch
-          </button>
-          <button
-            className="button-subtle"
-            type="button"
-            onClick={() => setShowAdvancedBatch((prev) => !prev)}
-            disabled={loading}
-          >
-            {showAdvancedBatch ? "Hide Advanced Controls" : "Show Advanced Controls"}
-          </button>
-        </div>
-        {showAdvancedBatch && (
-          <div className="mt-3 space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
-            <div className="grid gap-3 md:grid-cols-2">
-              <input
-                className="input"
-                placeholder="Unregistered root (optional absolute path)"
-                value={unregisteredRoot}
-                onChange={(e) => setUnregisteredRoot(e.target.value)}
-              />
-              <input
-                className="input"
-                placeholder="Registered root (optional absolute path)"
-                value={registeredRoot}
-                onChange={(e) => setRegisteredRoot(e.target.value)}
-              />
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button className="button-subtle" onClick={runImportUnregisteredOrders} disabled={loading}>
-                Import Unregistered Orders
-              </button>
-            </div>
-          </div>
-        )}
-        </div>
-        {(batchWarnings.length > 0 || batchNormalizations.length > 0) && (
-          <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
-            {batchWarnings.length > 0 && (
-              <>
-                <p className="font-semibold text-slate-900">Batch Warnings</p>
-                <ul className="mt-1 list-disc pl-5">
-                  {batchWarnings.map((warning, index) => (
-                    <li key={`${warning}-${index}`}>{warning}</li>
-                  ))}
-                </ul>
-              </>
-            )}
-            {batchNormalizations.length > 0 && (
-              <>
-                <p className="mt-3 font-semibold text-slate-900">Path Normalizations</p>
-                <div className="mt-2 overflow-x-auto">
-                  <table className="min-w-[520px] text-xs">
-                    <thead>
-                      <tr className="border-b border-slate-200 text-left text-slate-600">
-                        <th className="px-2 py-1">From</th>
-                        <th className="px-2 py-1">To</th>
-                        <th className="px-2 py-1">Context</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {batchNormalizations.map((entry, index) => (
-                        <tr key={`${entry.from}-${entry.to}-${index}`} className="border-b border-slate-100">
-                          <td className="px-2 py-1">{entry.from}</td>
-                          <td className="px-2 py-1">{entry.to}</td>
-                          <td className="px-2 py-1">{entry.file ?? entry.quotation_id ?? "-"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            )}
-          </div>
-        )}
-        {batchErrorReports.length > 0 && (
-          <div className="mt-3 rounded-xl border border-red-200 bg-red-50 p-3">
-            <p className="mb-2 text-sm font-semibold text-red-900">Batch Errors</p>
-            <div className="overflow-x-auto">
-              <table className="min-w-[760px] text-sm">
-                <thead>
-                  <tr className="border-b border-red-200 text-left text-red-800">
-                    <th className="px-2 py-2">Phase</th>
-                    <th className="px-2 py-2">Supplier</th>
-                    <th className="px-2 py-2">File</th>
-                    <th className="px-2 py-2">Error</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {batchErrorReports.map((entry, idx) => (
-                    <tr key={`${entry.phase}-${entry.file}-${idx}`} className="border-b border-red-100">
-                      <td className="px-2 py-2">{entry.phase}</td>
-                      <td className="px-2 py-2">{entry.supplier ?? "-"}</td>
-                      <td className="px-2 py-2">{entry.file}</td>
-                      <td className="px-2 py-2">{entry.error}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-        {batchMissingReports.length > 0 && (
-          <div className="mt-3 space-y-3">
-            {batchMissingReports.map((entry, idx) => (
-              <div key={`${entry.file}-${idx}`} className="rounded-xl border border-amber-200 bg-amber-50 p-3">
-                <p className="text-sm font-semibold text-amber-900">
-                  Missing items: {entry.file}
-                </p>
-                <p className="mt-1 text-xs text-amber-800">
-                  Generated register CSV is available for browser download.
-                </p>
-                {entry.missing_artifact && (
-                  <button
-                    className="button-subtle mt-2"
-                    type="button"
-                    onClick={() => downloadGeneratedArtifact(entry.missing_artifact!)}
-                  >
-                    Download Generated CSV
-                  </button>
-                )}
-                <button
-                  className="button-subtle mt-2"
-                  type="button"
-                  onClick={() => openBatchEntryResolver(entry)}
-                >
-                  Open Resolver In Items
-                </button>
-                {entry.missing_rows && entry.missing_rows.length > 0 && (
-                  <div className="mt-2 overflow-x-auto">
-                    <table className="min-w-[420px] text-sm">
-                      <thead>
-                        <tr className="border-b border-amber-200 text-left text-amber-800">
-                          <th className="px-2 py-2">CSV Row</th>
-                          <th className="px-2 py-2">Item Number</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {entry.missing_rows.map((row, rowIndex) => (
-                          <tr
-                            key={`${entry.file}-${row.item_number}-${rowIndex}`}
-                            className="border-b border-amber-100"
-                          >
-                            <td className="px-2 py-2">{row.row ?? "-"}</td>
-                            <td className="px-2 py-2 font-semibold">{row.item_number}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
         {generatedArtifacts.length > 0 && (
           <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
             <h3 className="font-medium text-slate-900">Recent Generated Files</h3>
+            <p className="mt-1 text-xs text-slate-500">
+              Browser download list only. Filesystem storage paths are intentionally hidden.
+            </p>
             <div className="mt-2 space-y-2">
               {generatedArtifacts.slice(0, 5).map((artifact) => (
                 <div
@@ -1593,7 +1177,9 @@ export function OrdersPage() {
                 >
                   <div className="text-sm text-slate-700">
                     <p className="font-medium text-slate-900">{artifact.filename}</p>
-                    <p className="text-xs text-slate-500">{artifact.relative_path}</p>
+                    <p className="text-xs text-slate-500">
+                      Created {formatTimestamp(artifact.created_at)} · {(artifact.size_bytes / 1024).toFixed(1)} KB
+                    </p>
                   </div>
                   <button
                     className="button-subtle"
@@ -1795,6 +1381,14 @@ export function OrdersPage() {
                 {selectedOrder.quotation_number}
               </p>
               <p>
+                <strong>Quotation document:</strong>{" "}
+                {renderDocumentLink(selectedOrder.quotation_document_url)}
+              </p>
+              <p>
+                <strong>Purchase-order document:</strong>{" "}
+                {renderDocumentLink(selectedOrder.purchase_order_document_url)}
+              </p>
+              <p>
                 <strong>Expected arrival:</strong> {selectedOrder.expected_arrival ?? "-"}
               </p>
               <p>
@@ -1856,7 +1450,7 @@ export function OrdersPage() {
                 sameItemQuotations.map((row) => (
                   <p key={`q-${row.quotation_id}`} className="text-sm text-slate-700">
                     #{row.quotation_id} {row.quotation_number} ({row.supplier_name}) / issue: {row.issue_date ?? "-"}
-                    {row.pdf_link ? ` / ${row.pdf_link}` : ""}
+                    {row.quotation_document_url ? " / linked document" : ""}
                   </p>
                 ))
               ) : (
@@ -1908,7 +1502,7 @@ export function OrdersPage() {
                         <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("supplier_name")}>Supplier {quotationSortIndicator("supplier_name")}</button></th>
                         <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("quotation_number")}>Quotation # {quotationSortIndicator("quotation_number")}</button></th>
                         <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("issue_date")}>Issue Date {quotationSortIndicator("issue_date")}</button></th>
-                        <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("pdf_link")}>PDF Link {quotationSortIndicator("pdf_link")}</button></th>
+                        <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("quotation_document_url")}>Document URL {quotationSortIndicator("quotation_document_url")}</button></th>
                         <th className="px-2 py-2">Orders</th>
                         <th className="px-2 py-2">Action</th>
                       </tr>
@@ -1935,12 +1529,12 @@ export function OrdersPage() {
                             {editingQuotationId === row.quotation_id ? (
                               <input
                                 className="input"
-                                value={editingQuotationPdfLink}
-                                onChange={(event) => setEditingQuotationPdfLink(event.target.value)}
-                                placeholder="imports/orders/registered/pdf_files/<supplier>/<file>.pdf"
+                                value={editingQuotationDocumentUrl}
+                                onChange={(event) => setEditingQuotationDocumentUrl(event.target.value)}
+                                placeholder="https://..."
                               />
                             ) : (
-                              row.pdf_link ?? "-"
+                              renderDocumentLink(row.quotation_document_url)
                             )}
                           </td>
                           <td className="px-2 py-2">{orderCountByQuotationId.get(row.quotation_id) ?? 0}</td>
@@ -1997,7 +1591,7 @@ export function OrdersPage() {
                 <strong>Issue date:</strong> {selectedQuotation.issue_date ?? "-"}
               </p>
               <p>
-                <strong>PDF link:</strong> {selectedQuotation.pdf_link ?? "-"}
+                <strong>Quotation document:</strong> {renderDocumentLink(selectedQuotation.quotation_document_url)}
               </p>
               <p>
                 <strong>Linked orders:</strong> {quotationOrders.length}

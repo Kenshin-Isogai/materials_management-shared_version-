@@ -45,6 +45,9 @@ def test_health_endpoint(client):
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["data"]["healthy"] is True
+    assert payload["data"]["runtime_target"] in {"local", "cloud_run"}
+    assert isinstance(payload["data"]["cloud_run_mode"], bool)
+    assert isinstance(payload["data"]["app_data_root"], str)
 
 
 def test_inventory_snapshot_endpoint_supports_net_available_basis(client):
@@ -675,414 +678,6 @@ def test_reservation_partial_release_and_consume_endpoints(client):
     assert over_payload["status"] == "error"
     assert over_payload["error"]["code"] == "INVALID_RESERVATION_QUANTITY"
 
-def test_unregistered_order_import_endpoint(client, tmp_path: Path):
-    client.post("/api/manufacturers", json={"name": "API-UNREG-MFG"})
-    client.post(
-        "/api/items",
-        json={
-            "item_number": "API-UNREG-ITEM",
-            "manufacturer_name": "API-UNREG-MFG",
-            "category": "Lens",
-        },
-    )
-
-    unregistered_root = tmp_path / "quotations" / "unregistered"
-    registered_root = tmp_path / "quotations" / "registered"
-    supplier_csv_dir = unregistered_root / "csv_files" / "SupplierEndpoint"
-    supplier_pdf_dir = unregistered_root / "pdf_files" / "SupplierEndpoint"
-    supplier_csv_dir.mkdir(parents=True, exist_ok=True)
-    supplier_pdf_dir.mkdir(parents=True, exist_ok=True)
-
-    pdf_path = supplier_pdf_dir / "QE-001.pdf"
-    pdf_path.write_bytes(b"%PDF-1.4 endpoint test")
-
-    csv_path = supplier_csv_dir / "QE-001.csv"
-    with csv_path.open("w", encoding="utf-8", newline="") as fp:
-        writer = csv.DictWriter(
-            fp,
-            fieldnames=[
-                "item_number",
-                "quantity",
-                "quotation_number",
-                "issue_date",
-                "order_date",
-                "expected_arrival",
-                "pdf_link",
-            ],
-        )
-        writer.writeheader()
-        writer.writerow(
-            {
-                "item_number": "API-UNREG-ITEM",
-                "quantity": "5",
-                "quotation_number": "QE-001",
-                "issue_date": "2026-02-20",
-                "order_date": "2026-02-21",
-                "expected_arrival": "2026-03-01",
-                "pdf_link": "QE-001.pdf",
-            }
-        )
-
-    response = client.post(
-        "/api/orders/import-unregistered",
-        json={
-            "unregistered_root": str(unregistered_root),
-            "registered_root": str(registered_root),
-            "continue_on_error": False,
-        },
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["status"] == "ok"
-    assert payload["data"]["succeeded"] == 1
-    assert not csv_path.exists()
-    assert (registered_root / "csv_files" / "SupplierEndpoint" / "QE-001.csv").exists()
-    assert (registered_root / "pdf_files" / "SupplierEndpoint" / "QE-001.pdf").exists()
-
-def test_unregistered_order_import_endpoint_accepts_unregistered_pdf_path(client, tmp_path: Path):
-    client.post("/api/manufacturers", json={"name": "API-UNREG-PATH-MFG"})
-    client.post(
-        "/api/items",
-        json={
-            "item_number": "API-UNREG-PATH-ITEM",
-            "manufacturer_name": "API-UNREG-PATH-MFG",
-            "category": "Lens",
-        },
-    )
-
-    unregistered_root = tmp_path / "quotations" / "unregistered"
-    registered_root = tmp_path / "quotations" / "registered"
-    supplier_csv_dir = unregistered_root / "csv_files" / "SupplierPath"
-    supplier_pdf_dir = unregistered_root / "pdf_files" / "SupplierPath"
-    supplier_csv_dir.mkdir(parents=True, exist_ok=True)
-    supplier_pdf_dir.mkdir(parents=True, exist_ok=True)
-
-    pdf_path = supplier_pdf_dir / "QP-001.pdf"
-    pdf_path.write_bytes(b"%PDF-1.4 endpoint path test")
-
-    csv_path = supplier_csv_dir / "QP-001.csv"
-    with csv_path.open("w", encoding="utf-8", newline="") as fp:
-        writer = csv.DictWriter(
-            fp,
-            fieldnames=[
-                "item_number",
-                "quantity",
-                "quotation_number",
-                "issue_date",
-                "order_date",
-                "expected_arrival",
-                "pdf_link",
-            ],
-        )
-        writer.writeheader()
-        writer.writerow(
-            {
-                "item_number": "API-UNREG-PATH-ITEM",
-                "quantity": "2",
-                "quotation_number": "QP-001",
-                "issue_date": "2026-02-20",
-                "order_date": "2026-02-21",
-                "expected_arrival": "2026-03-01",
-                "pdf_link": "quotations/unregistered/pdf_files/SupplierPath/QP-001.pdf",
-            }
-        )
-
-    response = client.post(
-        "/api/orders/import-unregistered",
-        json={
-            "unregistered_root": str(unregistered_root),
-            "registered_root": str(registered_root),
-            "continue_on_error": False,
-        },
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["status"] == "ok"
-    assert payload["data"]["succeeded"] == 1
-    assert not csv_path.exists()
-    assert (registered_root / "csv_files" / "SupplierPath" / "QP-001.csv").exists()
-    assert (registered_root / "pdf_files" / "SupplierPath" / "QP-001.pdf").exists()
-
-
-def test_orders_batch_upload_endpoint_stages_zip_and_imports(client, workspace_roots: dict[str, Path]):
-    client.post("/api/manufacturers", json={"name": "ZIP-BATCH-MFG"})
-    client.post(
-        "/api/items",
-        json={
-            "item_number": "ZIP-BATCH-ITEM",
-            "manufacturer_name": "ZIP-BATCH-MFG",
-            "category": "Lens",
-        },
-    )
-
-    archive = make_zip_bytes(
-        {
-            "csv_files/SupplierZip/ZIP-001.csv": make_csv_bytes(
-                [
-                    "item_number",
-                    "quantity",
-                    "quotation_number",
-                    "issue_date",
-                    "order_date",
-                    "expected_arrival",
-                    "pdf_link",
-                ],
-                [
-                    {
-                        "item_number": "ZIP-BATCH-ITEM",
-                        "quantity": "3",
-                        "quotation_number": "ZIP-001",
-                        "issue_date": "2026-03-01",
-                        "order_date": "2026-03-02",
-                        "expected_arrival": "2026-03-10",
-                        "pdf_link": "ZIP-001.pdf",
-                    }
-                ],
-            ),
-            "pdf_files/SupplierZip/ZIP-001.pdf": b"%PDF-1.4 zip batch test",
-        }
-    )
-
-    response = client.post(
-        "/api/orders/batch-upload",
-        files={"file": ("orders_batch.zip", archive, "application/zip")},
-        data={"continue_on_error": "true"},
-    )
-
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["status"] == "ok"
-    assert data["succeeded"] == 1
-    assert data["upload_job_id"].startswith("orders_")
-    assert len(data["extracted_files"]) == 2
-    registered_root = workspace_roots["orders_registered_root"]
-    assert (registered_root / "csv_files" / "SupplierZip" / "ZIP-001.csv").exists()
-    assert (registered_root / "pdf_files" / "SupplierZip" / "ZIP-001.pdf").exists()
-
-
-def test_orders_batch_upload_endpoint_keeps_non_ascii_supplier_paths_distinct(
-    client, workspace_roots: dict[str, Path]
-):
-    client.post("/api/manufacturers", json={"name": "ZIP-NONASCII-MFG"})
-    for item_number in ("ZIP-NONASCII-ITEM-A", "ZIP-NONASCII-ITEM-B"):
-        client.post(
-            "/api/items",
-            json={
-                "item_number": item_number,
-                "manufacturer_name": "ZIP-NONASCII-MFG",
-                "category": "Lens",
-            },
-        )
-
-    archive = make_zip_bytes(
-        {
-            "csv_files/供給者A/ZIP-NA-001.csv": make_csv_bytes(
-                [
-                    "item_number",
-                    "quantity",
-                    "quotation_number",
-                    "issue_date",
-                    "order_date",
-                    "expected_arrival",
-                    "pdf_link",
-                ],
-                [
-                    {
-                        "item_number": "ZIP-NONASCII-ITEM-A",
-                        "quantity": "1",
-                        "quotation_number": "ZIP-NA-001",
-                        "issue_date": "2026-03-01",
-                        "order_date": "2026-03-02",
-                        "expected_arrival": "2026-03-10",
-                        "pdf_link": "ZIP-NA-001.pdf",
-                    }
-                ],
-            ),
-            "csv_files/供給者B/ZIP-NA-002.csv": make_csv_bytes(
-                [
-                    "item_number",
-                    "quantity",
-                    "quotation_number",
-                    "issue_date",
-                    "order_date",
-                    "expected_arrival",
-                    "pdf_link",
-                ],
-                [
-                    {
-                        "item_number": "ZIP-NONASCII-ITEM-B",
-                        "quantity": "2",
-                        "quotation_number": "ZIP-NA-002",
-                        "issue_date": "2026-03-03",
-                        "order_date": "2026-03-04",
-                        "expected_arrival": "2026-03-11",
-                        "pdf_link": "ZIP-NA-002.pdf",
-                    }
-                ],
-            ),
-            "pdf_files/供給者A/ZIP-NA-001.pdf": b"%PDF-1.4 supplier A",
-            "pdf_files/供給者B/ZIP-NA-002.pdf": b"%PDF-1.4 supplier B",
-        }
-    )
-
-    response = client.post(
-        "/api/orders/batch-upload",
-        files={"file": ("orders_batch.zip", archive, "application/zip")},
-        data={"continue_on_error": "false"},
-    )
-
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["status"] == "ok"
-    assert data["succeeded"] == 2
-
-    registered_root = workspace_roots["orders_registered_root"]
-    assert (registered_root / "csv_files" / "供給者A" / "ZIP-NA-001.csv").exists()
-    assert (registered_root / "pdf_files" / "供給者A" / "ZIP-NA-001.pdf").exists()
-    assert (registered_root / "csv_files" / "供給者B" / "ZIP-NA-002.csv").exists()
-    assert (registered_root / "pdf_files" / "供給者B" / "ZIP-NA-002.pdf").exists()
-
-
-def test_orders_batch_upload_endpoint_normalizes_path_like_pdf_link_to_filename_contract(
-    client, workspace_roots: dict[str, Path]
-):
-    client.post("/api/manufacturers", json={"name": "ZIP-PATH-MFG"})
-    client.post(
-        "/api/items",
-        json={
-            "item_number": "ZIP-PATH-ITEM",
-            "manufacturer_name": "ZIP-PATH-MFG",
-            "category": "Lens",
-        },
-    )
-
-    raw_pdf_link = "imports/orders/unregistered/pdf_files/SupplierCompat/ZIP-PATH-001.pdf"
-    archive = make_zip_bytes(
-        {
-            "csv_files/SupplierCompat/ZIP-PATH-001.csv": make_csv_bytes(
-                [
-                    "item_number",
-                    "quantity",
-                    "quotation_number",
-                    "issue_date",
-                    "order_date",
-                    "expected_arrival",
-                    "pdf_link",
-                ],
-                [
-                    {
-                        "item_number": "ZIP-PATH-ITEM",
-                        "quantity": "1",
-                        "quotation_number": "ZIP-PATH-001",
-                        "issue_date": "2026-03-01",
-                        "order_date": "2026-03-02",
-                        "expected_arrival": "2026-03-10",
-                        "pdf_link": raw_pdf_link,
-                    }
-                ],
-            ),
-            "pdf_files/SupplierCompat/ZIP-PATH-001.pdf": b"%PDF-1.4 compat path test",
-        }
-    )
-
-    response = client.post(
-        "/api/orders/batch-upload",
-        files={"file": ("orders_batch.zip", archive, "application/zip")},
-        data={"continue_on_error": "false"},
-    )
-
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["status"] == "ok"
-    assert data["succeeded"] == 1
-    assert any(
-        entry.get("kind") == "pdf_link_filename"
-        and entry.get("from") == raw_pdf_link
-        and entry.get("to") == "ZIP-PATH-001.pdf"
-        for entry in data.get("normalizations", [])
-    )
-
-    quotations = client.get("/api/quotations?supplier=SupplierCompat&per_page=50")
-    assert quotations.status_code == 200
-    rows = quotations.json()["data"]
-    assert len(rows) == 1
-    assert rows[0]["pdf_link"] == "imports/orders/registered/pdf_files/SupplierCompat/ZIP-PATH-001.pdf"
-
-
-def test_orders_batch_upload_endpoint_rejects_zip_without_csv(client):
-    archive = make_zip_bytes({"pdf_files/SupplierZip/ZIP-ONLY.pdf": b"%PDF-1.4 no csv"})
-
-    response = client.post(
-        "/api/orders/batch-upload",
-        files={"file": ("orders_batch.zip", archive, "application/zip")},
-        data={"continue_on_error": "true"},
-    )
-
-    assert response.status_code == 422
-    payload = response.json()
-    assert payload["status"] == "error"
-    assert payload["error"]["code"] == "INVALID_ZIP"
-
-
-def test_generated_artifact_endpoints_expose_missing_items_register_download(
-    client, workspace_roots: dict[str, Path]
-):
-    archive = make_zip_bytes(
-        {
-            "csv_files/SupplierArtifact/ART-001.csv": make_csv_bytes(
-                [
-                    "item_number",
-                    "quantity",
-                    "quotation_number",
-                    "issue_date",
-                    "order_date",
-                    "expected_arrival",
-                    "pdf_link",
-                ],
-                [
-                    {
-                        "item_number": "ARTIFACT-MISSING-ITEM",
-                        "quantity": "2",
-                        "quotation_number": "ART-001",
-                        "issue_date": "2026-03-01",
-                        "order_date": "2026-03-02",
-                        "expected_arrival": "2026-03-10",
-                        "pdf_link": "ART-001.pdf",
-                    }
-                ],
-            ),
-            "pdf_files/SupplierArtifact/ART-001.pdf": b"%PDF-1.4 artifact batch test",
-        }
-    )
-
-    response = client.post(
-        "/api/orders/batch-upload",
-        files={"file": ("orders_batch.zip", archive, "application/zip")},
-        data={"continue_on_error": "true"},
-    )
-
-    assert response.status_code == 200
-    data = response.json()["data"]
-    artifact = data["missing_items_register_artifact"]
-    assert artifact["artifact_type"] == "missing_items_register"
-    assert artifact["filename"].endswith(".csv")
-    assert artifact["relative_path"].startswith("imports/items/unregistered/")
-
-    detail = client.get(f"/api/artifacts/{artifact['artifact_id']}")
-    assert detail.status_code == 200
-    assert detail.json()["data"]["artifact_id"] == artifact["artifact_id"]
-
-    listing = client.get("/api/artifacts?artifact_type=missing_items_register")
-    assert listing.status_code == 200
-    listed_ids = {row["artifact_id"] for row in listing.json()["data"]}
-    assert artifact["artifact_id"] in listed_ids
-
-    download = client.get(f"/api/artifacts/{artifact['artifact_id']}/download")
-    assert download.status_code == 200
-    assert download.headers["content-type"].startswith("text/csv")
-    assert "attachment; filename=" in download.headers["content-disposition"]
-    assert "ARTIFACT-MISSING-ITEM" in download.text
-
 def test_order_import_returns_missing_item_details(client):
     output = StringIO()
     writer = csv.DictWriter(
@@ -1092,9 +687,9 @@ def test_order_import_returns_missing_item_details(client):
             "quantity",
             "quotation_number",
             "issue_date",
+            "quotation_document_url",
             "order_date",
             "expected_arrival",
-            "pdf_link",
         ],
     )
     writer.writeheader()
@@ -1104,9 +699,9 @@ def test_order_import_returns_missing_item_details(client):
             "quantity": "2",
             "quotation_number": "QM-001",
             "issue_date": "2026-02-21",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/QM-001",
             "order_date": "2026-02-22",
             "expected_arrival": "2026-03-01",
-            "pdf_link": "QM-001.pdf",
         }
     )
     response = client.post(
@@ -1123,13 +718,14 @@ def test_order_import_returns_missing_item_details(client):
     assert data["rows"][0]["item_number"] == "MISSING-ITEM-001"
     artifact = data["missing_artifact"]
     assert artifact["artifact_type"] == "missing_items_register"
-    assert artifact["relative_path"].startswith("imports/items/unregistered/")
+    assert artifact["detail_path"] == f"/api/artifacts/{artifact['artifact_id']}"
+    assert artifact["download_path"] == f"/api/artifacts/{artifact['artifact_id']}/download"
 
     download = client.get(f"/api/artifacts/{artifact['artifact_id']}/download")
     assert download.status_code == 200
     assert "MISSING-ITEM-001" in download.text
 
-def test_order_import_autonormalizes_pdf_link_filename(client):
+def test_order_import_requires_quotation_document_url_instead_of_pdf_link(client):
     client.post("/api/manufacturers", json={"name": "API-MANUAL-MFG"})
     client.post(
         "/api/items",
@@ -1170,17 +766,11 @@ def test_order_import_autonormalizes_pdf_link_filename(client):
         files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
         data={"supplier_name": "SupplierManual"},
     )
-    assert response.status_code == 200
-    assert response.json()["data"]["status"] == "ok"
-
-    listing = client.get("/api/quotations?supplier=SupplierManual&per_page=50")
-    assert listing.status_code == 200
-    rows = listing.json()["data"]
-    assert len(rows) == 1
-    assert (
-        rows[0]["pdf_link"]
-        == "imports/orders/registered/pdf_files/SupplierManual/Q-MANUAL-001.pdf"
-    )
+    assert response.status_code == 422
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["error"]["code"] == "INVALID_FIELD"
+    assert "quotation_document_url" in payload["error"]["message"]
 
 def test_order_import_rejects_unregistered_pdf_link_path(client):
     client.post("/api/manufacturers", json={"name": "API-MANUAL-VALID-MFG"})
@@ -1226,8 +816,8 @@ def test_order_import_rejects_unregistered_pdf_link_path(client):
     assert response.status_code == 422
     payload = response.json()
     assert payload["status"] == "error"
-    assert payload["error"]["code"] == "INVALID_CSV"
-    assert "imports/orders/registered/pdf_files" in payload["error"]["message"]
+    assert payload["error"]["code"] == "INVALID_FIELD"
+    assert "quotation_document_url" in payload["error"]["message"]
 
 def test_order_import_rejects_duplicate_quotation_for_same_supplier(client):
     client.post("/api/manufacturers", json={"name": "API-DUP-QUOTE-MFG"})
@@ -2760,147 +2350,6 @@ def test_register_missing_upload_endpoint_accepts_skip_unresolved_form_flag(clie
     assert data["created_aliases"] == 0
     assert data["skipped_unresolved"] == 1
     assert data["is_completely_unresolved"] is True
-
-def test_retry_unregistered_file_endpoint(client, tmp_path: Path):
-    unregistered_root = tmp_path / "quotations" / "unregistered"
-    registered_root = tmp_path / "quotations" / "registered"
-    supplier_dir = unregistered_root / "csv_files" / "SupplierRetry"
-    supplier_dir.mkdir(parents=True, exist_ok=True)
-
-    csv_path = supplier_dir / "QR-001.csv"
-    with csv_path.open("w", encoding="utf-8", newline="") as fp:
-        writer = csv.DictWriter(
-            fp,
-            fieldnames=[
-                "item_number",
-                "quantity",
-                "quotation_number",
-                "issue_date",
-                "order_date",
-                "expected_arrival",
-                "pdf_link",
-            ],
-        )
-        writer.writeheader()
-        writer.writerow(
-            {
-                "item_number": "BATCH-MISSING-001",
-                "quantity": "3",
-                "quotation_number": "QR-001",
-                "issue_date": "2026-02-22",
-                "order_date": "2026-02-23",
-                "expected_arrival": "2026-03-05",
-                "pdf_link": "",
-            }
-        )
-
-    initial = client.post(
-        "/api/orders/import-unregistered",
-        json={
-            "unregistered_root": str(unregistered_root),
-            "registered_root": str(registered_root),
-            "continue_on_error": False,
-        },
-    )
-    assert initial.status_code == 200
-    initial_data = initial.json()["data"]
-    assert initial_data["missing_items"] == 1
-    assert initial_data["files"][0]["status"] == "missing_items"
-
-    reg = client.post(
-        "/api/register-missing/rows",
-        json={
-            "rows": [
-                {
-                    "supplier": "SupplierRetry",
-                    "item_number": "BATCH-MISSING-001",
-                    "resolution_type": "new_item",
-                    "category": "Lens",
-                }
-            ]
-        },
-    )
-    assert reg.status_code == 200
-    assert reg.json()["data"]["created_items"] == 1
-
-    retry = client.post(
-        "/api/orders/retry-unregistered-file",
-        json={
-            "csv_path": str(csv_path),
-            "unregistered_root": str(unregistered_root),
-            "registered_root": str(registered_root),
-        },
-    )
-    assert retry.status_code == 200
-    retry_data = retry.json()["data"]
-    assert retry_data["status"] == "ok"
-    assert retry_data["imported_count"] == 1
-    assert not csv_path.exists()
-    assert (registered_root / "csv_files" / "SupplierRetry" / "QR-001.csv").exists()
-
-def test_retry_unregistered_legacy_layout_returns_warnings(client, tmp_path: Path):
-    client.post("/api/manufacturers", json={"name": "API-LEGACY-MFG"})
-    client.post(
-        "/api/items",
-        json={
-            "item_number": "API-LEGACY-ITEM",
-            "manufacturer_name": "API-LEGACY-MFG",
-            "category": "Lens",
-        },
-    )
-
-    unregistered_root = tmp_path / "quotations" / "unregistered"
-    registered_root = tmp_path / "quotations" / "registered"
-    legacy_supplier_dir = unregistered_root / "LegacySupplier"
-    legacy_supplier_dir.mkdir(parents=True, exist_ok=True)
-
-    pdf_path = legacy_supplier_dir / "QL-001.pdf"
-    pdf_path.write_bytes(b"%PDF-1.4 legacy")
-
-    csv_path = legacy_supplier_dir / "QL-001.csv"
-    with csv_path.open("w", encoding="utf-8", newline="") as fp:
-        writer = csv.DictWriter(
-            fp,
-            fieldnames=[
-                "item_number",
-                "quantity",
-                "quotation_number",
-                "issue_date",
-                "order_date",
-                "expected_arrival",
-                "pdf_link",
-            ],
-        )
-        writer.writeheader()
-        writer.writerow(
-            {
-                "item_number": "API-LEGACY-ITEM",
-                "quantity": "1",
-                "quotation_number": "QL-001",
-                "issue_date": "2026-02-25",
-                "order_date": "2026-02-26",
-                "expected_arrival": "2026-03-03",
-                "pdf_link": "QL-001.pdf",
-            }
-        )
-
-    retry = client.post(
-        "/api/orders/retry-unregistered-file",
-        json={
-            "csv_path": str(csv_path),
-            "unregistered_root": str(unregistered_root),
-            "registered_root": str(registered_root),
-        },
-    )
-    assert retry.status_code == 200
-    retry_data = retry.json()["data"]
-    assert retry_data["status"] == "ok"
-    assert retry_data["imported_count"] == 1
-    assert retry_data["warnings"]
-    assert any("Legacy unregistered CSV layout detected" in msg for msg in retry_data["warnings"])
-    assert not csv_path.exists()
-    assert (registered_root / "csv_files" / "LegacySupplier" / "QL-001.csv").exists()
-    assert (registered_root / "pdf_files" / "LegacySupplier" / "QL-001.pdf").exists()
 
 def test_delete_order_endpoint(client):
     client.post("/api/manufacturers", json={"name": "API-DEL-ORDER-MFG"})

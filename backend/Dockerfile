@@ -15,4 +15,4 @@ COPY . /app
 
 EXPOSE 8000
 
-CMD ["uv", "run", "gunicorn", "main:app", "-k", "uvicorn.workers.UvicornWorker", "-w", "4", "-b", "0.0.0.0:8000", "--access-logfile", "-", "--error-logfile", "-"]
+CMD ["sh", "-c", "uv run gunicorn main:app -k uvicorn.workers.UvicornWorker -w ${WEB_CONCURRENCY:-4} -b 0.0.0.0:${PORT:-${APP_PORT:-8000}} --access-logfile - --error-logfile -"]

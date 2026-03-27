@@ -79,6 +79,12 @@ When updating this application, follow this order:
 5. Run automated tests with `uv run` as available:
    - Full backend tests: `uv run python -m pytest`
    - Or targeted tests for touched behavior (for faster iteration), then run full suite before completion when the environment supports it
+   - For this repository, backend pytest may need the backend project selected explicitly from the repo root:
+     - `uv run --project backend python -m pytest ...`
+   - When running backend tests from the repo root in this repository, set `PYTHONPATH=backend` and prefer `--import-mode=importlib` if package-style collection fails
+   - Docker-backed PostgreSQL test runs should use:
+     - `docker compose -f docker-compose.test.yml up -d db-test`
+     - `TEST_DATABASE_URL=postgresql+psycopg://develop:test@localhost:5433/materials_test`
    - If local `uv` test execution is blocked by environment drift, dependency issues, or sandbox/runtime differences, record that clearly and continue with Docker runtime validation instead of guessing
 6. Validate runtime behavior for changed user flows (API/CLI/UI path that was modified).
 7. Update documentation in the same change set:

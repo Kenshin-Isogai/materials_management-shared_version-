@@ -300,7 +300,7 @@ export function UsersPage() {
           ) : null}
 
           <div className="overflow-x-auto">
-            <table className="sticky-header min-w-full text-sm">
+            <table className="min-w-full text-sm">
               <thead>
                 <tr className="text-left text-slate-500">
                   <th className="px-3 py-2">Username</th>

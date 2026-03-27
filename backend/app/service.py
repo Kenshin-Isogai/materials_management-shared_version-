@@ -14,7 +14,6 @@ import shutil
 import sqlite3
 from typing import Any, Iterable
 from uuid import uuid4
-import zipfile
 
 from .config import (
     DEFAULT_EXPORTS_DIR,
@@ -22,23 +21,19 @@ from .config import (
     ITEMS_IMPORT_STAGING_ROOT,
     ITEMS_IMPORT_UNREGISTERED_ROOT,
     ITEMS_IMPORT_REGISTERED_ROOT,
-    ORDERS_IMPORT_STAGING_ROOT,
 )
 from .errors import AppError
 from .order_import_paths import (
     OrderImportRoots,
     build_roots,
     ensure_roots,
-    is_legacy_supplier_dir,
-    iter_unregistered_order_csvs,
-    normalize_pdf_link,
     registered_csv_supplier_dir,
     registered_pdf_supplier_dir,
     safe_workspace_relative,
     supplier_from_unregistered_csv_path,
-    validate_retry_unregistered_csv_path,
 )
 from .utils import (
+    normalize_external_document_url,
     normalize_optional_date,
     now_jst_iso,
     require_non_empty,
@@ -96,7 +91,27 @@ def _decode_generated_artifact_id(artifact_id: str) -> str:
     return decoded
 
 
-def _build_generated_artifact(
+def _artifact_payload_from_row(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+    data = dict(row)
+    artifact_id = str(data["artifact_id"])
+    payload = {
+        "artifact_id": artifact_id,
+        "artifact_type": str(data["artifact_type"]),
+        "filename": str(data["filename"]),
+        "size_bytes": int(data["size_bytes"]),
+        "created_at": str(data["created_at"]),
+        "detail_path": f"/api/artifacts/{artifact_id}",
+        "download_path": f"/api/artifacts/{artifact_id}/download",
+    }
+    if data.get("source_job_type"):
+        payload["source_job_type"] = str(data["source_job_type"])
+    if data.get("source_job_id"):
+        payload["source_job_id"] = str(data["source_job_id"])
+    return payload
+
+
+def _register_generated_artifact(
+    conn: sqlite3.Connection,
     path: Path,
     *,
     source_job_type: str | None = None,
@@ -110,21 +125,81 @@ def _build_generated_artifact(
             status_code=404,
         )
 
-    relative_path = safe_workspace_relative(resolved)
     stats = resolved.stat()
-    artifact = {
-        "artifact_id": _encode_generated_artifact_id(relative_path),
-        "artifact_type": _infer_generated_artifact_type(resolved),
-        "filename": resolved.name,
-        "relative_path": relative_path,
-        "size_bytes": int(stats.st_size),
-        "created_at": datetime.fromtimestamp(stats.st_mtime).isoformat(timespec="seconds"),
-    }
-    if source_job_type:
-        artifact["source_job_type"] = source_job_type
-    if source_job_id:
-        artifact["source_job_id"] = source_job_id
-    return artifact
+    created_at = datetime.fromtimestamp(stats.st_mtime).isoformat(timespec="seconds")
+    artifact_type = _infer_generated_artifact_type(resolved)
+    existing = conn.execute(
+        """
+        SELECT
+            artifact_id,
+            artifact_type,
+            filename,
+            storage_path,
+            size_bytes,
+            created_at,
+            source_job_type,
+            source_job_id
+        FROM generated_artifacts
+        WHERE storage_path = ?
+        ORDER BY created_at DESC, artifact_id DESC
+        LIMIT 1
+        """,
+        (str(resolved),),
+    ).fetchone()
+    if existing is not None:
+        return _artifact_payload_from_row(existing)
+
+    artifact_id = uuid4().hex
+    conn.execute(
+        """
+        INSERT INTO generated_artifacts (
+            artifact_id,
+            artifact_type,
+            filename,
+            storage_path,
+            size_bytes,
+            created_at,
+            source_job_type,
+            source_job_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            artifact_id,
+            artifact_type,
+            resolved.name,
+            str(resolved),
+            int(stats.st_size),
+            created_at,
+            source_job_type,
+            source_job_id,
+        ),
+    )
+    return _artifact_payload_from_row(
+        {
+            "artifact_id": artifact_id,
+            "artifact_type": artifact_type,
+            "filename": resolved.name,
+            "size_bytes": int(stats.st_size),
+            "created_at": created_at,
+            "source_job_type": source_job_type,
+            "source_job_id": source_job_id,
+        }
+    )
+
+
+def _build_generated_artifact(
+    conn: sqlite3.Connection,
+    path: Path,
+    *,
+    source_job_type: str | None = None,
+    source_job_id: str | None = None,
+) -> dict[str, Any]:
+    return _register_generated_artifact(
+        conn,
+        path,
+        source_job_type=source_job_type,
+        source_job_id=source_job_id,
+    )
 
 
 def _resolve_generated_artifact_path(artifact_id: str) -> Path:
@@ -149,25 +224,67 @@ def _resolve_generated_artifact_path(artifact_id: str) -> Path:
     )
 
 
-def get_generated_artifact(artifact_id: str) -> dict[str, Any]:
-    return _build_generated_artifact(_resolve_generated_artifact_path(artifact_id))
+def _get_generated_artifact_row(conn: sqlite3.Connection, artifact_id: str) -> sqlite3.Row | None:
+    return conn.execute(
+        """
+        SELECT
+            artifact_id,
+            artifact_type,
+            filename,
+            storage_path,
+            size_bytes,
+            created_at,
+            source_job_type,
+            source_job_id
+        FROM generated_artifacts
+        WHERE artifact_id = ?
+        """,
+        (artifact_id,),
+    ).fetchone()
 
 
-def list_generated_artifacts(*, artifact_type: str | None = None) -> list[dict[str, Any]]:
+def get_generated_artifact(conn: sqlite3.Connection, artifact_id: str) -> dict[str, Any]:
+    row = _get_generated_artifact_row(conn, artifact_id)
+    if row is not None:
+        path = Path(str(row["storage_path"]))
+        if path.exists() and path.is_file():
+            return _artifact_payload_from_row(row)
+    return _register_generated_artifact(conn, _resolve_generated_artifact_path(artifact_id))
+
+
+def list_generated_artifacts(conn: sqlite3.Connection, *, artifact_type: str | None = None) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for root in _generated_artifact_roots():
-        if not root.exists():
+    sql = """
+        SELECT
+            artifact_id,
+            artifact_type,
+            filename,
+            storage_path,
+            size_bytes,
+            created_at,
+            source_job_type,
+            source_job_id
+        FROM generated_artifacts
+    """
+    params: tuple[Any, ...] = tuple()
+    if artifact_type:
+        sql += " WHERE artifact_type = ?"
+        params = (artifact_type,)
+    sql += " ORDER BY created_at DESC, artifact_id DESC"
+    for row in conn.execute(sql, params).fetchall():
+        path = Path(str(row["storage_path"]))
+        if not path.exists() or not path.is_file():
             continue
-        for path in sorted(root.glob("*missing_items_registration*.csv"), key=lambda p: p.stat().st_mtime, reverse=True):
-            artifact = _build_generated_artifact(path)
-            if artifact_type and artifact["artifact_type"] != artifact_type:
-                continue
-            rows.append(artifact)
-    rows.sort(key=lambda item: (str(item["created_at"]), str(item["filename"])), reverse=True)
+        rows.append(_artifact_payload_from_row(row))
     return rows
 
 
-def get_generated_artifact_download(artifact_id: str) -> tuple[str, bytes]:
+def get_generated_artifact_download(conn: sqlite3.Connection, artifact_id: str) -> tuple[str, bytes]:
+    row = _get_generated_artifact_row(conn, artifact_id)
+    if row is not None:
+        path = Path(str(row["storage_path"]))
+        if path.exists() and path.is_file():
+            return str(row["filename"]), path.read_bytes()
     path = _resolve_generated_artifact_path(artifact_id)
     return path.name, path.read_bytes()
 
@@ -252,102 +369,6 @@ def _move_file_preserve_name_bytes(content: bytes, dst_dir: Path, filename: str)
             candidate.write_bytes(content)
             return candidate
         index += 1
-
-
-def _extract_orders_batch_zip_to_staging(
-    archive_name: str,
-    archive_content: bytes,
-    *,
-    staging_root: str | Path | None = None,
-) -> dict[str, Any]:
-    if not archive_content:
-        raise AppError(
-            code="INVALID_REQUEST",
-            message="Uploaded ZIP file is empty",
-            status_code=422,
-        )
-
-    base_root = Path(staging_root) if staging_root else ORDERS_IMPORT_STAGING_ROOT
-    job_id, job_root = _create_staging_job_root(base_root, "orders")
-    package_path = job_root / _safe_staging_filename(archive_name or "orders_batch.zip", "orders_batch.zip")
-    package_path.write_bytes(archive_content)
-
-    unregistered_root = job_root / "unregistered"
-    roots = build_roots(unregistered_root=unregistered_root, registered_root=job_root / "registered_placeholder")
-    ensure_roots(roots)
-
-    extracted_files: list[str] = []
-    try:
-        with zipfile.ZipFile(package_path) as archive:
-            for member in archive.infolist():
-                if member.is_dir():
-                    continue
-                member_name = member.filename.replace("\\", "/")
-                normalized = Path(member_name)
-                parts = [part for part in normalized.parts if part not in {"", ".", ".."}]
-                if not parts:
-                    continue
-                lowered = [part.lower() for part in parts]
-                target_root: Path | None = None
-                supplier_parts: list[str] = []
-
-                if "csv_files" in lowered:
-                    idx = lowered.index("csv_files")
-                    target_root = roots.unregistered_csv_root
-                    supplier_parts = parts[idx + 1 :]
-                elif "pdf_files" in lowered:
-                    idx = lowered.index("pdf_files")
-                    target_root = roots.unregistered_pdf_root
-                    supplier_parts = parts[idx + 1 :]
-                else:
-                    suffix = Path(*parts)
-                    if suffix.suffix.lower() == ".csv":
-                        target_root = roots.unregistered_csv_root
-                        supplier_parts = suffix.parts
-                    elif suffix.suffix.lower() == ".pdf":
-                        target_root = roots.unregistered_pdf_root
-                        supplier_parts = suffix.parts
-
-                if target_root is None or not supplier_parts:
-                    continue
-
-                relative_target = Path(*[_safe_staging_component(part, "UNKNOWN") for part in supplier_parts])
-                if relative_target.suffix == "":
-                    continue
-                destination = (target_root / relative_target).resolve()
-                try:
-                    destination.relative_to(target_root.resolve())
-                except ValueError as exc:
-                    raise AppError(
-                        code="INVALID_ZIP",
-                        message=f"Invalid ZIP entry path: {member.filename}",
-                        status_code=422,
-                    ) from exc
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                with archive.open(member) as source, destination.open("wb") as target_fp:
-                    shutil.copyfileobj(source, target_fp)
-                extracted_files.append(str(destination))
-    except zipfile.BadZipFile as exc:
-        raise AppError(
-            code="INVALID_ZIP",
-            message="Uploaded file must be a valid ZIP archive",
-            status_code=422,
-        ) from exc
-
-    if not list(roots.unregistered_csv_root.rglob("*.csv")):
-        raise AppError(
-            code="INVALID_ZIP",
-            message="ZIP package must contain at least one order CSV file",
-            status_code=422,
-        )
-
-    return {
-        "job_id": job_id,
-        "job_root": str(job_root),
-        "archive_path": str(package_path),
-        "unregistered_root": str(unregistered_root),
-        "extracted_files": extracted_files,
-    }
 
 
 def list_users(
@@ -1052,7 +1073,7 @@ def _get_or_create_quotation(
     supplier_id: int,
     quotation_number: str,
     issue_date: str | None,
-    pdf_link: str | None,
+    quotation_document_url: str | None,
 ) -> int:
     normalized_number = require_non_empty(quotation_number, "quotation_number")
     normalized_issue_date = normalize_optional_date(issue_date, "issue_date")
@@ -1068,18 +1089,18 @@ def _get_or_create_quotation(
             """
             UPDATE quotations
             SET issue_date = COALESCE(?, issue_date),
-                pdf_link = COALESCE(?, pdf_link)
+                quotation_document_url = COALESCE(?, quotation_document_url)
             WHERE quotation_id = ?
             """,
-            (normalized_issue_date, pdf_link, int(row["quotation_id"])),
+            (normalized_issue_date, quotation_document_url, int(row["quotation_id"])),
         )
         return int(row["quotation_id"])
     cur = conn.execute(
         """
-        INSERT INTO quotations (supplier_id, quotation_number, issue_date, pdf_link)
+        INSERT INTO quotations (supplier_id, quotation_number, issue_date, quotation_document_url)
         VALUES (?, ?, ?, ?)
         """,
-        (supplier_id, normalized_number, normalized_issue_date, pdf_link),
+        (supplier_id, normalized_number, normalized_issue_date, quotation_document_url),
     )
     return int(cur.lastrowid)
 
@@ -1105,6 +1126,14 @@ def _load_csv_rows_from_content(content: bytes) -> list[dict[str, str]]:
 
 def _read_csv_text(content: bytes) -> str:
     return _decode_csv_bytes(content)
+
+
+def _read_import_job_source_text(content: bytes) -> str:
+    """Capture a text snapshot for import jobs even when the CSV bytes are malformed."""
+    try:
+        return _read_csv_text(content)
+    except UnicodeDecodeError:
+        return content.decode("utf-8-sig", errors="replace")
 
 
 def _load_csv_rows_from_path(path: str | Path) -> list[dict[str, str]]:
@@ -1157,9 +1186,10 @@ IMPORT_TEMPLATE_SPECS: dict[str, dict[str, Any]] = {
             "quantity",
             "quotation_number",
             "issue_date",
+            "quotation_document_url",
             "order_date",
             "expected_arrival",
-            "pdf_link",
+            "purchase_order_document_url",
         ],
     },
     "reservations": {
@@ -1600,6 +1630,13 @@ def _record_import_job_effect(
 
 
 def _finalize_import_job(conn: sqlite3.Connection, *, import_job_id: int, result: dict[str, Any]) -> None:
+    result_status = str(result["status"])
+    if result_status == "missing_items":
+        job_status = "partial"
+    elif result_status in {"ok", "partial", "error"}:
+        job_status = result_status
+    else:
+        job_status = "error"
     conn.execute(
         """
         UPDATE import_jobs
@@ -1612,7 +1649,7 @@ def _finalize_import_job(conn: sqlite3.Connection, *, import_job_id: int, result
         WHERE import_job_id = ?
         """,
         (
-            result["status"],
+            job_status,
             int(result["processed"]),
             int(result["created_count"]),
             int(result["duplicate_count"]),
@@ -1633,6 +1670,72 @@ def _normalize_import_job_effect_row(row: sqlite3.Row) -> dict[str, Any]:
     data["before_state"] = _from_json_text(data.get("before_state"))
     data["after_state"] = _from_json_text(data.get("after_state"))
     return data
+
+
+def _legacy_batch_file_public_name(path_text: str | None, fallback: str = "batch.csv") -> str:
+    if path_text:
+        name = Path(str(path_text)).name.strip()
+        if name:
+            return name
+    return fallback
+
+
+def _record_legacy_order_batch_file_effect(
+    conn: sqlite3.Connection,
+    *,
+    import_job_id: int,
+    row_number: int,
+    file_report: dict[str, Any],
+    unregistered_root: Path,
+    registered_root: Path,
+    staged_file_id: int | None = None,
+) -> int:
+    status_text = str(file_report.get("status") or "error")
+    effect_status = "created" if status_text == "ok" else "error"
+    effect_type = {
+        "ok": "legacy_order_batch_file_imported",
+        "missing_items": "legacy_order_batch_file_missing_items",
+    }.get(status_text, "legacy_order_batch_file_error")
+    source_path = str(file_report.get("file") or "")
+    moved_to = str(file_report.get("moved_to") or "")
+    supplier_name = str(file_report.get("supplier") or "")
+    cur = conn.execute(
+        """
+        INSERT INTO import_job_effects (
+            import_job_id,
+            row_number,
+            status,
+            effect_type,
+            supplier_name,
+            item_number,
+            message,
+            after_state,
+            created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            import_job_id,
+            row_number,
+            effect_status,
+            effect_type,
+            supplier_name or None,
+            _legacy_batch_file_public_name(source_path),
+            str(file_report.get("error") or ""),
+            _to_json_text(
+                {
+                    "source_csv_path": source_path,
+                    "registered_csv_path": moved_to or None,
+                    "supplier_name": supplier_name or None,
+                    "public_file_name": _legacy_batch_file_public_name(source_path),
+                    "staged_file_id": staged_file_id,
+                    "unregistered_root": str(unregistered_root),
+                    "registered_root": str(registered_root),
+                }
+            ),
+            now_jst_iso(),
+        ),
+    )
+    return int(cur.lastrowid)
 
 
 def _import_job_matches_state(
@@ -1880,13 +1983,23 @@ def _resolve_pdf_source_path(
     *,
     prefer_filename_only: bool = False,
 ) -> tuple[Path | None, str, list[dict[str, str]], list[str]]:
-    return normalize_pdf_link(
-        pdf_link=pdf_link,
-        supplier_name=supplier_name,
-        roots=roots,
-        csv_path=csv_path,
-        prefer_filename_only=prefer_filename_only,
-    )
+    raw = (pdf_link or "").strip()
+    if not raw:
+        return None, "", [], []
+    filename = Path(raw).name.strip() if prefer_filename_only else raw
+    if Path(filename).suffix.lower() != ".pdf":
+        return None, filename, [], [f"Unable to resolve pdf_link '{raw}' for supplier '{supplier_name}'."]
+    candidates = [
+        (roots.unregistered_pdf_root / supplier_name / filename).resolve(),
+        (roots.registered_pdf_root / supplier_name / filename).resolve(),
+    ]
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            normalizations: list[dict[str, str]] = []
+            if filename != raw:
+                normalizations.append({"kind": "pdf_link_filename", "from": raw, "to": filename})
+            return candidate, filename, normalizations, []
+    return None, filename, [], [f"Unable to resolve pdf_link '{raw}' for supplier '{supplier_name}'."]
 
 
 def list_items(
@@ -4732,7 +4845,7 @@ def list_orders(
             s.name AS supplier_name,
             q.quotation_number,
             q.issue_date,
-            q.pdf_link
+            q.quotation_document_url
         FROM orders o
         JOIN items_master im ON im.item_id = o.item_id
         JOIN quotations q ON q.quotation_id = o.quotation_id
@@ -4753,7 +4866,7 @@ def get_order(conn: sqlite3.Connection, order_id: int) -> dict[str, Any]:
             p.name AS project_name,
             q.quotation_number,
             q.issue_date,
-            q.pdf_link,
+            q.quotation_document_url,
             s.supplier_id,
             s.name AS supplier_name
         FROM orders o
@@ -4843,6 +4956,11 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
         else current.get("expected_arrival")
     )
     status = payload.get("status")
+    purchase_order_document_url = (
+        normalize_external_document_url(payload.get("purchase_order_document_url"), "purchase_order_document_url")
+        if "purchase_order_document_url" in payload
+        else current.get("purchase_order_document_url")
+    )
     if status and status != "Ordered":
         raise AppError(
             code="INVALID_ORDER_STATUS",
@@ -4900,6 +5018,9 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
     if split_quantity is None:
         updates = ["expected_arrival = ?", "status = COALESCE(?, status)"]
         params: list[Any] = [expected_arrival, status]
+        if "purchase_order_document_url" in payload:
+            updates.append("purchase_order_document_url = ?")
+            params.append(purchase_order_document_url)
         if "project_id" in payload:
             updates.append("project_id = ?")
             params.append(project_id)
@@ -4999,8 +5120,8 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
         """
         INSERT INTO orders (
             item_id, quotation_id, project_id, project_id_manual, order_amount, ordered_quantity,
-            ordered_item_number, order_date, expected_arrival, arrival_date, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'Ordered')
+            ordered_item_number, order_date, expected_arrival, arrival_date, purchase_order_document_url, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 'Ordered')
         """,
         (
             current["item_id"],
@@ -5012,6 +5133,7 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
             current["ordered_item_number"],
             current["order_date"],
             expected_arrival,
+            current.get("purchase_order_document_url"),
         ),
     )
     split_order_id = int(cur.lastrowid)
@@ -5033,7 +5155,8 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
         next_row["expected_arrival"] = expected_arrival or ""
         next_row["order_date"] = str(current.get("order_date") or "")
         next_row["issue_date"] = str(current.get("issue_date") or "")
-        next_row["pdf_link"] = str(current.get("pdf_link") or "")
+        next_row["quotation_document_url"] = str(current.get("quotation_document_url") or "")
+        next_row["purchase_order_document_url"] = str(current.get("purchase_order_document_url") or "")
         return next_row
 
     _insert_order_csv_row_after_match(roots, row_matcher=row_matcher_for_insert, row_builder=_builder)
@@ -5214,84 +5337,32 @@ def _order_csv_row_matcher_for_identity(
     return _order_csv_row_matcher_for_occurrence(order_row, occurrence_index)
 
 
-def _normalize_manual_pdf_link(
-    pdf_link: str | None,
+def _normalize_required_quotation_document_url(
+    value: str | None,
     *,
-    supplier_name: str,
     row_index: int,
-    allow_noncanonical_path: bool = False,
+) -> str:
+    normalized = normalize_external_document_url(
+        value,
+        f"quotation_document_url (row {row_index})",
+        required=True,
+    )
+    assert normalized is not None
+    return normalized
+
+
+def _resolve_import_quotation_document_url(
+    row: dict[str, Any],
+    *,
+    row_index: int,
+    allow_legacy_pdf_field: bool = False,
 ) -> str | None:
-    raw = (pdf_link or "").strip()
-    if not raw:
-        return None
-
-    normalized = raw.replace("\\", "/")
-    parts = [part for part in normalized.split("/") if part and part != "."]
-    if not parts:
-        return None
-
-    if len(parts) == 1:
-        filename = parts[0]
-        if Path(filename).suffix.lower() != ".pdf":
-            raise AppError(
-                code="INVALID_CSV",
-                message=(
-                    f"pdf_link must be a PDF filename or canonical registered path "
-                    f"(row {row_index})"
-                ),
-                status_code=422,
-            )
-        return f"imports/orders/registered/pdf_files/{supplier_name}/{filename}"
-
-    if allow_noncanonical_path:
-        filename = parts[-1]
-        if Path(filename).suffix.lower() != ".pdf":
-            raise AppError(
-                code="INVALID_CSV",
-                message=f"pdf_link target must be a .pdf file (row {row_index})",
-                status_code=422,
-            )
-        return "/".join(parts)
-
-    # Accept both new (6 segments) and legacy (5 segments) canonical paths
-    expected_new_prefix = ["imports", "orders", "registered", "pdf_files"]
-    expected_legacy_prefix = ["quotations", "registered", "pdf_files"]
-
-    if len(parts) == 6 and [part.lower() for part in parts[:4]] == expected_new_prefix:
-        supplier_in_path = parts[4]
-        filename = parts[5]
-    elif len(parts) == 5 and [part.lower() for part in parts[:3]] == expected_legacy_prefix:
-        supplier_in_path = parts[3]
-        filename = parts[4]
-    else:
-        raise AppError(
-            code="INVALID_CSV",
-            message=(
-                "pdf_link must be empty, a PDF filename, or "
-                "'imports/orders/registered/pdf_files/<supplier>/<file>.pdf' "
-                f"(row {row_index})"
-            ),
-            status_code=422,
-        )
-
-    if supplier_in_path != supplier_name and supplier_in_path.lower() != supplier_name.lower():
-        raise AppError(
-            code="INVALID_CSV",
-            message=(
-                f"pdf_link supplier folder '{supplier_in_path}' does not match "
-                f"selected supplier '{supplier_name}' (row {row_index})"
-            ),
-            status_code=422,
-        )
-
-    if Path(filename).suffix.lower() != ".pdf":
-        raise AppError(
-            code="INVALID_CSV",
-            message=f"pdf_link target must be a .pdf file (row {row_index})",
-            status_code=422,
-        )
-
-    return f"imports/orders/registered/pdf_files/{supplier_name}/{filename}"
+    raw_value = row.get("quotation_document_url")
+    if allow_legacy_pdf_field and not str(raw_value or "").strip():
+        legacy_pdf_link = str(row.get("pdf_link") or "").strip()
+        if legacy_pdf_link:
+            return None
+    return _normalize_required_quotation_document_url(raw_value, row_index=row_index)
 
 
 def _iter_order_csv_files(roots: OrderImportRoots) -> list[Path]:
@@ -5355,6 +5426,15 @@ def _rewrite_order_csv_rows(
         if not changed:
             continue
 
+        extra_keys = [
+            key
+            for row in next_rows
+            for key in row.keys()
+            if key not in fieldnames
+        ]
+        if extra_keys:
+            fieldnames.extend(key for key in extra_keys if key not in fieldnames)
+
         with csv_file.open("w", encoding="utf-8", newline="") as fp:
             writer = csv.DictWriter(fp, fieldnames=fieldnames)
             writer.writeheader()
@@ -5397,6 +5477,9 @@ def _insert_order_csv_row_after_match(
             if built_row is None:
                 inserted = True
                 continue
+            extra_keys = [key for key in built_row.keys() if key not in fieldnames]
+            if extra_keys:
+                fieldnames.extend(key for key in extra_keys if key not in fieldnames)
             merged = {key: built_row.get(key, row.get(key, "")) for key in fieldnames}
             next_rows.append(merged)
             inserted = True
@@ -6161,10 +6244,14 @@ def preview_orders_import_from_rows(
                 status_code=422,
             ) from exc
 
-        normalized_pdf_link = _normalize_manual_pdf_link(
-            row.get("pdf_link"),
-            supplier_name=supplier_name_value,
+        quotation_document_url = _resolve_import_quotation_document_url(
+            row,
             row_index=row_number,
+            allow_legacy_pdf_field=False,
+        )
+        purchase_order_document_url = normalize_external_document_url(
+            row.get("purchase_order_document_url"),
+            f"purchase_order_document_url (row {row_number})",
         )
         order_date = normalize_optional_date(row.get("order_date"), f"order_date (row {row_number})")
         if order_date is None:
@@ -6195,7 +6282,8 @@ def preview_orders_import_from_rows(
             "issue_date": issue_date,
             "order_date": order_date,
             "expected_arrival": expected_arrival,
-            "pdf_link": normalized_pdf_link,
+            "quotation_document_url": quotation_document_url,
+            "purchase_order_document_url": purchase_order_document_url,
             "status": status,
             "confidence_score": int(best_candidate["confidence_score"]) if best_candidate else None,
             "suggested_match": suggested_match,
@@ -6280,11 +6368,14 @@ def _process_order_rows_for_import(
                 message=f"quantity must be an integer > 0 (row {idx})",
                 status_code=422,
             ) from exc
-        normalized_pdf_link = _normalize_manual_pdf_link(
-            row.get("pdf_link"),
-            supplier_name=supplier_name,
+        quotation_document_url = _resolve_import_quotation_document_url(
+            row,
             row_index=idx,
-            allow_noncanonical_path=allow_noncanonical_pdf_link,
+            allow_legacy_pdf_field=allow_noncanonical_pdf_link,
+        )
+        purchase_order_document_url = normalize_external_document_url(
+            row.get("purchase_order_document_url"),
+            f"purchase_order_document_url (row {idx})",
         )
         item_id, units_per_order = _resolve_order_item(conn, supplier_id, item_number)
         override = (row_overrides or {}).get(idx, {})
@@ -6329,12 +6420,14 @@ def _process_order_rows_for_import(
         resolved.append(
             {
                 "item_id": item_id,
+                "row_number": idx,
                 "quotation_number": require_non_empty(
                     str(row.get("quotation_number", "")),
                     f"quotation_number (row {idx})",
                 ),
                 "issue_date": normalize_optional_date(row.get("issue_date"), f"issue_date (row {idx})"),
-                "pdf_link": normalized_pdf_link,
+                "quotation_document_url": quotation_document_url,
+                "purchase_order_document_url": purchase_order_document_url,
                 "order_amount": ordered_quantity * units_per_order,
                 "ordered_quantity": ordered_quantity,
                 "ordered_item_number": item_number,
@@ -6360,6 +6453,7 @@ def import_orders_from_rows(
     allow_noncanonical_pdf_link: bool = False,
     row_overrides: dict[str | int, Any] | None = None,
     alias_saves: list[dict[str, Any]] | None = None,
+    import_job_id: int | None = None,
 ) -> dict[str, Any]:
     sid = _resolve_supplier_id(conn, supplier_id, supplier_name)
     normalized_overrides = _normalize_order_import_overrides(row_overrides)
@@ -6384,11 +6478,29 @@ def import_orders_from_rows(
             source_name=source_name,
             output_dir=missing_output_dir,
         )
+        if import_job_id is not None:
+            for row in missing:
+                _record_import_job_effect(
+                    conn,
+                    import_job_id=import_job_id,
+                    row_number=int(row["row"]),
+                    status="error",
+                    effect_type="order_missing_item",
+                    item_number=str(row.get("item_number") or ""),
+                    supplier_name=str(row.get("supplier") or ""),
+                    message="Ordered item number is not yet registered in the catalog",
+                    code="ORDER_ITEM_NOT_FOUND",
+                )
         return {
             "status": "missing_items",
             "missing_count": len(missing),
             "missing_csv_path": missing_csv_path,
-            "missing_artifact": _build_generated_artifact(Path(missing_csv_path)),
+            "missing_artifact": _build_generated_artifact(
+                conn,
+                Path(missing_csv_path),
+                source_job_type="orders" if import_job_id is not None else None,
+                source_job_id=str(import_job_id) if import_job_id is not None else None,
+            ),
             "rows": missing,
         }
 
@@ -6398,6 +6510,25 @@ def import_orders_from_rows(
         [str(row["quotation_number"]) for row in resolved],
     )
     if duplicated:
+        if import_job_id is not None:
+            duplicate_set = set(duplicated)
+            for row in resolved:
+                if str(row["quotation_number"]) not in duplicate_set:
+                    continue
+                _record_import_job_effect(
+                    conn,
+                    import_job_id=import_job_id,
+                    row_number=int(row["row_number"]),
+                    status="duplicate",
+                    effect_type="order_duplicate_quotation",
+                    item_id=int(row["item_id"]),
+                    item_number=str(row.get("ordered_item_number") or ""),
+                    message=(
+                        "Quotation already imported for this supplier: "
+                        f"{', '.join(duplicated)}"
+                    ),
+                    code="DUPLICATE_QUOTATION_IMPORT",
+                )
         raise AppError(
             code="DUPLICATE_QUOTATION_IMPORT",
             message=(
@@ -6421,7 +6552,7 @@ def import_orders_from_rows(
             sid,
             row["quotation_number"],
             row["issue_date"],
-            row["pdf_link"],
+            row["quotation_document_url"],
         )
         cur = conn.execute(
             """
@@ -6433,8 +6564,9 @@ def import_orders_from_rows(
                 ordered_item_number,
                 order_date,
                 expected_arrival,
+                purchase_order_document_url,
                 status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'Ordered')
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Ordered')
             """,
             (
                 row["item_id"],
@@ -6444,9 +6576,30 @@ def import_orders_from_rows(
                 row["ordered_item_number"],
                 row["order_date"],
                 row["expected_arrival"],
+                row["purchase_order_document_url"],
             ),
         )
-        order_ids.append(int(cur.lastrowid))
+        order_id = int(cur.lastrowid)
+        order_ids.append(order_id)
+        if import_job_id is not None:
+            _record_import_job_effect(
+                conn,
+                import_job_id=import_job_id,
+                row_number=int(row["row_number"]),
+                status="created",
+                effect_type="order_created",
+                item_id=int(row["item_id"]),
+                item_number=str(row.get("ordered_item_number") or ""),
+                supplier_id=int(sid),
+                after_state={
+                    "order_id": order_id,
+                    "item_id": int(row["item_id"]),
+                    "quotation_id": quotation_id,
+                    "quotation_number": row["quotation_number"],
+                    "quotation_document_url": row["quotation_document_url"],
+                    "purchase_order_document_url": row["purchase_order_document_url"],
+                },
+            )
     suggested_procurement_links: list[dict[str, Any]] = []
     if order_ids:
         placeholders = ",".join("?" for _ in order_ids)
@@ -6517,6 +6670,7 @@ def import_orders_from_content(
     missing_output_dir: str | Path | None = None,
     row_overrides: dict[str | int, Any] | None = None,
     alias_saves: list[dict[str, Any]] | None = None,
+    import_job_id: int | None = None,
 ) -> dict[str, Any]:
     rows = _load_csv_rows_from_content(content)
     return import_orders_from_rows(
@@ -6529,7 +6683,165 @@ def import_orders_from_content(
         missing_output_dir=missing_output_dir,
         row_overrides=row_overrides,
         alias_saves=alias_saves,
+        import_job_id=import_job_id,
     )
+
+
+def import_orders_from_content_with_job(
+    conn: sqlite3.Connection,
+    *,
+    supplier_id: int | None = None,
+    supplier_name: str | None = None,
+    content: bytes,
+    default_order_date: str | None = None,
+    source_name: str = "order_import.csv",
+    missing_output_dir: str | Path | None = None,
+    row_overrides: dict[str | int, Any] | None = None,
+    alias_saves: list[dict[str, Any]] | None = None,
+    import_job_id: int | None = None,
+) -> dict[str, Any]:
+    source_text = _read_import_job_source_text(content)
+    import_job_id = _record_import_job(
+        conn,
+        import_type="orders",
+        source_name=source_name,
+        source_content=source_text,
+        continue_on_error=False,
+    )
+    conn.execute("SAVEPOINT order_import_job")
+    try:
+        result = import_orders_from_content(
+            conn,
+            supplier_id=supplier_id,
+            supplier_name=supplier_name,
+            content=content,
+            default_order_date=default_order_date,
+            source_name=source_name,
+            missing_output_dir=missing_output_dir,
+            row_overrides=row_overrides,
+            alias_saves=alias_saves,
+            import_job_id=import_job_id,
+        )
+    except Exception:
+        conn.execute("ROLLBACK TO SAVEPOINT order_import_job")
+        conn.execute("RELEASE SAVEPOINT order_import_job")
+        _finalize_import_job(
+            conn,
+            import_job_id=import_job_id,
+            result={"status": "error", "processed": 0, "created_count": 0, "duplicate_count": 0, "failed_count": 1},
+        )
+        raise
+    conn.execute("RELEASE SAVEPOINT order_import_job")
+    _finalize_import_job(
+        conn,
+        import_job_id=import_job_id,
+        result={
+            "status": result["status"],
+            "processed": result.get("imported_count", 0) + result.get("missing_count", 0),
+            "created_count": result.get("imported_count", 0),
+            "duplicate_count": 0,
+            "failed_count": result.get("missing_count", 0),
+        },
+    )
+    return {**result, "import_job_id": import_job_id}
+
+
+def _get_order_import_job_row(conn: sqlite3.Connection, import_job_id: int) -> sqlite3.Row:
+    row = conn.execute(
+        """
+        SELECT
+            import_job_id,
+            import_type,
+            source_name,
+            source_content,
+            continue_on_error,
+            status,
+            processed,
+            created_count,
+            duplicate_count,
+            failed_count,
+            lifecycle_state,
+            created_at,
+            undone_at,
+            redo_of_job_id,
+            last_redo_job_id
+        FROM import_jobs
+        WHERE import_job_id = ? AND import_type = 'orders'
+        """,
+        (import_job_id,),
+    ).fetchone()
+    if row is None:
+        raise AppError(
+            code="IMPORT_JOB_NOT_FOUND",
+            message=f"Order import job {import_job_id} not found",
+            status_code=404,
+        )
+    return row
+
+
+def list_order_import_jobs(
+    conn: sqlite3.Connection,
+    *,
+    page: int = 1,
+    per_page: int = 50,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    sql = """
+        SELECT
+            import_job_id,
+            import_type,
+            source_name,
+            continue_on_error,
+            status,
+            processed,
+            created_count,
+            duplicate_count,
+            failed_count,
+            lifecycle_state,
+            created_at,
+            undone_at,
+            redo_of_job_id,
+            last_redo_job_id
+        FROM import_jobs
+        WHERE import_type = 'orders'
+        ORDER BY created_at DESC, import_job_id DESC
+    """
+    rows, pagination = _paginate(conn, sql, tuple(), page, per_page)
+    return [_normalize_import_job_row(row) for row in rows], pagination
+
+
+def get_order_import_job(conn: sqlite3.Connection, import_job_id: int) -> dict[str, Any]:
+    job = _normalize_import_job_row(_get_order_import_job_row(conn, import_job_id))
+    effects = conn.execute(
+        """
+        SELECT
+            effect_id,
+            import_job_id,
+            row_number,
+            status,
+            entry_type,
+            effect_type,
+            item_id,
+            alias_id,
+            supplier_id,
+            item_number,
+            supplier_name,
+            canonical_item_number,
+            units_per_order,
+            message,
+            code,
+            before_state,
+            after_state,
+            created_at
+        FROM import_job_effects
+        WHERE import_job_id = ?
+        ORDER BY row_number, effect_id
+        """,
+        (import_job_id,),
+    ).fetchall()
+    return {
+        "job": job,
+        "effects": [_normalize_import_job_effect_row(row) for row in effects],
+    }
 
 
 def preview_orders_import_from_content(
@@ -6844,12 +7156,10 @@ def _import_unregistered_order_csv_file(
         }
 
     supplier_id = _get_or_create_supplier(conn, supplier_name)
-    pdf_updates: list[dict[str, str]] = []
-    pdf_link_by_quotation: dict[str, str] = {}
-    pdf_cache: dict[tuple[str, str], str] = {}
     planned_pdf_moves: list[tuple[Path, Path]] = []
     planned_pdf_target_by_source: dict[str, Path] = {}
     reserved_pdf_targets: set[str] = set()
+    moved_pdf_files: list[dict[str, str]] = []
     registered_pdf_dir = registered_pdf_supplier_dir(roots, supplier_name).resolve()
 
     for row in rows:
@@ -6857,60 +7167,46 @@ def _import_unregistered_order_csv_file(
         pdf_link = (row.get("pdf_link") or "").strip()
         if not quotation_number or not pdf_link:
             continue
-        cache_key = (quotation_number, pdf_link)
-        normalized_pdf_link = pdf_cache.get(cache_key)
-        if normalized_pdf_link is None:
-            source_pdf, normalized_pdf_link, link_normalizations, link_warnings = _resolve_pdf_source_path(
-                csv_path,
-                pdf_link,
-                roots,
-                supplier_name,
-                prefer_filename_only=prefer_filename_only_pdf_links,
-            )
-            for warning in link_warnings:
-                if warning not in file_warnings:
-                    file_warnings.append(warning)
-            for entry in link_normalizations:
-                item = dict(entry)
-                item.setdefault("file", str(csv_path))
-                item.setdefault("quotation_number", quotation_number)
-                if item not in file_normalizations:
-                    file_normalizations.append(item)
-            if source_pdf is not None and source_pdf.exists():
-                resolved_source = source_pdf.resolve()
-                if resolved_source.is_relative_to(registered_pdf_dir):
-                    final_pdf = resolved_source
-                else:
-                    source_key = str(resolved_source).casefold()
-                    planned_target = planned_pdf_target_by_source.get(source_key)
-                    if planned_target is None:
-                        predicted_target, _ = _predict_move_target(
-                            resolved_source,
-                            registered_pdf_dir,
-                            reserved_pdf_targets,
-                        )
-                        planned_target = predicted_target.resolve()
-                        planned_pdf_target_by_source[source_key] = planned_target
-                        planned_pdf_moves.append((resolved_source, planned_target))
-                        reserved_pdf_targets.add(str(planned_target).casefold())
-                    final_pdf = planned_target
-                normalized_pdf_link = _safe_workspace_relative(final_pdf)
-            pdf_cache[cache_key] = normalized_pdf_link
-        conn.execute(
-            """
-            UPDATE quotations
-            SET pdf_link = ?
-            WHERE supplier_id = ? AND quotation_number = ?
-            """,
-            (normalized_pdf_link, supplier_id, quotation_number),
+        source_pdf, _normalized_pdf_link, link_normalizations, link_warnings = _resolve_pdf_source_path(
+            csv_path,
+            pdf_link,
+            roots,
+            supplier_name,
+            prefer_filename_only=prefer_filename_only_pdf_links,
         )
-        pdf_updates.append(
-            {
-                "quotation_number": quotation_number,
-                "pdf_link": normalized_pdf_link,
-            }
-        )
-        pdf_link_by_quotation[quotation_number] = normalized_pdf_link
+        for warning in link_warnings:
+            if warning not in file_warnings:
+                file_warnings.append(warning)
+        for entry in link_normalizations:
+            item = dict(entry)
+            item.setdefault("file", str(csv_path))
+            item.setdefault("quotation_number", quotation_number)
+            if item not in file_normalizations:
+                file_normalizations.append(item)
+        if source_pdf is None or not source_pdf.exists():
+            continue
+        resolved_source = source_pdf.resolve()
+        if resolved_source.is_relative_to(registered_pdf_dir):
+            final_pdf = resolved_source
+        else:
+            source_key = str(resolved_source).casefold()
+            planned_target = planned_pdf_target_by_source.get(source_key)
+            if planned_target is None:
+                predicted_target, _ = _predict_move_target(
+                    resolved_source,
+                    registered_pdf_dir,
+                    reserved_pdf_targets,
+                )
+                planned_target = predicted_target.resolve()
+                planned_pdf_target_by_source[source_key] = planned_target
+                planned_pdf_moves.append((resolved_source, planned_target))
+                reserved_pdf_targets.add(str(planned_target).casefold())
+                moved_pdf_files.append(
+                    {
+                        "source_path": str(resolved_source),
+                        "registered_path": str(planned_target),
+                    }
+                )
 
     csv_source = csv_path.resolve()
     csv_dest, _ = _predict_move_target(
@@ -6919,235 +7215,16 @@ def _import_unregistered_order_csv_file(
         set(),
     )
     _execute_planned_file_moves([*planned_pdf_moves, (csv_source, csv_dest.resolve())])
-    if pdf_link_by_quotation and "pdf_link" in fieldnames:
-        rewritten_rows: list[dict[str, Any]] = []
-        for row in rows:
-            updated_row = dict(row)
-            quotation_number = str(updated_row.get("quotation_number") or "").strip()
-            canonical_pdf_link = pdf_link_by_quotation.get(quotation_number)
-            if canonical_pdf_link:
-                updated_row["pdf_link"] = canonical_pdf_link
-            rewritten_rows.append(updated_row)
-        csv_dest.write_bytes(_csv_bytes(fieldnames, rewritten_rows))
     return {
         "file": str(csv_path),
         "supplier": supplier_name,
         "status": "ok",
         "moved_to": str(csv_dest),
         "imported_count": result.get("imported_count", 0),
-        "pdf_updates": pdf_updates,
+        "moved_pdf_files": moved_pdf_files,
         "warnings": file_warnings,
         "normalizations": file_normalizations,
     }
-
-
-def _validate_retry_unregistered_csv_path(csv_path: str | Path, roots: OrderImportRoots) -> Path:
-    return validate_retry_unregistered_csv_path(csv_path, roots=roots)
-
-
-def retry_unregistered_order_csv(
-    conn: sqlite3.Connection,
-    *,
-    csv_path: str | Path,
-    unregistered_root: str | Path | None = None,
-    registered_root: str | Path | None = None,
-    default_order_date: str | None = None,
-) -> dict[str, Any]:
-    roots = build_roots(
-        unregistered_root=unregistered_root,
-        registered_root=registered_root,
-    )
-    ensure_roots(roots)
-
-    validated_csv = _validate_retry_unregistered_csv_path(csv_path, roots)
-    supplier_name, supplier_warnings = _supplier_name_from_unregistered_path(validated_csv, roots)
-
-    savepoint = f"sp_retry_unreg_{uuid4().hex}"
-    conn.execute(f"SAVEPOINT {savepoint}")
-    try:
-        report = _import_unregistered_order_csv_file(
-            conn,
-            roots=roots,
-            csv_path=validated_csv,
-            supplier_name=supplier_name,
-            default_order_date=default_order_date,
-        )
-        conn.execute(f"RELEASE {savepoint}")
-        file_warnings = report.setdefault("warnings", [])
-        for warning in supplier_warnings:
-            if warning not in file_warnings:
-                file_warnings.append(warning)
-        report.setdefault("normalizations", [])
-        return report
-    except Exception as exc:  # noqa: BLE001
-        conn.execute(f"ROLLBACK TO {savepoint}")
-        conn.execute(f"RELEASE {savepoint}")
-        return {
-            "file": str(validated_csv),
-            "supplier": supplier_name,
-            "status": "error",
-            "error": str(exc),
-            "warnings": supplier_warnings,
-            "normalizations": [],
-        }
-
-
-def import_unregistered_order_csvs(
-    conn: sqlite3.Connection,
-    *,
-    unregistered_root: str | Path | None = None,
-    registered_root: str | Path | None = None,
-    items_unregistered_root: str | Path | None = None,
-    default_order_date: str | None = None,
-    continue_on_error: bool = False,
-    prefer_filename_only_pdf_links: bool = False,
-) -> dict[str, Any]:
-    unregistered_items_root = Path(items_unregistered_root) if items_unregistered_root else ITEMS_IMPORT_UNREGISTERED_ROOT
-    roots = build_roots(
-        unregistered_root=unregistered_root,
-        registered_root=registered_root,
-    )
-    ensure_roots(roots)
-
-    files = iter_unregistered_order_csvs(roots)
-    report: list[dict[str, Any]] = []
-    processed = 0
-    succeeded = 0
-    missing_items = 0
-    failed = 0
-    warnings: list[str] = []
-    normalizations: list[dict[str, str]] = []
-    missing_reports: list[dict[str, Any]] = []
-
-    for csv_path in files:
-        processed += 1
-        supplier_name = ""
-        supplier_warnings: list[str] = []
-        try:
-            supplier_name, supplier_warnings = _supplier_name_from_unregistered_path(csv_path, roots)
-            for warning in supplier_warnings:
-                if warning not in warnings:
-                    warnings.append(warning)
-            savepoint = f"sp_unreg_batch_{uuid4().hex}"
-            conn.execute(f"SAVEPOINT {savepoint}")
-            try:
-                file_report = _import_unregistered_order_csv_file(
-                    conn,
-                    roots=roots,
-                    csv_path=csv_path,
-                    supplier_name=supplier_name,
-                    default_order_date=default_order_date,
-                    items_unregistered_root=unregistered_items_root,
-                    prefer_filename_only_pdf_links=prefer_filename_only_pdf_links,
-                )
-                conn.execute(f"RELEASE {savepoint}")
-            except Exception:
-                conn.execute(f"ROLLBACK TO {savepoint}")
-                conn.execute(f"RELEASE {savepoint}")
-                raise
-
-            if file_report["status"] == "missing_items":
-                missing_items += 1
-                missing_reports.append(file_report)
-            elif file_report["status"] == "ok":
-                succeeded += 1
-            else:
-                failed += 1
-            file_report_warnings = file_report.setdefault("warnings", [])
-            for warning in supplier_warnings:
-                if warning not in file_report_warnings:
-                    file_report_warnings.append(warning)
-            for warning in file_report_warnings:
-                if warning not in warnings:
-                    warnings.append(warning)
-            for entry in file_report.get("normalizations", []):
-                if entry not in normalizations:
-                    normalizations.append(entry)
-            report.append(file_report)
-        except Exception as exc:  # noqa: BLE001
-            failed += 1
-            for warning in supplier_warnings:
-                if warning not in warnings:
-                    warnings.append(warning)
-            report.append(
-                {
-                    "file": str(csv_path),
-                    "supplier": supplier_name or "UNKNOWN",
-                    "status": "error",
-                    "error": str(exc),
-                    "warnings": supplier_warnings,
-                    "normalizations": [],
-                }
-            )
-            if not continue_on_error:
-                break
-
-    batch_missing_csv_path: str | None = None
-    batch_missing_artifact: dict[str, Any] | None = None
-    if missing_reports:
-        batch_missing_csv_path = _write_batch_missing_items_register(
-            missing_reports,
-            output_dir=unregistered_items_root,
-        )
-        batch_missing_artifact = _build_generated_artifact(Path(batch_missing_csv_path))
-        for item in missing_reports:
-            per_file_path = item.get("missing_csv_path")
-            if per_file_path:
-                try:
-                    Path(per_file_path).unlink(missing_ok=True)
-                except OSError as exc:
-                    warning = f"Failed to remove temporary missing-items CSV {per_file_path}: {exc}"
-                    file_warnings = item.setdefault("warnings", [])
-                    if warning not in file_warnings:
-                        file_warnings.append(warning)
-                    if warning not in warnings:
-                        warnings.append(warning)
-            item["missing_csv_path"] = batch_missing_csv_path
-            item["missing_artifact"] = batch_missing_artifact
-
-    status = "ok" if failed == 0 else ("partial" if (succeeded or missing_items) else "error")
-    return {
-        "status": status,
-        "processed": processed,
-        "succeeded": succeeded,
-        "missing_items": missing_items,
-        "failed": failed,
-        "files": report,
-        "missing_items_register_csv": batch_missing_csv_path,
-        "missing_items_register_artifact": batch_missing_artifact,
-        "warnings": warnings,
-        "normalizations": normalizations,
-    }
-
-
-def upload_and_import_orders_batch_zip(
-    conn: sqlite3.Connection,
-    *,
-    filename: str,
-    content: bytes,
-    default_order_date: str | None = None,
-    continue_on_error: bool = False,
-    staging_root: str | Path | None = None,
-) -> dict[str, Any]:
-    staged = _extract_orders_batch_zip_to_staging(
-        filename,
-        content,
-        staging_root=staging_root,
-    )
-    result = import_unregistered_order_csvs(
-        conn,
-        unregistered_root=staged["unregistered_root"],
-        registered_root=build_roots().registered_root,
-        items_unregistered_root=ITEMS_IMPORT_UNREGISTERED_ROOT,
-        default_order_date=default_order_date,
-        continue_on_error=continue_on_error,
-        prefer_filename_only_pdf_links=True,
-    )
-    result["upload_job_id"] = staged["job_id"]
-    result["staging_root"] = staged["job_root"]
-    result["uploaded_archive"] = staged["archive_path"]
-    result["extracted_files"] = staged["extracted_files"]
-    return result
 
 
 def _predict_move_target(src: Path, dst_dir: Path, reserved_targets: set[str]) -> tuple[Path, bool]:
@@ -7166,210 +7243,6 @@ def _predict_move_target(src: Path, dst_dir: Path, reserved_targets: set[str]) -
             return candidate, True
         idx += 1
 
-
-def migrate_orders_import_layout(
-    conn: sqlite3.Connection,
-    *,
-    unregistered_root: str | Path | None = None,
-    registered_root: str | Path | None = None,
-    apply: bool = False,
-) -> dict[str, Any]:
-    roots = build_roots(
-        unregistered_root=unregistered_root,
-        registered_root=registered_root,
-    )
-    mode = "apply" if apply else "dry_run"
-    if apply:
-        ensure_roots(roots)
-
-    warnings: list[str] = []
-    normalizations: list[dict[str, str]] = []
-    move_entries: list[dict[str, str]] = []
-    csv_rewrite_entries: list[dict[str, str]] = []
-    db_rewrite_entries: list[dict[str, str]] = []
-    move_conflicts = 0
-    moved_count = 0
-    csv_apply_count = 0
-    db_apply_count = 0
-
-    reserved_targets: set[str] = set()
-    roots_to_scan = [
-        ("unregistered", roots.unregistered_root, roots.unregistered_csv_root, roots.unregistered_pdf_root),
-        ("registered", roots.registered_root, roots.registered_csv_root, roots.registered_pdf_root),
-    ]
-
-    for scope, source_root, csv_target_root, pdf_target_root in roots_to_scan:
-        if not source_root.exists():
-            continue
-        for child in sorted(source_root.iterdir(), key=lambda p: p.name):
-            if not is_legacy_supplier_dir(child):
-                continue
-            supplier_name = child.name
-            for src in sorted(child.rglob("*"), key=lambda p: str(p).lower()):
-                if not src.is_file():
-                    continue
-                target_root = csv_target_root if src.suffix.lower() == ".csv" else pdf_target_root
-                target_dir = target_root / supplier_name
-                predicted_target, renamed = _predict_move_target(src, target_dir, reserved_targets)
-                reserved_targets.add(str(predicted_target).casefold())
-                if renamed:
-                    move_conflicts += 1
-
-                entry: dict[str, str] = {
-                    "scope": scope,
-                    "supplier": supplier_name,
-                    "from": str(src),
-                    "to": str(predicted_target),
-                    "status": "planned",
-                }
-                if apply:
-                    moved_to = _move_file_preserve_name(src, target_dir)
-                    entry["to"] = str(moved_to)
-                    entry["status"] = "moved"
-                    moved_count += 1
-                move_entries.append(entry)
-
-    csv_rewrite_roots = [
-        (roots.unregistered_csv_root, _supplier_name_from_unregistered_path),
-        (roots.registered_csv_root, _supplier_name_from_registered_path),
-    ]
-    for csv_root, supplier_resolver in csv_rewrite_roots:
-        if not csv_root.exists():
-            continue
-        for csv_file in sorted(csv_root.rglob("*.csv"), key=lambda p: str(p).lower()):
-            try:
-                supplier_name, supplier_warnings = supplier_resolver(csv_file, roots)
-                for warning in supplier_warnings:
-                    if warning not in warnings:
-                        warnings.append(warning)
-            except AppError as exc:
-                text = str(exc)
-                if text not in warnings:
-                    warnings.append(text)
-                continue
-
-            with csv_file.open("r", encoding="utf-8-sig", newline="") as fp:
-                reader = csv.DictReader(fp)
-                fieldnames = list(reader.fieldnames or [])
-                rows = list(reader)
-
-            if "pdf_link" not in fieldnames:
-                continue
-
-            changed = False
-            for row_index, row in enumerate(rows, start=2):
-                raw_link = (row.get("pdf_link") or "").strip()
-                if not raw_link:
-                    continue
-                source_pdf, normalized_link, link_normalizations, link_warnings = normalize_pdf_link(
-                    pdf_link=raw_link,
-                    supplier_name=supplier_name,
-                    roots=roots,
-                    csv_path=csv_file,
-                )
-                for warning in link_warnings:
-                    if warning not in warnings:
-                        warnings.append(warning)
-                for item in link_normalizations:
-                    norm = dict(item)
-                    norm.setdefault("file", str(csv_file))
-                    norm.setdefault("row", str(row_index))
-                    if norm not in normalizations:
-                        normalizations.append(norm)
-
-                canonical_link = normalized_link
-                if source_pdf is not None and source_pdf.exists():
-                    canonical_link = _safe_workspace_relative(source_pdf)
-                if canonical_link == raw_link:
-                    continue
-
-                changed = True
-                row["pdf_link"] = canonical_link
-                csv_rewrite_entries.append(
-                    {
-                        "file": str(csv_file),
-                        "row": str(row_index),
-                        "from": raw_link,
-                        "to": canonical_link,
-                        "status": "rewritten" if apply else "planned",
-                    }
-                )
-
-            if changed and apply:
-                with csv_file.open("w", encoding="utf-8", newline="") as fp:
-                    writer = csv.DictWriter(fp, fieldnames=fieldnames)
-                    writer.writeheader()
-                    writer.writerows(rows)
-                csv_apply_count += 1
-
-    quotation_rows = conn.execute(
-        """
-        SELECT
-            q.quotation_id,
-            q.pdf_link,
-            s.name AS supplier_name
-        FROM quotations q
-        JOIN suppliers s ON s.supplier_id = q.supplier_id
-        """
-    ).fetchall()
-    for row in quotation_rows:
-        raw_link = (row["pdf_link"] or "").strip()
-        if not raw_link:
-            continue
-        supplier_name = str(row["supplier_name"])
-        source_pdf, normalized_link, link_normalizations, link_warnings = normalize_pdf_link(
-            pdf_link=raw_link,
-            supplier_name=supplier_name,
-            roots=roots,
-            csv_path=None,
-        )
-        for warning in link_warnings:
-            if warning not in warnings:
-                warnings.append(warning)
-        for item in link_normalizations:
-            norm = dict(item)
-            norm.setdefault("quotation_id", str(row["quotation_id"]))
-            if norm not in normalizations:
-                normalizations.append(norm)
-
-        canonical_link = normalized_link
-        if source_pdf is not None and source_pdf.exists():
-            canonical_link = _safe_workspace_relative(source_pdf)
-        if canonical_link == raw_link:
-            continue
-
-        db_rewrite_entries.append(
-            {
-                "quotation_id": str(row["quotation_id"]),
-                "supplier": supplier_name,
-                "from": raw_link,
-                "to": canonical_link,
-                "status": "rewritten" if apply else "planned",
-            }
-        )
-        if apply:
-            conn.execute(
-                "UPDATE quotations SET pdf_link = ? WHERE quotation_id = ?",
-                (canonical_link, row["quotation_id"]),
-            )
-            db_apply_count += 1
-
-    return {
-        "status": "ok",
-        "mode": mode,
-        "planned_moves": len(move_entries),
-        "moved": moved_count,
-        "move_conflicts": move_conflicts,
-        "moves": move_entries,
-        "planned_csv_rewrites": len(csv_rewrite_entries),
-        "csv_rewrites_applied": csv_apply_count,
-        "csv_rewrites": csv_rewrite_entries,
-        "planned_db_rewrites": len(db_rewrite_entries),
-        "db_rewrites_applied": db_apply_count,
-        "db_rewrites": db_rewrite_entries,
-        "warnings": warnings,
-        "normalizations": normalizations,
-    }
 
 
 def register_missing_items_from_rows(
@@ -7649,17 +7522,21 @@ def update_quotation(conn: sqlite3.Connection, quotation_id: int, payload: dict[
         f"Quotation with id {quotation_id} not found",
     )
     next_issue_date = normalize_optional_date(payload.get("issue_date"), "issue_date")
-    next_pdf_link = payload.get("pdf_link")
+    next_document_url = (
+        normalize_external_document_url(payload.get("quotation_document_url"), "quotation_document_url")
+        if "quotation_document_url" in payload
+        else None
+    )
     conn.execute(
         """
         UPDATE quotations
         SET issue_date = COALESCE(?, issue_date),
-            pdf_link = COALESCE(?, pdf_link)
+            quotation_document_url = COALESCE(?, quotation_document_url)
         WHERE quotation_id = ?
         """,
         (
             next_issue_date,
-            next_pdf_link,
+            next_document_url,
             quotation_id,
         ),
     )
@@ -7685,8 +7562,8 @@ def update_quotation(conn: sqlite3.Connection, quotation_id: int, payload: dict[
     def _updater(csv_row: dict[str, Any]) -> dict[str, Any]:
         if next_issue_date is not None:
             csv_row["issue_date"] = updated.get("issue_date") or ""
-        if next_pdf_link is not None:
-            csv_row["pdf_link"] = updated.get("pdf_link") or ""
+        if next_document_url is not None:
+            csv_row["quotation_document_url"] = updated.get("quotation_document_url") or ""
         return csv_row
 
     _rewrite_order_csv_rows(roots, row_matcher=_matcher, row_updater=_updater)

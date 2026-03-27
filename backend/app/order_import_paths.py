@@ -3,30 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import (
-    ORDERS_IMPORT_REGISTERED_ROOT,
-    ORDERS_IMPORT_UNREGISTERED_ROOT,
-    WORKSPACE_ROOT,
-)
+from .config import ORDERS_IMPORT_REGISTERED_ROOT, ORDERS_IMPORT_UNREGISTERED_ROOT, WORKSPACE_ROOT
 from .errors import AppError
 
 CSV_FILES_DIR = "csv_files"
 PDF_FILES_DIR = "pdf_files"
-_CANONICAL_ROOT_CHILDREN = {CSV_FILES_DIR, PDF_FILES_DIR}
-
-_TYPO_SEGMENT_MAP = {
-    "quatations": "quotations",
-    "unregistred": "unregistered",
-    "registred": "registered",
-}
-
-# Prefix-level migrations applied after segment-level typo fixes.
-# Each entry maps an old first segment to a replacement prefix (may be multi-segment).
-_PREFIX_MIGRATIONS: list[tuple[str, str]] = [
-    ("quotations", "imports/orders"),
-]
-
-
 @dataclass(frozen=True)
 class OrderImportRoots:
     unregistered_root: Path
@@ -73,22 +54,6 @@ def safe_workspace_relative(path: Path) -> str:
         return path.resolve().as_posix()
 
 
-def normalize_legacy_path_text(raw: str) -> tuple[str, bool]:
-    text = (raw or "").strip()
-    if not text:
-        return "", False
-    normalized = text.replace("\\", "/")
-    parts = [part for part in normalized.split("/") if part and part != "."]
-    remapped = [_TYPO_SEGMENT_MAP.get(part.lower(), part) for part in parts]
-    fixed = "/".join(remapped)
-    # Apply prefix-level migrations (e.g. quotations/ → imports/orders/)
-    for old_prefix, new_prefix in _PREFIX_MIGRATIONS:
-        if fixed == old_prefix or fixed.startswith(old_prefix + "/"):
-            fixed = new_prefix + fixed[len(old_prefix):]
-            break
-    return fixed, fixed != text
-
-
 def supplier_from_unregistered_csv_path(
     csv_path: Path,
     *,
@@ -109,9 +74,7 @@ def supplier_from_unregistered_csv_path(
         raise AppError(
             code="INVALID_UNREGISTERED_LAYOUT",
             message=(
-                "CSV must be placed under "
-                "<unregistered>/csv_files/<supplier>/<file>.csv or legacy "
-                "<unregistered>/<supplier>/<file>.csv: "
+                "CSV must be placed under <unregistered>/csv_files/<supplier>/<file>.csv: "
                 f"{resolved_csv}"
             ),
             status_code=422,
@@ -132,10 +95,11 @@ def supplier_from_unregistered_csv_path(
             message=f"CSV cannot be under pdf_files: {resolved_csv}",
             status_code=422,
         )
-    return first, [
-        "Legacy unregistered CSV layout detected. "
-        "Please migrate to <unregistered>/csv_files/<supplier>/."
-    ]
+    raise AppError(
+        code="INVALID_UNREGISTERED_LAYOUT",
+        message=f"CSV must be placed under csv_files/<supplier>/: {resolved_csv}",
+        status_code=422,
+    )
 
 
 def validate_retry_unregistered_csv_path(csv_path: str | Path, *, roots: OrderImportRoots) -> Path:
@@ -189,88 +153,3 @@ def registered_pdf_supplier_dir(roots: OrderImportRoots, supplier_name: str) -> 
     return roots.registered_pdf_root / supplier_name
 
 
-def is_legacy_supplier_dir(path: Path) -> bool:
-    return path.is_dir() and path.name not in _CANONICAL_ROOT_CHILDREN
-
-
-def normalize_pdf_link(
-    *,
-    pdf_link: str,
-    supplier_name: str,
-    roots: OrderImportRoots,
-    csv_path: Path | None = None,
-    prefer_filename_only: bool = False,
-) -> tuple[Path | None, str, list[dict[str, str]], list[str]]:
-    raw = (pdf_link or "").strip()
-    if not raw:
-        return None, "", [], []
-
-    normalized, changed = normalize_legacy_path_text(raw)
-    normalizations: list[dict[str, str]] = []
-    if changed:
-        normalizations.append(
-            {
-                "kind": "pdf_link_text",
-                "from": raw,
-                "to": normalized,
-            }
-        )
-
-    warnings: list[str] = []
-    preferred_text = normalized or raw
-    search_texts: list[str] = []
-
-    if prefer_filename_only:
-        filename_only = Path(preferred_text or raw).name.strip()
-        if filename_only and filename_only != preferred_text:
-            normalizations.append(
-                {
-                    "kind": "pdf_link_filename",
-                    "from": raw,
-                    "to": filename_only,
-                }
-            )
-            preferred_text = filename_only
-        if preferred_text:
-            search_texts.append(preferred_text)
-
-    search_texts.append(raw)
-    if preferred_text and preferred_text != raw:
-        search_texts.append(preferred_text)
-
-    candidates: list[Path] = []
-    seen: set[str] = set()
-    for text in search_texts:
-        candidate = Path(text)
-        candidate_key = str(candidate)
-        if candidate_key in seen:
-            continue
-        seen.add(candidate_key)
-
-        if candidate.is_absolute():
-            candidates.append(candidate)
-            continue
-
-        if csv_path is not None:
-            candidates.append(csv_path.parent / candidate)
-            candidates.append(csv_path.parent / candidate.name)
-
-        candidates.append(roots.unregistered_pdf_root / supplier_name / candidate)
-        candidates.append(roots.unregistered_pdf_root / supplier_name / candidate.name)
-        candidates.append(roots.unregistered_root / supplier_name / candidate)
-        candidates.append(roots.unregistered_root / supplier_name / candidate.name)
-        candidates.append(roots.registered_pdf_root / supplier_name / candidate)
-        candidates.append(roots.registered_pdf_root / supplier_name / candidate.name)
-        candidates.append(WORKSPACE_ROOT / candidate)
-
-    dedup: set[str] = set()
-    for candidate in candidates:
-        key = str(candidate)
-        if key in dedup:
-            continue
-        dedup.add(key)
-        if candidate.exists() and candidate.is_file():
-            return candidate.resolve(), preferred_text, normalizations, warnings
-
-    warnings.append(f"Unable to resolve pdf_link '{raw}' for supplier '{supplier_name}'.")
-    return None, preferred_text, normalizations, warnings

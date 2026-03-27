@@ -1,6 +1,6 @@
 # Source Current State
 
-Last updated: 2026-03-26 (JST)
+Last updated: 2026-03-27 (JST)
 
 ## 1. System Snapshot
 
@@ -10,7 +10,7 @@ Last updated: 2026-03-26 (JST)
   - Frontend: React + TypeScript + Vite + SWR
 - Runtime posture:
   - Current: Docker Compose deployment target for shared Windows Server plus local development override
-  - Direction: shared-server operation with anonymous reads and header-based named mutations
+  - Direction: shared-server operation with anonymous reads and header-based named mutations, plus Cloud Run-safe backend startup
 
 ## 2. Repository Structure (active areas)
 
@@ -33,6 +33,11 @@ Last updated: 2026-03-26 (JST)
 - Root scripts:
   - `start-app.ps1`: Windows helper that starts the base Docker Compose app stack, defaulting to `docker-compose.yml` and only including the dev override when `-IncludeDevOverride` is requested
   - `stop-app.ps1`: matching Windows helper that stops the same app stack and optionally removes volumes with `-RemoveVolumes`
+- Runtime config:
+  - backend now honors `APP_RUNTIME_TARGET=cloud_run`
+  - `PORT` overrides listener port automatically
+  - Cloud Run mode defaults `APP_DATA_ROOT` under the temp directory when unset
+  - Cloud Run mode skips legacy workspace/import folder migration on startup
 
 ## 3. Backend State
 
@@ -81,9 +86,6 @@ Last updated: 2026-03-26 (JST)
 - API endpoints accept optional body quantity for partial operations:
   - `POST /api/reservations/{id}/release`
   - `POST /api/reservations/{id}/consume`
-- CLI supports partial quantity flags:
-  - `release-reservation --reservation-id <id> --quantity <n>`
-  - `consume-reservation --reservation-id <id> --quantity <n>`
 
 ## 4. Frontend State
 
@@ -94,12 +96,26 @@ Last updated: 2026-03-26 (JST)
   - the global header user picker now refreshes after user mutations and automatically falls back to the next active user if the selected one is deactivated
 - Shared-server batch workflows are now upload-first on the main Items and Orders pages.
   - Items page now distinguishes `General Items CSV Import` from `Register Missing-Item Batch CSVs`, with the batch upload control posting multi-file form data to `POST /api/items/batch-upload`
-  - Orders page now exposes `Upload Orders ZIP`, posting one ZIP package to `POST /api/orders/batch-upload`
-  - upload-first Orders ZIP guidance now tells users to keep CSV `pdf_link` blank or filename-only instead of teaching server paths
-  - both pages keep existing server-resident batch operations only as advanced fallback controls
+- Orders manual CSV import and quotation maintenance now use external document URLs as the primary contract.
+  - `quotation_document_url` is required for manual order CSV import
+  - `purchase_order_document_url` is optional on orders
+  - imported quotation/order document values are rendered as openable links in the Orders UI
+- Manual Orders CSV import is now DB-tracked through the shared import-job tables.
+  - `POST /api/orders/import` returns `import_job_id`
+  - `GET /api/orders/import-jobs` lists `import_type='orders'` jobs
+  - `GET /api/orders/import-jobs/{import_job_id}` returns row-level effects such as `order_created`, `order_missing_item`, and `order_duplicate_quotation`
+  - job status uses `ok` / `partial` / `error`, while the immediate import response can still return `status="missing_items"`
 - Generated missing-item register CSVs are now browser-downloadable managed artifacts.
   - backend exposes `/api/artifacts`, `/api/artifacts/{artifact_id}`, and `/api/artifacts/{artifact_id}/download`
-  - Orders page surfaces download buttons for current missing-item register output and a recent generated-files list instead of showing raw server paths
+  - Orders page surfaces download buttons for current missing-item register output and a recent generated-files list using filename, timestamp, and size instead of showing workspace-relative paths
+  - artifact IDs are now opaque DB-registered values from `generated_artifacts`, not encoded workspace paths
+- Phase 6 cleanup is now applied on top of that compatibility boundary.
+  - `quotations.pdf_link` is no longer part of the schema
+  - `quotation_document_url` is the persisted quotation document field
+  - legacy CSV `pdf_link` is retained only as compatibility-import input and is no longer rewritten back into archived CSVs or quotation DB rows
+- Legacy order batch internals have now been removed as well.
+  - backend no longer keeps `orders_legacy_batch` import jobs or `legacy_batch_staged_files`
+  - the order domain no longer contains ZIP/staged-file retry helpers for the retired compatibility workflow
 - Added `/workspace` as the summary-first future-demand route.
   - default view: project summary dashboard with committed-vs-draft semantics
   - pipeline view: committed projects with `generic_committed_total` and `cumulative_generic_consumed_before_total`
@@ -234,7 +250,7 @@ Last updated: 2026-03-26 (JST)
   - `POST /api/purchase-candidates/from-bom`
   - `POST /api/purchase-candidates/from-project/{project_id}`
   - `PUT /api/purchase-candidates/{id}`
-- Orders page now also shows an `Imported Quotations` table sourced from `GET /api/quotations` (ID, supplier, quotation number, issue date, pdf_link) with client-side sorting and filtering controls.
+- Orders page now also shows an `Imported Quotations` table sourced from `GET /api/quotations` (ID, supplier, quotation number, issue date, quotation document URL) with client-side sorting and filtering controls.
 - Imported Quotations includes dedicated quotation-number search plus a secondary text filter for supplier/issue-date/PDF-link fields.
 - Imported Quotations now includes an `Orders` count column so each quotation row shows how many order rows currently reference that quotation.
 - Imported Quotations now starts collapsed and can be expanded/collapsed inline like `Order List`, reducing long-scroll pressure when quotation history grows.
@@ -269,19 +285,11 @@ Last updated: 2026-03-26 (JST)
   - `imports/orders/registered/csv_files/<supplier>/`
   - `imports/orders/registered/pdf_files/<supplier>/`
 - Items batch upload now stages browser-uploaded missing-item registration CSVs under `imports/staging/items/<job-id>/...` and then reuses the existing batch registration flow.
-- Orders batch upload now stages an uploaded ZIP under `imports/staging/orders/<job-id>/...`, extracts accepted CSV/PDF payloads into canonical unregistered subfolders, and then reuses the existing unregistered import flow.
-- Orders ZIP staging accepts either canonical `csv_files/` and `pdf_files/` paths or simpler supplier-subfolder packaging, normalizing both into the same domain input structure.
-- Upload-first Orders ZIP import now resolves `pdf_link` by uploaded filename first and normalizes path-shaped values down to filename semantics for the shared-server workflow.
-- Batch import functions normalize legacy/typo paths, move files safely, and emit warnings for unresolved paths.
 - Batch-generated missing-item register CSVs now carry artifact metadata in API responses and can be re-listed/downloaded through the artifact endpoints without exposing server filesystem paths.
-- Successful unregistered order batch imports now rewrite the moved registered CSV archive so each stored `pdf_link` matches the final registered PDF location after the batch move completes.
-- `migrate_orders_import_layout()` now rewrites stale `pdf_link` values found in both unregistered and registered order CSV files, in addition to quotation DB rows, so archived registered CSVs stay aligned with the canonical `imports/orders/...` directory structure.
 - Unregistered batch order import writes missing-item rows into one consolidated register CSV per run under `imports/items/unregistered/`; source CSV/PDF files remain in place for unresolved quotations.
 - Consolidated missing-item registers de-duplicate repeated unresolved rows by `(supplier, manufacturer_name, item_number)` across all quotations in the same batch run.
 - Temporary per-file missing-item CSVs generated during batch consolidation are supplier-prefixed and only removed after consolidated register creation succeeds.
 - Collision-safe file move behavior is implemented (`_1`, `_2`, ... suffixing).
-- Unregistered batch order import accepts non-canonical `pdf_link` path forms (including legacy `quotations/unregistered/...` and typo-normalizable variants) and normalizes/moves links during processing.
-- Per-file unregistered order import now executes CSV/PDF moves atomically with rollback on move failure, preventing partial file relocation.
 - Order import accepts common date formats with slash or flexible month/day (`YYYY/M/D`, `YYYY-MM-DD`) and normalizes to `YYYY-MM-DD`.
 - Fully empty CSV rows are ignored during order import to avoid false validation failures from trailing blank lines.
 - Missing-item registration now rejects unresolved `new_item` rows with all metadata blank, preventing accidental `UNKNOWN` placeholder item creation.
@@ -313,7 +321,7 @@ Last updated: 2026-03-26 (JST)
 
 - Orders page now supports:
   - deleting non-arrived orders from `Order List`
-  - inline editing of quotation `issue_date` and `pdf_link`
+  - inline editing of quotation `issue_date` and `quotation_document_url`
   - deleting quotations directly from `Imported Quotations` (blocked if any linked order is already `Arrived`)
 - Backend now keeps CSV and DB aligned for these maintenance operations by rewriting/deleting matching rows in discovered quotation CSV files under registered/unregistered CSV roots.
 - For duplicate item rows under the same quotation, order-level CSV sync now matches a single row by per-order occurrence identity so update/delete touches only the targeted order row.

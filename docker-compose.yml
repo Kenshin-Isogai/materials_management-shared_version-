@@ -20,6 +20,7 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      APP_RUNTIME_TARGET: local
       APP_DATA_ROOT: ${APP_DATA_ROOT}
       APP_HOST: 0.0.0.0
       APP_PORT: 8000

@@ -24,6 +24,13 @@ The workspace drawers now complete the main planning loop in place:
 - Deployment: Docker Compose (`db`, `backend`, `nginx`)
 - Data/Files: PostgreSQL database + mounted app-data volume (`imports/`, `exports/`)
 
+For Cloud Run deployment posture, the backend now supports:
+
+- `APP_RUNTIME_TARGET=cloud_run`
+- automatic `PORT` pickup from Cloud Run
+- default ephemeral app-data root under `/tmp` when `APP_DATA_ROOT` is not set
+- startup that skips legacy repo/workspace folder migration in Cloud Run mode
+
 ## Repository Structure
 
 - `backend/`: API server, PostgreSQL/Alembic schema bootstrap, business logic, tests
@@ -35,7 +42,8 @@ The workspace drawers now complete the main planning loop in place:
 - `exports/`: Generated CSV exports (for example missing-item registration templates)
 - `documents/`: Technical documentation
 - `specification.md`: Detailed functional specification
-- `start-dev.bat` / `stop-dev.bat`: Windows helper scripts to start/stop both servers
+- `start-app.ps1` / `stop-app.ps1`: PowerShell helper scripts to start/stop the Docker Compose stack
+- `launch-start-app.bat` / `launch-stop-app.bat`: Batch wrappers for the PowerShell scripts
 
 ## Quick Start (Docker Compose)
 
@@ -92,6 +100,15 @@ $env:VITE_API_BASE = "http://127.0.0.1:8000/api"
 npm run dev
 ```
 
+## Cloud Run Runtime Notes
+
+- Set `APP_RUNTIME_TARGET=cloud_run`
+- Set `DATABASE_URL` from Secret Manager / Cloud SQL connection config
+- `PORT` is honored automatically; you do not need to force `APP_PORT`
+- If `APP_DATA_ROOT` is omitted, the backend now defaults to an ephemeral temp directory suitable for Cloud Run
+- Cloud Run startup no longer copies legacy `quotations/` or repo-local `imports/` folders into runtime storage
+- Legacy ZIP/PDF compatibility import remains a local/shared-server workflow, not the target Cloud Run path
+
 ## API
 
 - API base: `http://127.0.0.1:8000/api`
@@ -114,12 +131,16 @@ npm run dev
 ## Testing
 
 ```powershell
-cd backend
-uv run python -m pytest -q
+docker compose -f docker-compose.test.yml up -d db-test
+$env:TEST_DATABASE_URL = "postgresql+psycopg://develop:test@localhost:5433/materials_test"
+$env:PYTHONPATH = "backend"
+uv run --project backend python -m pytest --import-mode=importlib
 cd ..\frontend
 npm run test
 npm run build
 ```
+
+For targeted backend slices from the repo root, keep the same `TEST_DATABASE_URL` / `PYTHONPATH` setup and run `uv run --project backend python -m pytest --import-mode=importlib backend/tests/...`.
 
 ## Documentation
 

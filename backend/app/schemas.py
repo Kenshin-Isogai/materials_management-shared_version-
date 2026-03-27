@@ -97,6 +97,7 @@ class OrderUpdateRequest(BaseModel):
     status: Literal["Ordered"] | None = None
     split_quantity: int | None = None
     project_id: int | None = None
+    purchase_order_document_url: str | None = None
 
 
 class OrderMergeRequest(BaseModel):
@@ -105,22 +106,13 @@ class OrderMergeRequest(BaseModel):
     expected_arrival: str | None = None
 
 
-class UnregisteredBatchRequest(BaseModel):
-    unregistered_root: str | None = None
-    registered_root: str | None = None
-    default_order_date: str | None = None
-    continue_on_error: bool = False
+class QuotationUpdateRequest(BaseModel):
+    issue_date: str | None = None
+    quotation_document_url: str | None = None
 
 
 class UnregisteredItemBatchRequest(BaseModel):
     continue_on_error: bool = False
-
-
-class UnregisteredFileRetryRequest(BaseModel):
-    csv_path: str = Field(min_length=1)
-    unregistered_root: str | None = None
-    registered_root: str | None = None
-    default_order_date: str | None = None
 
 
 class MissingItemRegistrationRow(BaseModel):

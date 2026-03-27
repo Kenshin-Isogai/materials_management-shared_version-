@@ -313,7 +313,6 @@ type ItemFlowTimeline = {
 
 const PENDING_MISSING_ITEMS_KEY = "mm.pending_missing_items";
 const PENDING_ORDER_IMPORT_KEY = "mm.pending_order_import";
-const PENDING_BATCH_RETRY_KEY = "mm.pending_batch_retry";
 
 type PendingOrderImport = {
   supplier_name: string;
@@ -322,31 +321,12 @@ type PendingOrderImport = {
   file_text: string;
 };
 
-type PendingBatchRetry = {
-  csv_path: string;
-  unregistered_root: string;
-  registered_root: string;
-  default_order_date: string;
-};
-
 type OrderImportResult = {
   status: string;
   imported_count?: number;
   missing_count?: number;
   missing_csv_path?: string;
   rows?: MissingItemResolverRow[];
-};
-
-type BatchRetryResult = {
-  status: string;
-  file?: string;
-  supplier?: string;
-  imported_count?: number;
-  moved_to?: string;
-  missing_count?: number;
-  missing_csv_path?: string;
-  missing_rows?: MissingItemResolverRow[];
-  error?: string;
 };
 
 const blankRow = (): ItemEntryRow => ({
@@ -969,53 +949,6 @@ export function ItemsPage() {
     setMissingRowsAndPersist((prev) => prev.filter((_, i) => i !== index));
   }
 
-  async function retryPendingBatchImportAfterResolve(): Promise<
-    | { status: "ok"; importedCount: number }
-    | { status: "missing_items"; rows: MissingResolverRow[]; missingCount: number }
-    | { status: "error"; message: string }
-    | { status: "not_found" }
-  > {
-    const raw = sessionStorage.getItem(PENDING_BATCH_RETRY_KEY);
-    if (!raw) return { status: "not_found" };
-    let pending: PendingBatchRetry;
-    try {
-      pending = JSON.parse(raw) as PendingBatchRetry;
-    } catch {
-      sessionStorage.removeItem(PENDING_BATCH_RETRY_KEY);
-      return { status: "not_found" };
-    }
-    const result = await apiSend<BatchRetryResult>("/orders/retry-unregistered-file", {
-      method: "POST",
-      body: JSON.stringify({
-        csv_path: pending.csv_path,
-        unregistered_root: pending.unregistered_root || null,
-        registered_root: pending.registered_root || null,
-        default_order_date: pending.default_order_date || null,
-      }),
-    });
-    if (result.status === "missing_items") {
-      const unresolved = toMissingResolverRows(result.missing_rows);
-      if (unresolved.length) {
-        sessionStorage.setItem(PENDING_MISSING_ITEMS_KEY, JSON.stringify(unresolved));
-      }
-      return {
-        status: "missing_items",
-        rows: unresolved,
-        missingCount: Number(result.missing_count ?? unresolved.length),
-      };
-    }
-    if (result.status === "ok") {
-      sessionStorage.removeItem(PENDING_BATCH_RETRY_KEY);
-      sessionStorage.removeItem(PENDING_ORDER_IMPORT_KEY);
-      sessionStorage.removeItem(PENDING_MISSING_ITEMS_KEY);
-      return { status: "ok", importedCount: Number(result.imported_count ?? 0) };
-    }
-    return {
-      status: "error",
-      message: result.error || "Batch retry failed.",
-    };
-  }
-
   async function retryPendingOrderImportAfterResolve(): Promise<
     | { status: "ok"; importedCount: number }
     | { status: "missing_items"; rows: MissingResolverRow[]; missingCount: number }
@@ -1104,30 +1037,6 @@ export function ItemsPage() {
         body: JSON.stringify({ rows: payloadRows }),
       });
       const registrationSummary = `Registered missing items: created_items=${result.created_items}, created_aliases=${result.created_aliases}`;
-      const batchRetry = await retryPendingBatchImportAfterResolve();
-      if (batchRetry.status === "ok") {
-        setMissingRowsAndPersist([]);
-        await mutate();
-        navigate("/orders", {
-          state: {
-            autoMessage: `${registrationSummary}. Batch auto re-import succeeded (${batchRetry.importedCount} rows).`,
-          },
-        });
-        return;
-      }
-      if (batchRetry.status === "missing_items") {
-        setMissingRowsAndPersist(batchRetry.rows);
-        setMissingMessage(
-          `${registrationSummary}. Batch auto re-import still has missing items (${batchRetry.missingCount}). Continue editing below.`
-        );
-        await mutate();
-        return;
-      }
-      if (batchRetry.status === "error") {
-        setMissingMessage(`${registrationSummary}. Batch auto re-import failed: ${batchRetry.message}`);
-        await mutate();
-        return;
-      }
       const retry = await retryPendingOrderImportAfterResolve();
       if (retry.status === "ok") {
         setMissingRowsAndPersist([]);
