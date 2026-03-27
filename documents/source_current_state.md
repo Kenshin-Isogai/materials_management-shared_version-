@@ -1,6 +1,6 @@
 # Source Current State
 
-Last updated: 2026-03-26 (JST)
+Last updated: 2026-03-27 (JST)
 
 ## 1. System Snapshot
 
@@ -86,9 +86,6 @@ Last updated: 2026-03-26 (JST)
 - API endpoints accept optional body quantity for partial operations:
   - `POST /api/reservations/{id}/release`
   - `POST /api/reservations/{id}/consume`
-- CLI supports partial quantity flags:
-  - `release-reservation --reservation-id <id> --quantity <n>`
-  - `consume-reservation --reservation-id <id> --quantity <n>`
 
 ## 4. Frontend State
 

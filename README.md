@@ -42,7 +42,8 @@ For Cloud Run deployment posture, the backend now supports:
 - `exports/`: Generated CSV exports (for example missing-item registration templates)
 - `documents/`: Technical documentation
 - `specification.md`: Detailed functional specification
-- `start-dev.bat` / `stop-dev.bat`: Windows helper scripts to start/stop both servers
+- `start-app.ps1` / `stop-app.ps1`: PowerShell helper scripts to start/stop the Docker Compose stack
+- `launch-start-app.bat` / `launch-stop-app.bat`: Batch wrappers for the PowerShell scripts
 
 ## Quick Start (Docker Compose)
 

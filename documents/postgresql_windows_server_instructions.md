@@ -1,6 +1,6 @@
 # PostgreSQL / Windows Server Deployment Instructions
 
-Last updated: 2026-03-25 (JST)
+Last updated: 2026-03-27 (JST)
 
 ## Purpose
 
@@ -117,6 +117,6 @@ docker compose up --build -d
 
 ## Known Follow-Up Items
 
-- The raw-SQL service layer is still in transition behind a PostgreSQL compatibility wrapper; broader runtime validation on the actual server is required.
+- The raw-SQL service layer runs on PostgreSQL behind a compatibility connection wrapper; the core PostgreSQL migration is complete but the wrapper is retained for now.
 - Full PostgreSQL-backed test-suite execution still depends on a reachable `TEST_DATABASE_URL` / Docker test DB.
 - Role-based enforcement is not active yet; current trust model is still internal-network only.
