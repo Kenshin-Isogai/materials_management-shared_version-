@@ -28,6 +28,7 @@ export function UsersPage() {
   const [error, setError] = useState<string | null>(null);
 
   const users = usersQuery.data ?? [];
+  const hasActiveUsers = users.some((user) => user.is_active);
   const summary = useMemo(
     () => ({
       total: users.length,
@@ -68,15 +69,21 @@ export function UsersPage() {
     setMessage(null);
     setError(null);
     try {
-      await apiSend("/users", {
-        method: "POST",
-        body: JSON.stringify({
-          username: createForm.username.trim(),
-          display_name: createForm.display_name.trim(),
-          role: createForm.role,
-          is_active: createForm.is_active,
-        }),
-      });
+      await apiSend(
+        "/users",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            username: createForm.username.trim(),
+            display_name: createForm.display_name.trim(),
+            role: createForm.role,
+            is_active: createForm.is_active,
+          }),
+        },
+        {
+          allowAnonymousMutation: !hasActiveUsers,
+        }
+      );
       setCreateForm({
         username: "",
         display_name: "",
@@ -192,6 +199,11 @@ export function UsersPage() {
             <p className="mt-1 text-sm text-slate-600">
               New users become available in the header picker immediately after creation.
             </p>
+            {!hasActiveUsers ? (
+              <p className="mt-2 text-sm text-amber-700">
+                No active user exists yet. Creating the first active user is allowed without selecting one in the header.
+              </p>
+            ) : null}
           </div>
 
           <label className="block space-y-2 text-sm">

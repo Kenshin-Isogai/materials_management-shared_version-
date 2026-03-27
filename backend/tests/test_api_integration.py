@@ -7,7 +7,12 @@ from pathlib import Path
 import zipfile
 
 from app import service
+from app.api import create_app
+from app.db import get_connection, init_db
 from app.utils import today_jst
+from fastapi.testclient import TestClient
+
+from .conftest import _reset_database
 
 FUTURE_TARGET_DATE = "2999-12-31"
 
@@ -497,6 +502,62 @@ def test_users_endpoint_can_include_inactive_rows(client):
     rows = including_inactive.json()["data"]
     target = next(row for row in rows if row["username"] == "phase1-inactive")
     assert target["is_active"] is False
+
+
+def test_first_active_user_can_be_created_without_user_header_when_none_exist(database_url: str):
+    _reset_database(database_url)
+    init_db(database_url)
+    app = create_app(database_url=database_url)
+    with TestClient(app) as anonymous_client:
+        response = anonymous_client.post(
+            "/api/users",
+            json={
+                "username": "bootstrap-admin",
+                "display_name": "Bootstrap Admin",
+                "role": "admin",
+                "is_active": True,
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["data"]["username"] == "bootstrap-admin"
+
+
+def test_user_creation_without_header_is_rejected_once_active_user_exists(database_url: str):
+    _reset_database(database_url)
+    init_db(database_url)
+    seed_conn = get_connection(database_url)
+    try:
+        service.create_user(
+            seed_conn,
+            {
+                "username": "existing-admin",
+                "display_name": "Existing Admin",
+                "role": "admin",
+                "is_active": True,
+            },
+        )
+        seed_conn.commit()
+    finally:
+        seed_conn.close()
+    app = create_app(database_url=database_url)
+    with TestClient(app) as anonymous_client:
+        response = anonymous_client.post(
+            "/api/users",
+            json={
+                "username": "blocked-bootstrap",
+                "display_name": "Blocked Bootstrap",
+                "role": "operator",
+                "is_active": True,
+            },
+        )
+
+    assert response.status_code == 403
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["error"]["code"] == "USER_REQUIRED"
 
 
 def test_inventory_reservation_and_dashboard_flow(client):

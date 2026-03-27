@@ -16,6 +16,7 @@ This document explains the implemented architecture of the Materials Management 
   - mutation requests require `X-User-Name`
   - resolved users are stored in `request.state.user`
   - database-side audit triggers populate `created_by` / `updated_by` / `performed_by` where supported
+  - bootstrap exception: `POST /api/users` is allowed without `X-User-Name` only while the system has zero active users, so the first user can be created from `/users`
 - Frontend user administration at `/users` page.
   - `GET /api/users` provides the active-user feed for the global picker
   - `GET /api/users?include_inactive=true` backs the management screen

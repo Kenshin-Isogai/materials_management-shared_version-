@@ -47,14 +47,20 @@ function isMutationMethod(method: string | undefined): boolean {
   return !["GET", "HEAD", "OPTIONS"].includes(normalized);
 }
 
-function buildHeaders(init?: RequestInit): Headers {
+type BuildHeadersOptions = {
+  allowAnonymousMutation?: boolean;
+};
+
+function buildHeaders(init?: RequestInit, options?: BuildHeadersOptions): Headers {
   const headers = new Headers(init?.headers ?? {});
   const username = getStoredUsername();
   if (isMutationMethod(init?.method)) {
-    if (!username) {
+    if (!username && !options?.allowAnonymousMutation) {
       throw new Error("Select a user before performing changes.");
     }
-    headers.set("X-User-Name", username);
+    if (username) {
+      headers.set("X-User-Name", username);
+    }
   }
   return headers;
 }
@@ -149,9 +155,10 @@ export async function apiGetAllPages<T>(path: string): Promise<T[]> {
 
 export async function apiSend<T>(
   path: string,
-  init?: RequestInit
+  init?: RequestInit,
+  options?: BuildHeadersOptions
 ): Promise<T> {
-  const headers = buildHeaders({ ...init, method: init?.method ?? "POST" });
+  const headers = buildHeaders({ ...init, method: init?.method ?? "POST" }, options);
   headers.set("Content-Type", "application/json");
   const res = await fetch(`${API_BASE}${toAbsolutePath(path)}`, {
     ...init,

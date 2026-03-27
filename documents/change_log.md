@@ -4,6 +4,15 @@
 
 - Reservations provisional-allocation summary now revalidates immediately after reservation create/import/release/consume actions on the same page.
   - This keeps the `Provisional Allocation Summary` panel and its CSV export aligned with the refreshed Reservation List instead of showing stale totals until focus/refresh.
+- Restored first-user bootstrap in shared-server mode.
+  - `POST /api/users` is now allowed without `X-User-Name` only when there are zero active users.
+  - The Users page now allows first-user creation without a header selection and shows explicit bootstrap guidance when no active users exist.
+
+### Tests
+
+- Added backend API regression coverage for:
+  - creating the first active user without `X-User-Name`
+  - rejecting anonymous user creation again after an active user exists
 
 ### Added
 
