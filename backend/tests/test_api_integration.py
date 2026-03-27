@@ -539,7 +539,7 @@ def test_request_size_limit_rejects_oversized_upload(database_url: str):
         with TestClient(app) as test_client:
             test_client.headers.update({"X-User-Name": "pytest"})
             response = test_client.post(
-                "/api/register-missing",
+                "/api/items/import",
                 files={"file": ("oversized.csv", b"x" * 64, "text/csv")},
             )
 
@@ -857,6 +857,74 @@ def test_order_import_returns_missing_item_details(client, database_url):
     finally:
         conn.close()
 
+
+def test_orders_import_template_includes_supplier_column(client):
+    response = client.get("/api/orders/import-template")
+    assert response.status_code == 200
+
+    fieldnames, _rows = read_csv_response(response)
+    assert fieldnames[0] == "supplier"
+
+
+def test_order_import_preview_and_import_accept_supplier_from_csv_rows(client):
+    client.post("/api/manufacturers", json={"name": "API-ROW-SUPPLIER-MFG"})
+    client.post(
+        "/api/items",
+        json={
+            "item_number": "API-ROW-SUPPLIER-ITEM",
+            "manufacturer_name": "API-ROW-SUPPLIER-MFG",
+            "category": "Lens",
+        },
+    )
+
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "supplier",
+            "item_number",
+            "quantity",
+            "quotation_number",
+            "issue_date",
+            "quotation_document_url",
+            "order_date",
+            "expected_arrival",
+        ],
+    )
+    writer.writeheader()
+    writer.writerow(
+        {
+            "supplier": "SupplierRowOnly",
+            "item_number": "API-ROW-SUPPLIER-ITEM",
+            "quantity": "2",
+            "quotation_number": "Q-ROW-SUPPLIER-001",
+            "issue_date": "2026-02-21",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-ROW-SUPPLIER-001",
+            "order_date": "2026-02-22",
+            "expected_arrival": "2026-03-01",
+        }
+    )
+    payload_bytes = output.getvalue().encode("utf-8")
+
+    preview = client.post(
+        "/api/orders/import-preview",
+        files={"file": ("orders.csv", payload_bytes, "text/csv")},
+    )
+    assert preview.status_code == 200
+    preview_data = preview.json()["data"]
+    assert preview_data["rows"][0]["supplier_name"] == "SupplierRowOnly"
+    assert preview_data["supplier"]["mode"] in {"single", "per_row"}
+
+    imported = client.post(
+        "/api/orders/import",
+        files={"file": ("orders.csv", payload_bytes, "text/csv")},
+    )
+    assert imported.status_code == 200
+    imported_data = imported.json()["data"]
+    assert imported_data["status"] == "ok"
+    orders = client.get("/api/orders").json()["data"]
+    assert any(row["supplier_name"] == "SupplierRowOnly" for row in orders)
+
 def test_order_import_requires_quotation_document_url_instead_of_pdf_link(client):
     client.post("/api/manufacturers", json={"name": "API-MANUAL-MFG"})
     client.post(
@@ -1037,6 +1105,7 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
             "quantity",
             "quotation_number",
             "issue_date",
+            "quotation_document_url",
             "order_date",
             "expected_arrival",
             "pdf_link",
@@ -1049,6 +1118,7 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
             "quantity": "1",
             "quotation_number": "Q-DUP-PREVIEW",
             "issue_date": "2026-02-21",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-DUP-PREVIEW",
             "order_date": "2026-02-22",
             "expected_arrival": "2026-03-01",
             "pdf_link": "",
@@ -1069,6 +1139,7 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
             "quantity",
             "quotation_number",
             "issue_date",
+            "quotation_document_url",
             "order_date",
             "expected_arrival",
             "pdf_link",
@@ -1081,6 +1152,7 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
             "quantity": "2",
             "quotation_number": "Q-DUP-PREVIEW",
             "issue_date": "2026-02-21",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-DUP-PREVIEW",
             "order_date": "2026-02-22",
             "expected_arrival": "2026-03-01",
             "pdf_link": "Q-DUP-PREVIEW.pdf",
@@ -1092,6 +1164,7 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
             "quantity": "1",
             "quotation_number": "Q-REVIEW-PREVIEW",
             "issue_date": "2026-02-21",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-REVIEW-PREVIEW",
             "order_date": "2026-02-22",
             "expected_arrival": "2026-03-01",
             "pdf_link": "",
@@ -1103,6 +1176,7 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
             "quantity": "1",
             "quotation_number": "Q-UNRESOLVED-PREVIEW",
             "issue_date": "2026-02-21",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-UNRESOLVED-PREVIEW",
             "order_date": "2026-02-22",
             "expected_arrival": "2026-03-01",
             "pdf_link": "",
@@ -1702,130 +1776,14 @@ def test_items_import_endpoint_archives_uploaded_csv_into_registered_month_folde
     assert rows[0]["item_number"] == "CSV-ARCHIVE-001"
 
 
-def test_items_batch_upload_endpoint_stages_and_registers_csvs(client, workspace_roots: dict[str, Path]):
-    batch_one = make_csv_bytes(
-        ["supplier", "item_number", "resolution_type", "category", "url", "description"],
-        [
-            {
-                "supplier": "Upload Supplier A",
-                "item_number": "UPLOAD-BATCH-ITEM-001",
-                "resolution_type": "new_item",
-                "category": "Lens",
-                "url": "",
-                "description": "first upload batch row",
-            }
-        ],
-    )
-    batch_two = make_csv_bytes(
-        ["supplier", "item_number", "resolution_type", "category", "url", "description"],
-        [
-            {
-                "supplier": "Upload Supplier B",
-                "item_number": "UPLOAD-BATCH-ITEM-002",
-                "resolution_type": "new_item",
-                "category": "Mirror",
-                "url": "",
-                "description": "second upload batch row",
-            }
-        ],
-    )
-
+def test_items_batch_upload_endpoint_is_removed(client):
     response = client.post(
         "/api/items/batch-upload",
-        files=[
-            ("files", ("upload_batch_a.csv", batch_one, "text/csv")),
-            ("files", ("upload_batch_b.csv", batch_two, "text/csv")),
-        ],
+        files=[("files", ("removed.csv", b"item_number\nREMOVED\n", "text/csv"))],
         data={"continue_on_error": "true"},
     )
 
-    assert response.status_code == 200
-    payload = response.json()["data"]
-    assert payload["status"] == "ok"
-    assert payload["succeeded"] == 2
-    assert payload["upload_job_id"].startswith("items_")
-    assert len(payload["uploaded_files"]) == 2
-    assert all("\\" not in path and "/" not in path for path in payload["uploaded_files"])
-
-    month_dir = workspace_roots["items_registered_root"] / today_jst()[:7]
-    archived_files = sorted(month_dir.glob("*.csv"))
-    assert archived_files
-    archived_text = "\n".join(path.read_text(encoding="utf-8") for path in archived_files)
-    assert "UPLOAD-BATCH-ITEM-001" in archived_text
-    assert "UPLOAD-BATCH-ITEM-002" in archived_text
-
-
-def test_items_batch_upload_endpoint_accepts_non_ascii_csv_filename(client):
-    batch = make_csv_bytes(
-        ["supplier", "item_number", "resolution_type", "category", "url", "description"],
-        [
-            {
-                "supplier": "Upload Supplier Localized",
-                "item_number": "UPLOAD-BATCH-ITEM-LOCALIZED",
-                "resolution_type": "new_item",
-                "category": "Lens",
-                "url": "",
-                "description": "localized filename upload",
-            }
-        ],
-    )
-
-    response = client.post(
-        "/api/items/batch-upload",
-        files=[("files", ("見積.csv", batch, "text/csv"))],
-        data={"continue_on_error": "true"},
-    )
-
-    assert response.status_code == 200
-    payload = response.json()["data"]
-    assert payload["status"] == "ok"
-    assert payload["succeeded"] == 1
-    assert any(str(path).endswith(".csv") for path in payload["uploaded_files"])
-    assert all("\\" not in path and "/" not in path for path in payload["uploaded_files"])
-
-
-def test_items_batch_upload_endpoint_can_archive_directly_to_gcs(client, monkeypatch):
-    from app import storage as storage_module
-
-    fake_storage_client = _FakeStorageClient()
-    monkeypatch.setattr(storage_module.config, "GCS_BUCKET", "materials-dev")
-    monkeypatch.setattr(storage_module.config, "GCS_OBJECT_PREFIX", "materials/dev")
-    monkeypatch.setattr(
-        storage_module.config,
-        "get_storage_backend",
-        lambda: storage_module.config.STORAGE_BACKEND_GCS,
-    )
-    monkeypatch.setattr(storage_module, "_get_gcs_client", lambda: fake_storage_client)
-
-    batch = make_csv_bytes(
-        ["supplier", "item_number", "resolution_type", "category", "url", "description"],
-        [
-            {
-                "supplier": "Upload Supplier Cloud",
-                "item_number": "UPLOAD-BATCH-GCS-001",
-                "resolution_type": "new_item",
-                "category": "Lens",
-                "url": "",
-                "description": "cloud upload batch row",
-            }
-        ],
-    )
-
-    response = client.post(
-        "/api/items/batch-upload",
-        files=[("files", ("batch_missing_items_registration_cloud.csv", batch, "text/csv"))],
-        data={"continue_on_error": "true"},
-    )
-
-    assert response.status_code == 200
-    payload = response.json()["data"]
-    assert payload["status"] == "ok"
-    assert payload["succeeded"] == 1
-    assert payload["uploaded_files"] == ["batch_missing_items_registration_cloud.csv"]
-    assert any(
-        key.endswith("batch_missing_items_registration_cloud.csv")
-        for key in fake_storage_client.objects
-    )
+    assert response.status_code == 405
 
 
 def test_items_register_unregistered_batch_endpoint_is_removed(client):
@@ -2380,165 +2338,54 @@ def test_bulk_update_item_metadata_endpoint_partial_on_missing_item(client):
     assert len(rows) == 1
     assert rows[0]["description"] == "ok-update"
 
-def test_register_missing_rows_endpoint(client):
-    response = client.post(
-        "/api/register-missing/rows",
+def test_alias_upsert_by_supplier_name_endpoint(client):
+    client.post("/api/manufacturers", json={"name": "ALIAS-UPSERT-MFG"})
+    canonical = client.post(
+        "/api/items",
         json={
-            "rows": [
-                {
-                    "supplier": "SupplierResolver",
-                    "item_number": "MISS-ITEM-NEW",
-                    "manufacturer_name": "RESOLVER-MFG",
-                    "resolution_type": "new_item",
-                    "category": "Lens",
-                    "description": "from resolver",
-                }
-            ]
+            "item_number": "ALIAS-UPSERT-CANONICAL",
+            "manufacturer_name": "ALIAS-UPSERT-MFG",
+            "category": "Lens",
+        },
+    ).json()["data"]
+
+    response = client.post(
+        "/api/aliases/upsert",
+        json={
+            "supplier_name": "SupplierResolver",
+            "ordered_item_number": "MISS-ITEM-ALIAS",
+            "canonical_item_number": canonical["item_number"],
+            "units_per_order": 2,
         },
     )
     assert response.status_code == 200
     data = response.json()["data"]
-    assert data["created_items"] == 1
+    assert data["supplier_name"] == "SupplierResolver"
+    assert data["ordered_item_number"] == "MISS-ITEM-ALIAS"
+    assert data["canonical_item_number"] == canonical["item_number"]
+    assert data["units_per_order"] == 2
 
-    items = client.get("/api/items?q=MISS-ITEM-NEW&per_page=50")
-    assert items.status_code == 200
-    rows = items.json()["data"]
-    assert len(rows) == 1
-    assert rows[0]["item_number"] == "MISS-ITEM-NEW"
-    assert rows[0]["manufacturer_name"] == "RESOLVER-MFG"
-
-def test_register_missing_rows_endpoint_accepts_manufacturer_alias_field(client):
-    response = client.post(
-        "/api/register-missing/rows",
-        json={
-            "rows": [
-                {
-                    "supplier": "SupplierResolver",
-                    "item_number": "MISS-ITEM-NEW-ALIAS",
-                    "manufacturer": "RESOLVER-MFG-ALIAS",
-                    "resolution_type": "new_item",
-                    "category": "Lens",
-                    "description": "from resolver alias",
-                }
-            ]
-        },
+    suppliers = client.get("/api/suppliers")
+    supplier = next(
+        row for row in suppliers.json()["data"] if row["name"] == "SupplierResolver"
     )
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["created_items"] == 1
-
-    items = client.get("/api/items?q=MISS-ITEM-NEW-ALIAS&per_page=50")
-    assert items.status_code == 200
-    rows = items.json()["data"]
-    assert len(rows) == 1
-    assert rows[0]["manufacturer_name"] == "RESOLVER-MFG-ALIAS"
+    aliases = client.get(f"/api/suppliers/{supplier['supplier_id']}/aliases").json()["data"]
+    assert len(aliases) == 1
+    assert aliases[0]["ordered_item_number"] == "MISS-ITEM-ALIAS"
 
 
-def test_register_missing_rows_endpoint_accepts_legacy_row_type_item(client):
-    response = client.post(
+def test_register_missing_endpoints_are_removed(client):
+    rows_response = client.post(
         "/api/register-missing/rows",
-        json={
-            "rows": [
-                {
-                    "supplier": "SupplierResolver",
-                    "item_number": "MISS-ITEM-ROW-TYPE",
-                    "row_type": "item",
-                    "manufacturer_name": "ROW-TYPE-MFG",
-                    "category": "Lens",
-                    "description": "legacy row_type mapping",
-                }
-            ]
-        },
+        json={"rows": []},
     )
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["created_items"] == 1
+    assert rows_response.status_code == 404
 
-    items = client.get("/api/items?q=MISS-ITEM-ROW-TYPE&per_page=50")
-    assert items.status_code == 200
-    rows = items.json()["data"]
-    assert len(rows) == 1
-    assert rows[0]["manufacturer_name"] == "ROW-TYPE-MFG"
-
-def test_register_missing_rows_endpoint_rejects_unresolved_new_item(client):
-    response = client.post(
-        "/api/register-missing/rows",
-        json={
-            "rows": [
-                {
-                    "supplier": "SupplierResolver",
-                    "item_number": "MISS-ITEM-UNRESOLVED",
-                    "resolution_type": "new_item",
-                    "category": "",
-                    "url": "",
-                    "description": "",
-                }
-            ]
-        },
-    )
-    assert response.status_code == 422
-    payload = response.json()
-    assert payload["status"] == "error"
-    assert payload["error"]["code"] == "MISSING_ITEM_UNRESOLVED"
-
-def test_register_missing_upload_endpoint_rejects_unresolved_new_item_by_default(client):
-    response = client.post(
+    upload_response = client.post(
         "/api/register-missing",
-        files={
-            "file": (
-                "missing_items_registration.csv",
-                make_csv_bytes(
-                    ["supplier", "item_number", "resolution_type", "category", "url", "description"],
-                    [
-                        {
-                            "supplier": "SupplierResolver",
-                            "item_number": "MISS-ITEM-UPLOAD-UNRESOLVED",
-                            "resolution_type": "new_item",
-                            "category": "",
-                            "url": "",
-                            "description": "",
-                        }
-                    ],
-                ),
-                "text/csv",
-            )
-        },
+        files={"file": ("removed.csv", b"item_number\nREMOVED\n", "text/csv")},
     )
-    assert response.status_code == 422
-    payload = response.json()
-    assert payload["status"] == "error"
-    assert payload["error"]["code"] == "MISSING_ITEM_UNRESOLVED"
-
-def test_register_missing_upload_endpoint_accepts_skip_unresolved_form_flag(client):
-    response = client.post(
-        "/api/register-missing",
-        files={
-            "file": (
-                "missing_items_registration.csv",
-                make_csv_bytes(
-                    ["supplier", "item_number", "resolution_type", "category", "url", "description"],
-                    [
-                        {
-                            "supplier": "SupplierResolver",
-                            "item_number": "MISS-ITEM-UPLOAD-SKIP",
-                            "resolution_type": "new_item",
-                            "category": "",
-                            "url": "",
-                            "description": "",
-                        }
-                    ],
-                ),
-                "text/csv",
-            )
-        },
-        data={"skip_unresolved": "true"},
-    )
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["created_items"] == 0
-    assert data["created_aliases"] == 0
-    assert data["skipped_unresolved"] == 1
-    assert data["is_completely_unresolved"] is True
+    assert upload_response.status_code == 404
 
 def test_delete_order_endpoint(client):
     client.post("/api/manufacturers", json={"name": "API-DEL-ORDER-MFG"})

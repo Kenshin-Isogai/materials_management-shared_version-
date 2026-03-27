@@ -2,6 +2,16 @@
 
 ### Changed
 
+- Simplified the browser item-registration workflow around one CSV import UI.
+  - removed the Items-page missing-item resolver section and the dedicated missing-item batch-upload section
+  - order-generated missing-item CSVs are now expected to be downloaded, edited, and re-imported through the normal Items preview/import flow
+  - Orders preview/import now offers CSV download handoff instead of routing unresolved rows into a browser-side retry/resolver loop
+  - removed the unused `POST /api/items/batch-upload` endpoint and its compatibility-only backend path now that the browser no longer depends on it
+  - replaced the last browser dependency on `POST /api/register-missing/rows` with a dedicated alias upsert-by-supplier-name API, then removed both `POST /api/register-missing` and `POST /api/register-missing/rows`
+- Simplified the Cloud Run-target Orders import contract.
+  - order CSV rows now carry required `supplier` values instead of relying on a selected supplier outside the file
+  - the Orders page now supports selecting multiple CSV files in one preview/import pass
+  - browser-side retry-after-missing-items now replays the remaining selected files instead of one cached file plus a top-level supplier
 - Removed the remaining repo-local item-batch compatibility path.
   - deleted `POST /api/items/register-unregistered-batch`
   - removed the Items-page `Run Existing Imported Batch` fallback

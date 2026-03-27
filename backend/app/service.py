@@ -732,6 +732,67 @@ def _resolve_order_import_supplier_context(
     }
 
 
+def _resolve_order_import_row_supplier_context(
+    conn: sqlite3.Connection,
+    *,
+    row: dict[str, str],
+    row_number: int,
+    default_supplier_id: int | None = None,
+    default_supplier_name: str | None = None,
+) -> dict[str, Any]:
+    row_supplier_name = str(row.get("supplier") or "").strip()
+    if row_supplier_name:
+        return _resolve_order_import_supplier_context(
+            conn,
+            supplier_name=row_supplier_name,
+        )
+    if default_supplier_id is not None or default_supplier_name is not None:
+        return _resolve_order_import_supplier_context(
+            conn,
+            supplier_id=default_supplier_id,
+            supplier_name=default_supplier_name,
+        )
+    raise AppError(
+        code="INVALID_CSV",
+        message=f"supplier is required (row {row_number})",
+        status_code=422,
+    )
+
+
+def _summarize_order_import_supplier_contexts(
+    contexts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not contexts:
+        return {
+            "supplier_id": None,
+            "supplier_name": "",
+            "exists": False,
+            "mode": "empty",
+        }
+    unique_pairs = {
+        (
+            context.get("supplier_id"),
+            str(context.get("supplier_name") or ""),
+            bool(context.get("exists")),
+        )
+        for context in contexts
+    }
+    if len(unique_pairs) == 1:
+        supplier_id, supplier_name, exists = next(iter(unique_pairs))
+        return {
+            "supplier_id": supplier_id,
+            "supplier_name": supplier_name,
+            "exists": exists,
+            "mode": "single",
+        }
+    return {
+        "supplier_id": None,
+        "supplier_name": "Multiple suppliers",
+        "exists": False,
+        "mode": "per_row",
+    }
+
+
 def _resolve_order_item(
     conn: sqlite3.Connection,
     supplier_id: int | None,
@@ -1173,6 +1234,7 @@ IMPORT_TEMPLATE_SPECS: dict[str, dict[str, Any]] = {
     "orders": {
         "filename": "orders_import_template.csv",
         "fieldnames": [
+            "supplier",
             "item_number",
             "quantity",
             "quotation_number",
@@ -5416,6 +5478,8 @@ def _normalize_order_import_overrides(
 
 def _normalize_order_import_alias_saves(
     alias_saves: list[dict[str, Any]] | None,
+    *,
+    default_supplier_name: str | None = None,
 ) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     alias_payload = _require_json_array(
@@ -5430,7 +5494,9 @@ def _normalize_order_import_alias_saves(
                 message=f"Alias save entry #{idx} must be an object",
                 status_code=422,
             )
-        unexpected_fields = sorted(set(raw_alias) - {"ordered_item_number", "item_id", "units_per_order"})
+        unexpected_fields = sorted(
+            set(raw_alias) - {"supplier_name", "ordered_item_number", "item_id", "units_per_order"}
+        )
         if unexpected_fields:
             raise AppError(
                 code="INVALID_ORDER_IMPORT_ALIAS",
@@ -5441,6 +5507,8 @@ def _normalize_order_import_alias_saves(
             str(raw_alias.get("ordered_item_number", "")),
             f"ordered_item_number (alias save #{idx})",
         )
+        supplier_name = str(raw_alias.get("supplier_name") or default_supplier_name or "").strip()
+        supplier_name = require_non_empty(supplier_name, f"supplier_name (alias save #{idx})")
         if raw_alias.get("item_id") in (None, ""):
             raise AppError(
                 code="INVALID_ORDER_IMPORT_ALIAS",
@@ -5472,6 +5540,7 @@ def _normalize_order_import_alias_saves(
             ) from exc
         normalized.append(
             {
+                "supplier_name": supplier_name,
                 "ordered_item_number": ordered_item_number,
                 "item_id": item_id,
                 "units_per_order": units_per_order,
@@ -5483,15 +5552,20 @@ def _normalize_order_import_alias_saves(
 def _apply_order_import_alias_saves(
     conn: sqlite3.Connection,
     *,
-    supplier_id: int,
     alias_saves: list[dict[str, Any]],
 ) -> int:
-    deduped: dict[str, dict[str, Any]] = {}
+    deduped: dict[tuple[str, str], dict[str, Any]] = {}
     for alias in alias_saves:
-        deduped[str(alias["ordered_item_number"]).casefold()] = alias
+        deduped[
+            (
+                str(alias["supplier_name"]).casefold(),
+                str(alias["ordered_item_number"]).casefold(),
+            )
+        ] = alias
 
     saved_count = 0
     for alias in deduped.values():
+        supplier_id = _get_or_create_supplier(conn, str(alias["supplier_name"]))
         ordered_item_number = str(alias["ordered_item_number"])
         if _resolve_item_by_number(conn, ordered_item_number) is not None:
             continue
@@ -5942,18 +6016,17 @@ def preview_orders_import_from_rows(
     default_order_date: str | None = None,
     source_name: str = "order_import.csv",
 ) -> dict[str, Any]:
-    supplier_context = _resolve_order_import_supplier_context(
-        conn,
-        supplier_id=supplier_id,
-        supplier_name=supplier_name,
-    )
-    supplier_name_value = str(supplier_context["supplier_name"])
-    preview_candidates = _load_order_import_preview_candidates(
-        conn,
-        supplier_context["supplier_id"],
-    )
+    default_supplier_context = None
+    if supplier_id is not None or supplier_name is not None:
+        default_supplier_context = _resolve_order_import_supplier_context(
+            conn,
+            supplier_id=supplier_id,
+            supplier_name=supplier_name,
+        )
     normalized_default_date = normalize_optional_date(default_order_date, "default_order_date")
     preview_rows: list[dict[str, Any]] = []
+    row_supplier_contexts: list[dict[str, Any]] = []
+    preview_candidate_cache: dict[int | None, list[dict[str, Any]]] = {}
     summary = {
         "total_rows": 0,
         "exact": 0,
@@ -5966,6 +6039,33 @@ def preview_orders_import_from_rows(
         if not any(str(value or "").strip() for value in row.values()):
             continue
 
+        supplier_context = _resolve_order_import_row_supplier_context(
+            conn,
+            row=row,
+            row_number=row_number,
+            default_supplier_id=(
+                int(default_supplier_context["supplier_id"])
+                if default_supplier_context and default_supplier_context.get("supplier_id") is not None
+                else None
+            ),
+            default_supplier_name=(
+                str(default_supplier_context["supplier_name"])
+                if default_supplier_context is not None
+                else None
+            ),
+        )
+        row_supplier_contexts.append(supplier_context)
+        preview_supplier_id = (
+            int(supplier_context["supplier_id"])
+            if supplier_context.get("supplier_id") is not None
+            else None
+        )
+        if preview_supplier_id not in preview_candidate_cache:
+            preview_candidate_cache[preview_supplier_id] = _load_order_import_preview_candidates(
+                conn,
+                preview_supplier_id,
+            )
+        preview_candidates = preview_candidate_cache[preview_supplier_id]
         item_number = require_non_empty(str(row.get("item_number", "")), f"item_number (row {row_number})")
         quantity_raw = row.get("quantity")
         try:
@@ -6008,7 +6108,8 @@ def preview_orders_import_from_rows(
         suggested_match = best_candidate if status != "unresolved" else None
         preview_row = {
             "row": row_number,
-            "supplier_name": supplier_name_value,
+            "supplier_name": str(supplier_context["supplier_name"]),
+            "supplier_id": preview_supplier_id,
             "item_number": item_number,
             "quantity": ordered_quantity,
             "quotation_number": quotation_number,
@@ -6027,6 +6128,7 @@ def preview_orders_import_from_rows(
                 if suggested_match is not None
                 else None
             ),
+            "supplier_exists": bool(supplier_context["exists"]),
         }
         preview_rows.append(preview_row)
         summary["total_rows"] += 1
@@ -6034,25 +6136,38 @@ def preview_orders_import_from_rows(
 
     blocking_errors: list[str] = []
     duplicate_quotation_numbers: list[str] = []
-    if supplier_context["supplier_id"] is not None:
-        duplicate_quotation_numbers = _order_import_duplicate_quotation_numbers(
+    duplicate_messages_seen: set[str] = set()
+    rows_by_supplier_id: dict[int, list[dict[str, Any]]] = {}
+    for preview_row in preview_rows:
+        supplier_row_id = preview_row.get("supplier_id")
+        if supplier_row_id is None:
+            continue
+        rows_by_supplier_id.setdefault(int(supplier_row_id), []).append(preview_row)
+    for duplicate_supplier_id, supplier_rows in rows_by_supplier_id.items():
+        supplier_duplicates = _order_import_duplicate_quotation_numbers(
             conn,
-            int(supplier_context["supplier_id"]),
-            [str(row["quotation_number"]) for row in preview_rows],
+            duplicate_supplier_id,
+            [str(row["quotation_number"]) for row in supplier_rows],
         )
-        if duplicate_quotation_numbers:
-            duplicate_set = set(duplicate_quotation_numbers)
-            blocking_errors.append(
-                "Quotation already imported for this supplier: "
-                + ", ".join(duplicate_quotation_numbers)
-            )
-            for preview_row in preview_rows:
-                if str(preview_row["quotation_number"]) in duplicate_set:
-                    preview_row["warnings"].append("Quotation already imported for this supplier.")
+        if not supplier_duplicates:
+            continue
+        duplicate_quotation_numbers.extend(supplier_duplicates)
+        duplicate_set = set(supplier_duplicates)
+        supplier_name_value = str(supplier_rows[0]["supplier_name"])
+        duplicate_message = (
+            f"Quotation already imported for supplier '{supplier_name_value}': "
+            + ", ".join(supplier_duplicates)
+        )
+        if duplicate_message not in duplicate_messages_seen:
+            blocking_errors.append(duplicate_message)
+            duplicate_messages_seen.add(duplicate_message)
+        for preview_row in supplier_rows:
+            if str(preview_row["quotation_number"]) in duplicate_set:
+                preview_row["warnings"].append("Quotation already imported for this supplier.")
 
     return {
         "source_name": source_name,
-        "supplier": supplier_context,
+        "supplier": _summarize_order_import_supplier_contexts(row_supplier_contexts),
         "thresholds": {
             "auto_accept": ORDER_IMPORT_AUTO_ACCEPT_SCORE,
             "review": ORDER_IMPORT_REVIEW_SCORE,
@@ -6073,7 +6188,8 @@ def preview_orders_import_from_rows(
 def _process_order_rows_for_import(
     conn: sqlite3.Connection,
     *,
-    supplier_id: int,
+    supplier_id: int | None = None,
+    supplier_name: str | None = None,
     rows: list[dict[str, str]],
     default_order_date: str | None = None,
     allow_noncanonical_pdf_link: bool = False,
@@ -6082,15 +6198,38 @@ def _process_order_rows_for_import(
     resolved: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
     seen_missing: set[tuple[str, str]] = set()
-    supplier_name_row = conn.execute(
-        "SELECT name FROM suppliers WHERE supplier_id = ?",
-        (supplier_id,),
-    ).fetchone()
-    supplier_name = supplier_name_row["name"] if supplier_name_row else str(supplier_id)
+    default_supplier_context = None
+    if supplier_id is not None or supplier_name is not None:
+        default_supplier_context = _resolve_order_import_supplier_context(
+            conn,
+            supplier_id=supplier_id,
+            supplier_name=supplier_name,
+        )
     normalized_default_date = normalize_optional_date(default_order_date, "default_order_date")
     for idx, row in enumerate(rows, start=2):
         if not any(str(value or "").strip() for value in row.values()):
             continue
+        supplier_context = _resolve_order_import_row_supplier_context(
+            conn,
+            row=row,
+            row_number=idx,
+            default_supplier_id=(
+                int(default_supplier_context["supplier_id"])
+                if default_supplier_context and default_supplier_context.get("supplier_id") is not None
+                else None
+            ),
+            default_supplier_name=(
+                str(default_supplier_context["supplier_name"])
+                if default_supplier_context is not None
+                else None
+            ),
+        )
+        row_supplier_id = (
+            int(supplier_context["supplier_id"])
+            if supplier_context.get("supplier_id") is not None
+            else _get_or_create_supplier(conn, str(supplier_context["supplier_name"]))
+        )
+        row_supplier_name = str(supplier_context["supplier_name"])
         item_number = require_non_empty(str(row.get("item_number", "")), f"item_number (row {idx})")
         quantity_raw = row.get("quantity")
         try:
@@ -6110,7 +6249,7 @@ def _process_order_rows_for_import(
             row.get("purchase_order_document_url"),
             f"purchase_order_document_url (row {idx})",
         )
-        item_id, units_per_order = _resolve_order_item(conn, supplier_id, item_number)
+        item_id, units_per_order = _resolve_order_item(conn, row_supplier_id, item_number)
         override = (row_overrides or {}).get(idx, {})
         override_item_id = override.get("item_id")
         override_units = override.get("units_per_order")
@@ -6129,14 +6268,14 @@ def _process_order_rows_for_import(
         if override_units is not None:
             units_per_order = override_units
         if item_id is None:
-            dedupe_key = (supplier_name.casefold(), item_number.casefold())
+            dedupe_key = (row_supplier_name.casefold(), item_number.casefold())
             if dedupe_key not in seen_missing:
                 seen_missing.add(dedupe_key)
                 missing.append(
                     {
                         "row": idx,
                         "item_number": item_number,
-                        "supplier": supplier_name,
+                        "supplier": row_supplier_name,
                         "manufacturer_name": "",
                         "resolution_type": "new_item",
                         "category": "",
@@ -6153,6 +6292,8 @@ def _process_order_rows_for_import(
         resolved.append(
             {
                 "item_id": item_id,
+                "supplier_id": row_supplier_id,
+                "supplier_name": row_supplier_name,
                 "row_number": idx,
                 "quotation_number": require_non_empty(
                     str(row.get("quotation_number", "")),
@@ -6188,9 +6329,11 @@ def import_orders_from_rows(
     alias_saves: list[dict[str, Any]] | None = None,
     import_job_id: int | None = None,
 ) -> dict[str, Any]:
-    sid = _resolve_supplier_id(conn, supplier_id, supplier_name)
     normalized_overrides = _normalize_order_import_overrides(row_overrides)
-    normalized_alias_saves = _normalize_order_import_alias_saves(alias_saves)
+    normalized_alias_saves = _normalize_order_import_alias_saves(
+        alias_saves,
+        default_supplier_name=supplier_name,
+    )
     _validate_import_override_rows(
         normalized_overrides,
         valid_row_numbers=_valid_csv_row_numbers(rows, skip_blank_rows=True),
@@ -6199,7 +6342,8 @@ def import_orders_from_rows(
     )
     resolved, missing = _process_order_rows_for_import(
         conn,
-        supplier_id=sid,
+        supplier_id=supplier_id,
+        supplier_name=supplier_name,
         rows=rows,
         default_order_date=default_order_date,
         allow_noncanonical_pdf_link=allow_noncanonical_pdf_link,
@@ -6238,15 +6382,36 @@ def import_orders_from_rows(
             "rows": missing,
         }
 
-    duplicated = _order_import_duplicate_quotation_numbers(
-        conn,
-        sid,
-        [str(row["quotation_number"]) for row in resolved],
-    )
-    if duplicated:
+    duplicate_details: list[dict[str, Any]] = []
+    duplicate_messages: list[str] = []
+    rows_by_supplier_id: dict[int, list[dict[str, Any]]] = {}
+    for row in resolved:
+        rows_by_supplier_id.setdefault(int(row["supplier_id"]), []).append(row)
+    for duplicate_supplier_id, supplier_rows in rows_by_supplier_id.items():
+        supplier_duplicates = _order_import_duplicate_quotation_numbers(
+            conn,
+            duplicate_supplier_id,
+            [str(row["quotation_number"]) for row in supplier_rows],
+        )
+        if not supplier_duplicates:
+            continue
+        duplicate_set = set(supplier_duplicates)
+        duplicate_details.extend(
+            {
+                "supplier_id": duplicate_supplier_id,
+                "supplier_name": str(supplier_rows[0]["supplier_name"]),
+                "quotation_number": quotation_number,
+            }
+            for quotation_number in supplier_duplicates
+        )
+        duplicate_messages.append(
+            "Quotation already imported for supplier "
+            f"'{supplier_rows[0]['supplier_name']}': {', '.join(supplier_duplicates)}"
+        )
         if import_job_id is not None:
-            duplicate_set = set(duplicated)
             for row in resolved:
+                if int(row["supplier_id"]) != duplicate_supplier_id:
+                    continue
                 if str(row["quotation_number"]) not in duplicate_set:
                     continue
                 _record_import_job_effect(
@@ -6256,26 +6421,28 @@ def import_orders_from_rows(
                     status="duplicate",
                     effect_type="order_duplicate_quotation",
                     item_id=int(row["item_id"]),
+                    supplier_id=int(row["supplier_id"]),
+                    supplier_name=str(row["supplier_name"]),
                     item_number=str(row.get("ordered_item_number") or ""),
                     message=(
                         "Quotation already imported for this supplier: "
-                        f"{', '.join(duplicated)}"
+                        f"{', '.join(supplier_duplicates)}"
                     ),
                     code="DUPLICATE_QUOTATION_IMPORT",
                 )
+    if duplicate_messages:
         raise AppError(
             code="DUPLICATE_QUOTATION_IMPORT",
-            message=(
-                "Quotation already imported for this supplier: "
-                f"{', '.join(duplicated)}"
-            ),
+            message="; ".join(duplicate_messages),
             status_code=409,
-            details={"quotation_numbers": duplicated},
+            details={
+                "quotation_numbers": [detail["quotation_number"] for detail in duplicate_details],
+                "quotation_numbers_by_supplier": duplicate_details,
+            },
         )
 
     saved_alias_count = _apply_order_import_alias_saves(
         conn,
-        supplier_id=sid,
         alias_saves=normalized_alias_saves,
     )
 
@@ -6283,7 +6450,7 @@ def import_orders_from_rows(
     for row in resolved:
         quotation_id = _get_or_create_quotation(
             conn,
-            sid,
+            int(row["supplier_id"]),
             row["quotation_number"],
             row["issue_date"],
             row["quotation_document_url"],
@@ -6321,13 +6488,14 @@ def import_orders_from_rows(
                 import_job_id=import_job_id,
                 row_number=int(row["row_number"]),
                 status="created",
-                effect_type="order_created",
-                item_id=int(row["item_id"]),
-                item_number=str(row.get("ordered_item_number") or ""),
-                supplier_id=int(sid),
-                after_state={
-                    "order_id": order_id,
-                    "item_id": int(row["item_id"]),
+                    effect_type="order_created",
+                    item_id=int(row["item_id"]),
+                    item_number=str(row.get("ordered_item_number") or ""),
+                    supplier_id=int(row["supplier_id"]),
+                    supplier_name=str(row["supplier_name"]),
+                    after_state={
+                        "order_id": order_id,
+                        "item_id": int(row["item_id"]),
                     "quotation_id": quotation_id,
                     "quotation_number": row["quotation_number"],
                     "quotation_document_url": row["quotation_document_url"],
@@ -6617,130 +6785,6 @@ def import_orders_from_csv_path(
     )
 
 
-def upload_and_register_item_batch_csvs(
-    conn: sqlite3.Connection,
-    *,
-    files: list[tuple[str, bytes]],
-    continue_on_error: bool = False,
-    staging_root: str | Path | None = None,
-) -> dict[str, Any]:
-    if not files:
-        raise AppError(
-            code="INVALID_REQUEST",
-            message="At least one CSV file is required",
-            status_code=422,
-        )
-
-    if staging_root is not None:
-        # Deprecated by the cloud-safe direct-processing path; retain the parameter for compatibility.
-        _ = staging_root
-
-    upload_job_id = _create_upload_job_id("items")
-    report: list[dict[str, Any]] = []
-    processed = 0
-    succeeded = 0
-    failed = 0
-    uploaded_files: list[str] = []
-    warnings: list[str] = []
-
-    for index, (filename, content) in enumerate(files, start=1):
-        processed += 1
-        safe_name = _safe_staging_filename(filename or f"upload_{index}.csv", f"upload_{index}.csv")
-        uploaded_files.append(safe_name)
-        if not safe_name.lower().endswith(".csv"):
-            entry = {
-                "file": safe_name,
-                "supplier": "UNKNOWN",
-                "status": "error",
-                "error": f"Uploaded file must be CSV: {safe_name}",
-                "warnings": [],
-                "normalizations": [],
-            }
-            report.append(entry)
-            failed += 1
-            if not continue_on_error:
-                break
-            continue
-
-        try:
-            savepoint = f"sp_register_missing_upload_{uuid4().hex}"
-            conn.execute(f"SAVEPOINT {savepoint}")
-            try:
-                result = register_missing_items_from_content(
-                    conn,
-                    content,
-                    skip_unresolved=True,
-                )
-                archive_info = None
-                status_text = "ok"
-                if result.get("is_completely_unresolved") and safe_name.startswith("batch_missing_items_registration"):
-                    status_text = "skipped_unresolved_batch_file"
-                else:
-                    archive_info = _archive_imported_items_csv(
-                        content,
-                        source_name=safe_name,
-                        registered_root=ITEMS_IMPORT_REGISTERED_ROOT,
-                    )
-                report.append(
-                    {
-                        "file": safe_name,
-                        "supplier": "UNKNOWN",
-                        "status": status_text,
-                        "moved_to": (
-                            archive_info.get("archived_filename")
-                            if isinstance(archive_info, dict)
-                            else None
-                        ),
-                        "storage_ref": (
-                            archive_info.get("archive_storage_ref")
-                            if isinstance(archive_info, dict)
-                            else None
-                        ),
-                        "result": result,
-                        "warnings": [],
-                        "normalizations": [],
-                    }
-                )
-                conn.execute(f"RELEASE {savepoint}")
-                succeeded += 1
-            except Exception:
-                conn.execute(f"ROLLBACK TO {savepoint}")
-                conn.execute(f"RELEASE {savepoint}")
-                raise
-        except Exception as exc:  # noqa: BLE001
-            failed += 1
-            report.append(
-                {
-                    "file": safe_name,
-                    "supplier": "UNKNOWN",
-                    "status": "error",
-                    "error": str(exc),
-                    "warnings": [],
-                    "normalizations": [],
-                }
-            )
-            if not continue_on_error:
-                break
-
-    status = "ok" if failed == 0 else ("partial" if succeeded > 0 else "error")
-    consolidation = (
-        _disabled_items_archive_rollup_result()
-        if status == "ok"
-        else {"consolidated": 0, "folders": [], "skipped_due_to_errors": True}
-    )
-    return {
-        "status": status,
-        "processed": processed,
-        "succeeded": succeeded,
-        "failed": failed,
-        "files": report,
-        "warnings": warnings,
-        "normalizations": [],
-        "consolidation": consolidation,
-        "upload_job_id": upload_job_id,
-        "uploaded_files": uploaded_files,
-    }
-
 def _import_unregistered_order_csv_file(
     conn: sqlite3.Connection,
     *,
@@ -6905,144 +6949,6 @@ def _predict_move_target(src: Path, dst_dir: Path, reserved_targets: set[str]) -
         if candidate_key not in reserved_targets and not candidate.exists():
             return candidate, True
         idx += 1
-
-
-
-def register_missing_items_from_rows(
-    conn: sqlite3.Connection,
-    rows: list[dict[str, str]],
-    *,
-    skip_unresolved: bool = False,
-) -> dict[str, Any]:
-    normalized_rows: list[dict[str, str]] = []
-    skipped_unresolved = 0
-    seen_new_items: set[tuple[str, str]] = set()
-
-    for raw_row in rows:
-        if not any(str(value or "").strip() for value in raw_row.values()):
-            normalized_rows.append({})
-            continue
-
-        row = dict(raw_row)
-        supplier = require_non_empty(str(row.get("supplier", "")), "supplier")
-        item_number = require_non_empty(str(row.get("item_number", "")), "item_number")
-        raw_row_type = str(row.get("resolution_type") or row.get("row_type") or "new_item").strip().lower()
-        row_type = "alias" if raw_row_type == "alias" else "item"
-
-        if row_type == "alias":
-            normalized_rows.append(
-                {
-                    "row_type": "alias",
-                    "supplier": supplier,
-                    "item_number": item_number,
-                    "canonical_item_number": str(row.get("canonical_item_number") or "").strip(),
-                    "units_per_order": str(row.get("units_per_order") or "").strip() or "1",
-                }
-            )
-            continue
-
-        category_value = str(row.get("category") or "").strip()
-        url_value = str(row.get("url") or "").strip()
-        description_value = str(row.get("description") or "").strip()
-        if not any((category_value, url_value, description_value)):
-            if skip_unresolved:
-                skipped_unresolved += 1
-                normalized_rows.append({})
-                continue
-            raise AppError(
-                code="MISSING_ITEM_UNRESOLVED",
-                message=(
-                    "new_item rows require at least one of category, url, or description. "
-                    "Fill details before registering missing items."
-                ),
-                status_code=422,
-                details={"supplier": supplier, "item_number": item_number},
-            )
-
-        manufacturer_name = str(row.get("manufacturer_name") or row.get("manufacturer") or "").strip() or "UNKNOWN"
-        existing_item = _get_item_by_number_and_manufacturer(
-            conn,
-            item_number=item_number,
-            manufacturer_name=manufacturer_name,
-        )
-        item_key = (manufacturer_name.casefold(), item_number.casefold())
-        if existing_item is not None or item_key in seen_new_items:
-            normalized_rows.append({})
-            continue
-
-        seen_new_items.add(item_key)
-        normalized_rows.append(
-            {
-                "row_type": "item",
-                "item_number": item_number,
-                "manufacturer_name": manufacturer_name,
-                "category": category_value,
-                "url": url_value,
-                "description": description_value,
-            }
-        )
-
-    import_result = import_items_from_rows(
-        conn,
-        rows=normalized_rows,
-        continue_on_error=False,
-    )
-    if int(import_result.get("failed_count", 0)) > 0 or str(import_result.get("status") or "").lower() == "error":
-        error_rows = [row for row in import_result.get("rows", []) if row.get("status") == "error"]
-        first_error = error_rows[0] if error_rows else None
-        raise AppError(
-            code="MISSING_ITEMS_IMPORT_FAILED",
-            message=(
-                first_error.get("error")
-                if isinstance(first_error, dict) and first_error.get("error")
-                else "Failed to register missing items from batch rows"
-            ),
-            status_code=422,
-            details={
-                "status": import_result.get("status"),
-                "failed_count": int(import_result.get("failed_count", 0)),
-                "rows": import_result.get("rows", []),
-            },
-        )
-    created_items = sum(
-        1 for row in import_result["rows"] if row.get("status") == "created" and row.get("entry_type") == "item"
-    )
-    created_aliases = sum(
-        1 for row in import_result["rows"] if row.get("status") == "created" and row.get("entry_type") == "alias"
-    )
-    return {
-        "created_items": created_items,
-        "created_aliases": created_aliases,
-        "skipped_unresolved": skipped_unresolved,
-        "is_completely_unresolved": (created_items == 0 and created_aliases == 0 and skipped_unresolved > 0),
-    }
-
-
-def register_missing_items_from_content(
-    conn: sqlite3.Connection,
-    content: bytes,
-    *,
-    skip_unresolved: bool = False,
-) -> dict[str, Any]:
-    return register_missing_items_from_rows(
-        conn,
-        _load_csv_rows_from_content(content),
-        skip_unresolved=skip_unresolved,
-    )
-
-
-def register_missing_items_from_csv_path(
-    conn: sqlite3.Connection,
-    csv_path: str | Path,
-    *,
-    skip_unresolved: bool = False,
-) -> dict[str, Any]:
-    return register_missing_items_from_rows(
-        conn,
-        _load_csv_rows_from_path(csv_path),
-        skip_unresolved=skip_unresolved,
-    )
-
 
 def process_order_arrival(
     conn: sqlite3.Connection,
@@ -12207,6 +12113,26 @@ def upsert_supplier_item_alias(
         (supplier_id, normalized_item_number),
     ).fetchone()
     return dict(row)
+
+
+def upsert_supplier_item_alias_by_name(
+    conn: sqlite3.Connection,
+    *,
+    supplier_name: str,
+    ordered_item_number: str,
+    canonical_item_id: int | None = None,
+    canonical_item_number: str | None = None,
+    units_per_order: int = 1,
+) -> dict[str, Any]:
+    supplier_id = _get_or_create_supplier(conn, require_non_empty(supplier_name, "supplier_name"))
+    return upsert_supplier_item_alias(
+        conn,
+        supplier_id=supplier_id,
+        ordered_item_number=ordered_item_number,
+        canonical_item_id=canonical_item_id,
+        canonical_item_number=canonical_item_number,
+        units_per_order=units_per_order,
+    )
 
 
 def delete_supplier_item_alias(conn: sqlite3.Connection, alias_id: int) -> None:

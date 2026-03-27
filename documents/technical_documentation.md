@@ -33,10 +33,13 @@ This document explains the implemented architecture of the Materials Management 
   - `GET /api/users` provides the active-user feed for the global picker
   - `GET /api/users?include_inactive=true` backs the management screen
   - create/update/deactivate flows emit a frontend refresh signal so the shared header picker stays aligned
-- Upload-first shared-server batch import adapters remain only for missing-item registration workflows.
-  - `POST /api/items/batch-upload` now processes uploaded CSV bytes directly and archives successful results through the same durable storage boundary used by the batch-registration flow
+- The browser-facing item registration flow is now unified around the preview-first Items CSV import.
+  - order-generated missing-item CSVs are downloaded to the browser, edited, and re-imported through `POST /api/items/import-preview` + `POST /api/items/import`
+  - the Items page no longer exposes a dedicated missing-item resolver or batch-upload section
+  - bulk alias entry now uses a dedicated alias upsert-by-supplier-name API instead of the older `register-missing` compatibility endpoints
   - the Orders page no longer exposes or depends on ZIP/PDF batch upload behavior
 - Manual Orders CSV import now uses external document URLs as the primary contract.
+  - `supplier` is required on every imported order CSV row
   - `quotation_document_url` is required and validated as `https://...`
   - `purchase_order_document_url` is optional and also validated as `https://...`
   - the Orders UI renders those values as openable document links instead of filesystem-style path text
@@ -478,9 +481,7 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
   - `quotation_document_url` is required and must be `https://...`
   - `purchase_order_document_url` is optional and, when present, must be `https://...`
 - Unregistered batch import resolves/moves CSV and PDF files, but no longer rewrites archived CSV content or quotation DB rows just to keep filesystem paths canonical.
-- Upload-first order-batch adapters stage browser payloads under:
-  - `imports/staging/orders/<job-id>/unregistered/csv_files/<supplier>/`
-  - `imports/staging/orders/<job-id>/unregistered/pdf_files/<supplier>/`
+- The GCP-target browser workflow does not depend on supplier folder names or uploaded PDF staging for order import.
 - Orders ZIP staging accepts either canonical `csv_files/...` + `pdf_files/...` paths or simpler supplier-subfolder layouts, then normalizes them into the canonical unregistered structure before domain import starts.
 - Upload-first Orders ZIP CSVs should use the legacy `pdf_link` filename/path compatibility contract only when that legacy batch flow is intentionally used.
   - browser uploads resolve that filename against staged PDFs for the same supplier
@@ -491,6 +492,7 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
   - `POST /api/orders/import` creates `import_jobs(import_type='orders')`
   - `GET /api/orders/import-jobs` and `GET /api/orders/import-jobs/{import_job_id}` expose summary and row-level results
   - job rows keep shared import-job statuses (`ok`, `partial`, `error`) even when the immediate API response uses `status="missing_items"`
+- The Orders page now supports selecting multiple CSV files in one browser action and processes them sequentially through the same preview/import contract.
 - Missing items discovered during unregistered batch import are aggregated into a single register CSV per batch run under `imports/items/unregistered/` (instead of per-quotation output beside source CSVs).
 - Generated missing-item register CSVs now return artifact metadata in API responses and are downloadable through `/api/artifacts/{artifact_id}/download`, so the frontend no longer has to display raw server file paths.
 - Generated artifact lookup is now DB-backed (`generated_artifacts`) with opaque `artifact_id` values rather than filesystem-derived IDs or folder scans.
@@ -498,7 +500,7 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 - Batch consolidation uses collision-safe temporary per-file register naming (supplier-prefixed) and deletes temporary files only after consolidated-register write succeeds.
 - Consolidated register files may include rows from multiple suppliers.
 - Manual Items-page CSV imports store a registered copy under `imports/items/registered/<YYYY-MM>/` as import history, but the runtime no longer rescans that archive tree for follow-up consolidation work.
-- Batch-uploaded missing-item registration CSVs are archived the same way after successful processing, and the old server-root "run existing imported batch" path has been removed.
+- Batch-uploaded missing-item registration CSVs are archived the same way after successful processing, but the primary browser path now expects users to download the generated CSV and feed it through the normal Items preview/import flow.
 - Registered item CSV archives are historical evidence only — UI edits and order/quotation mutations do not rewrite those archived CSVs.
 - In `missing_items_registration.csv`, `supplier` means the supplier alias namespace for ordered SKU resolution. `new_item` rows may optionally provide `manufacturer_name` (or `manufacturer`); blank values default to `UNKNOWN`. The Items-page missing-order resolver now surfaces both manufacturer and alias-supplier fields so its new-item editing surface matches Bulk Item Entry while still preserving alias registration context.
 - Missing-item registration now reuses the same core item/alias write path as the preview-first Items CSV import after normalizing the batch-specific CSV contract. Batch-only rules still apply first: unresolved `new_item` rows can be skipped, existing new-item rows remain no-op, and file staging/archive behavior stays specific to the batch workflow.
@@ -733,14 +735,14 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 - Movement CSV rows are normalized into existing `batch_inventory_operations`, preserving transaction log semantics and undo behavior consistency.
 - Reservation CSV supports assembly references by assembly name/id and expands to component-level reservations; this reuses assembly data efficiently for planning input while keeping assembly behavior advisory.
 - Template CSV endpoints return header-only files encoded as UTF-8 with BOM for Excel compatibility; reference endpoints render live canonical DB values on demand so the frontend does not maintain duplicated template/reference logic.
-- Orders import reference supports optional `supplier_name` scoping so alias rows match the supplier currently selected in the write flow while canonical item rows remain available for direct item-number imports.
+- Orders import reference supports optional `supplier_name` scoping for focused alias lookup, but the browser write flow now requires `supplier` in each CSV row instead of a selected supplier outside the file.
 - Manual CSV imports now support preview-first reconciliation:
   - `POST /api/items/import-preview` classifies item rows as new-vs-duplicate and alias rows as create/update/review/unresolved before commit
   - `POST /api/items/import` accepts optional multipart JSON `row_overrides` so preview confirmation can pin `canonical_item_number` and `units_per_order` for alias rows
   - `POST /api/inventory/import-preview` validates movement rows against operation/location rules, simulates stock deltas in CSV order, and flags item resolution or stock-shortage problems before commit
   - `POST /api/inventory/import-csv` accepts optional multipart JSON `row_overrides` so preview confirmation can substitute canonical `item_id` values
-  - `POST /api/orders/import-preview` parses the upload, classifies rows (`exact`, `high_confidence`, `needs_review`, `unresolved`), ranks candidate matches, and reports duplicate quotation conflicts before commit
-  - preview uses direct canonical item numbers, supplier-scoped aliases, normalized equality, and fuzzy ranking, but does not create a missing supplier during preview
+  - `POST /api/orders/import-preview` parses the upload, requires row-level `supplier`, classifies rows (`exact`, `high_confidence`, `needs_review`, `unresolved`), ranks candidate matches, and reports duplicate quotation conflicts before commit
+  - preview uses direct canonical item numbers, row-supplier-scoped aliases, normalized equality, and fuzzy ranking, but does not create a missing supplier during preview
   - `POST /api/orders/import` now accepts optional multipart JSON fields `row_overrides` and `alias_saves` so preview-confirmation can pin canonical items/units and persist supplier aliases after duplicate checks pass
   - `POST /api/reservations/import-preview` validates item/assembly target resolution, previews assembly expansion into generated component reservations, and flags inventory shortages before commit
   - `POST /api/reservations/import-csv` accepts optional multipart JSON `row_overrides` so preview confirmation can choose `item_id` or `assembly_id` targets explicitly; that explicit override wins over stale raw CSV target text during commit

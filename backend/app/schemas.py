@@ -111,39 +111,6 @@ class QuotationUpdateRequest(BaseModel):
     quotation_document_url: str | None = None
 
 
-class MissingItemRegistrationRow(BaseModel):
-    item_number: str = Field(min_length=1)
-    supplier: str = Field(min_length=1)
-    manufacturer_name: str | None = Field(
-        default=None,
-        validation_alias=AliasChoices("manufacturer_name", "manufacturer"),
-    )
-    resolution_type: Literal["new_item", "alias"] = Field(
-        default="new_item",
-        validation_alias=AliasChoices("resolution_type", "row_type"),
-    )
-    category: str | None = None
-    url: str | None = None
-    description: str | None = None
-    canonical_item_number: str | None = None
-    units_per_order: int | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_resolution_type_alias(cls, data: Any) -> Any:
-        if not isinstance(data, dict):
-            return data
-        normalized = dict(data)
-        raw = str(normalized.get("resolution_type") or normalized.get("row_type") or "").strip().lower()
-        if raw == "item":
-            normalized["resolution_type"] = "new_item"
-        return normalized
-
-
-class MissingItemRegistrationRequest(BaseModel):
-    rows: list[MissingItemRegistrationRow] = Field(default_factory=list)
-
-
 class ArrivalRequest(BaseModel):
     quantity: int | None = Field(default=None, gt=0)
 
@@ -354,6 +321,14 @@ class SupplierCreate(BaseModel):
 
 
 class AliasUpsertRequest(BaseModel):
+    ordered_item_number: str = Field(min_length=1)
+    canonical_item_id: int | None = None
+    canonical_item_number: str | None = None
+    units_per_order: int = Field(gt=0, default=1)
+
+
+class AliasUpsertBySupplierNameRequest(BaseModel):
+    supplier_name: str = Field(min_length=1)
     ordered_item_number: str = Field(min_length=1)
     canonical_item_id: int | None = None
     canonical_item_number: str | None = None

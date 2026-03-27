@@ -104,10 +104,11 @@ Last updated: 2026-03-28 (JST)
 - Added `/users` as the dedicated shared-server user administration route.
   - supports browser-side create, edit, activate, and deactivate flows against the existing `/api/users` endpoints
   - the global header user picker now refreshes after user mutations and automatically falls back to the next active user if the selected one is deactivated
-- Shared-server batch workflows are now upload-first on the main Items and Orders pages.
-  - Items page now distinguishes `General Items CSV Import` from `Register Missing-Item Batch CSVs`, with the batch upload control posting multi-file form data to `POST /api/items/batch-upload`
-  - the batch upload endpoint now processes uploaded CSV bytes directly instead of creating a server-side staging directory first
+- Shared-server browser CSV workflows are now preview-first on the main Items and Orders pages.
+  - Items page uses one `General Items CSV Import` surface for regular item CSVs and order-generated missing-item CSVs
+  - generated missing-item CSVs are downloaded from Orders and then edited/re-imported through the normal Items preview/import flow
 - Orders manual CSV import and quotation maintenance now use external document URLs as the primary contract.
+  - `supplier` is required on every manual order CSV row
   - `quotation_document_url` is required for manual order CSV import
   - `purchase_order_document_url` is optional on orders
   - imported quotation/order document values are rendered as openable links in the Orders UI
@@ -122,7 +123,6 @@ Last updated: 2026-03-28 (JST)
   - artifact IDs are now opaque DB-registered values from `generated_artifacts`, not encoded workspace paths
   - manual order-import responses no longer expose raw missing-item storage fields; the browser should consume `missing_artifact` only
   - manual item-import archive metadata is also now cleaned before it leaves the API; internal cleanup/storage-ref fields stay server-side
-  - item batch-upload and batch-register responses now expose file names only, not staging or archive paths
 - Phase 6 cleanup is now applied on top of that compatibility boundary.
   - `quotations.pdf_link` is no longer part of the schema
   - `quotation_document_url` is the persisted quotation document field
@@ -219,8 +219,10 @@ Last updated: 2026-03-28 (JST)
 - Backend now persists split/merge/partial-arrival order lineage in `order_lineage_events`; API exposes `POST /api/orders/merge` and `GET /api/orders/{order_id}/lineage` for durable traceability and future scale-out reporting.
 - Orders manual CSV import is now preview-first:
   - `POST /api/orders/import-preview` classifies each row as `exact`, `high_confidence`, `needs_review`, or `unresolved`
+  - supplier context is now row-driven from the CSV instead of a selected supplier outside the file
   - preview surfaces duplicate quotation conflicts before commit and returns ranked candidate matches
   - preview confirmation can send per-row canonical overrides plus optional supplier-alias saves back through `POST /api/orders/import`
+  - the Orders page can preview/import multiple CSV files in one UI pass by processing the selected files sequentially
 - Reservations CSV import is now preview-first:
   - `POST /api/reservations/import-preview` validates item/assembly targets, previews assembly expansion, and flags inventory shortages before commit
   - preview confirmation can send per-row `item_id` / `assembly_id` overrides back through `POST /api/reservations/import-csv`
@@ -297,7 +299,7 @@ Last updated: 2026-03-28 (JST)
   - `imports/orders/unregistered/pdf_files/<supplier>/`
   - `imports/orders/registered/csv_files/<supplier>/`
   - `imports/orders/registered/pdf_files/<supplier>/`
-- Items batch upload now processes browser-uploaded missing-item registration CSVs directly from request bytes and archives the uploaded content after successful processing.
+- The active browser item-registration workflow no longer depends on a dedicated missing-item batch-upload UI or endpoint; generated missing-item CSVs are expected to come back through the normal Items preview/import path.
 - Batch-generated missing-item register CSVs now carry artifact metadata in API responses and can be re-listed/downloaded through the artifact endpoints without exposing server filesystem paths.
 - Unregistered batch order import writes missing-item rows into one consolidated register CSV per run under `imports/items/unregistered/`; source CSV/PDF files remain in place for unresolved quotations.
 - Consolidated missing-item registers de-duplicate repeated unresolved rows by `(supplier, manufacturer_name, item_number)` across all quotations in the same batch run.
@@ -310,8 +312,7 @@ Last updated: 2026-03-28 (JST)
 - Missing-item batch registration is upload-only in the public API. Successful uploads are archived into `imports/items/registered/<YYYY-MM>/`, but the application no longer rescans server-resident item batch folders or rewrites archive files after processing.
 - Archived order CSVs and archived item-registration CSVs are read-only historical records. Order updates, quotation updates, merges, splits, and deletes now rely on database state and lineage tables instead of mutating those archived files.
 - `missing_items_registration.csv` uses `supplier` for alias-scope resolution, but `new_item` rows may also specify `manufacturer_name` (or `manufacturer`) and default to `UNKNOWN` when blank; the Items-page missing-order resolver now exposes both manufacturer and alias-supplier columns so it matches Bulk Item Entry for new-item registration.
-- File-upload missing-item registration endpoint (`POST /api/register-missing`) accepts optional multipart form field `skip_unresolved=true` to skip unresolved `new_item` rows instead of failing the whole upload.
-- JSON missing-item registration endpoint (`/api/register-missing/rows`) accepts both `manufacturer_name` and `manufacturer` fields for `new_item` rows.
+- Bulk alias entry on the Items page now uses a dedicated alias upsert endpoint keyed by `supplier_name`, so the old `register-missing` compatibility endpoints are no longer part of the runtime API surface.
 - Missing-item registration payloads now also accept legacy `row_type` (`item`/`alias`) as an alias of `resolution_type` (`new_item`/`alias`); `item` is normalized to `new_item`.
 - Supplier resolution for order import and missing-item registration now falls back to case-insensitive lookup before creating a new supplier, preventing alias-scope mismatches from supplier name casing differences.
 - Order import alias resolution now falls back to case-insensitive `ordered_item_number` matching within a supplier when exact alias text does not match.

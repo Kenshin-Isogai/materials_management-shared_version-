@@ -589,7 +589,7 @@ Maps raw category names to canonical category names for soft-merge behavior.
 ### **4.1 Order Processing**
 
 **Order Import:**
-1. User selects supplier and uploads CSV
+1. User uploads one or more order CSV files; each CSV row must include `supplier`
 2. Manual Orders UI first calls `POST /orders/import-preview`
    - classify each row as `exact`, `high_confidence`, `needs_review`, or `unresolved`
    - prefer direct item-number and supplier-alias matches before fuzzy ranking
@@ -626,14 +626,7 @@ Maps raw category names to canonical category names for soft-merge behavior.
    - template CSV: header-only exact import columns, UTF-8 with BOM
    - reference CSV: live canonical DB values relevant to that flow, generated on demand from current state
 
-**Batch Procedure (Unregistered Folder):**
-1. Scan all `*.csv` under `imports/orders/unregistered/csv_files`
-2. Derive supplier from CSV relative folder (must be under `<root>/csv_files/<supplier>/<file>.csv`)
-3. Run standard `import_orders()` for each CSV (`import_unregistered_order_csvs`):
-   - If result is `ok`: move CSV to `registered/csv_files` and move referenced PDFs to `registered/pdf_files`
-   - If result is `missing_items`: keep source CSV/PDF under `unregistered`; collect missing rows into one consolidated batch register CSV under `imports/items/unregistered/`; do not move source files
-
-**Unregistered Item Batch Procedure:**
+**Historical Unregistered Item Batch Procedure (removed from active API/UI path):**
 1. Process all `*.csv` accumulated in `imports/items/unregistered/` (`register_unregistered_item_csvs`)
 2. Register missing items/aliases. Supports mixed batches (alias rows may reference canonical rows created as `new_item` in the same file).
 3. Move successfully processed CSV files to `imports/items/registered/<YYYY-MM>/`
@@ -825,6 +818,7 @@ Projected Available =
 - Items preview:
   - `POST /items/import-preview` classifies item rows as create-vs-duplicate and alias rows as create/update/review/unresolved
   - the Items page may batch one or more selected CSV files through the same preview/confirm workflow
+  - order-generated missing-item CSVs are edited and re-imported through this same Items preview/import path; there is no separate browser-only missing-item resolver flow
   - preview confirmation may send optional per-row `row_overrides` (`canonical_item_number`, `units_per_order`) to `POST /items/import`
 - Inventory preview:
   - `POST /inventory/import-preview` validates operation/location requirements, simulates stock effects in CSV order, and flags unresolved `item_id` values or stock shortages before commit
@@ -903,13 +897,13 @@ All management pages handling CRUD operations (Items, Orders, Reservations, etc.
 | Planning | Sequential project netting, start-date shortage analysis, convert uncovered rows into RFQ batches |
 | RFQ | Project-dedicated RFQ batches, quote refinement, order linking |
 | Purchase Candidates | Secondary persistent shortage list for BOM / ad-hoc pre-PO tracking |
-| Orders | Bulk import orders, register missing items, alias CSV import, **upload-first Orders ZIP batch import with server-managed staging**, advanced server-resident batch fallback, **orders/quotations management** |
+| Orders | Bulk import orders, download generated missing-item CSV outputs, alias CSV import, **orders/quotations management** |
 | Arrival | Process arrivals, partial deliveries (supports bulk resolution) |
 | Movements | Single/batch movements, all operation types, CSV import (`operation_type,item_id,quantity,from_location,to_location,location,note`) |
 | Reserve | Reservation management, BOM batch reservation, CSV import (`item_id` or `assembly`, `quantity`, optional `assembly_quantity/purpose/deadline/note/project_id`) |
 | BOM | Preview-first reconciliation, gap analysis, reserve available, optional date-aware projection |
 | Assemblies | Define assemblies, location usage, requirements |
-| Items | Bulk edit item attributes; soft-merge categories via alias mapping |
+| Items | Bulk edit item attributes; soft-merge categories via alias mapping; preview/import regular item CSVs and order-generated missing-item CSVs through one shared UI |
 | History | Transaction log, undo operations |
 | **Snapshot** | **Past/future inventory state reconstruction, searchable residual-stock review via `net_available`, CSV export** |
 
@@ -919,7 +913,6 @@ All management pages handling CRUD operations (Items, Orders, Reservations, etc.
 |---------|---------|
 | `init-db` | Initialize database |
 | `import-orders` | Import order CSV |
-| `register-missing` | Register missing items CSV |
 | `arrival` | Process order arrival |
 | `move` | Move inventory |
 | `consume` | Consume inventory |
@@ -1002,7 +995,6 @@ Base URL: `http://localhost:8000/api`
 | GET | `/items/import-reference` | Download live item/alias reference CSV |
 | POST | `/items/import-preview` | Preview item/alias CSV reconciliation before commit |
 | POST | `/items/import` | Import items and supplier-scoped aliases from CSV; accepts optional preview-confirmation `row_overrides` (`canonical_item_number`, `units_per_order`) with strict `422` validation for malformed or invalid override payloads, and archives successful manual-import CSV content into `imports/items/registered/<YYYY-MM>/` for consolidation |
-| POST | `/items/batch-upload` | Upload one-or-more missing-item registration CSVs into server-managed staging, then run the existing unregistered batch registration flow against the staged files |
 | GET | `/items/{item_id}` | Get item details |
 | POST | `/items` | Create item |
 | PUT | `/items/{item_id}` | Update item |
@@ -1032,15 +1024,15 @@ Base URL: `http://localhost:8000/api`
 |--------|----------|-------------|
 | GET | `/orders` | List orders (supports `?status=`, `?supplier=`, `?item_id=`, `?project_id=`) |
 | GET | `/orders/import-template` | Download header-only order import template CSV (UTF-8 with BOM) |
-| GET | `/orders/import-reference` | Download live order reference CSV; supports optional `?supplier_name=` to scope alias rows |
-| POST | `/orders/import-preview` | Preview order CSV reconciliation, classify rows, and surface duplicate quotation conflicts before commit |
+| GET | `/orders/import-reference` | Download live order reference CSV; optional `?supplier_name=` remains available for alias lookup narrowing |
+| POST | `/orders/import-preview` | Preview order CSV reconciliation from uploaded CSV content; each row must carry `supplier` |
 | GET | `/orders/import-jobs` | List manual order import jobs recorded in `import_jobs` (`import_type='orders'`) |
 | GET | `/orders/import-jobs/{import_job_id}` | Get one manual order import job with row-level `import_job_effects` |
 | GET | `/orders/{order_id}` | Get order details |
 | PUT | `/orders/{order_id}` | Update order ETA, project assignment for non-RFQ-managed orders, or split partial ETA via `split_quantity` |
 | POST | `/orders/merge` | Merge two open compatible orders |
 | GET | `/orders/{order_id}/lineage` | List split/merge lineage events for the order |
-| POST | `/orders/import` | Import orders from CSV; accepts optional preview-confirmation `row_overrides` and `alias_saves` form fields with strict `422` validation for malformed or invalid payloads. Primary contract is metadata-only document URLs: `quotation_document_url` is required and `purchase_order_document_url` is optional. Successful and missing-item responses include `import_job_id` |
+| POST | `/orders/import` | Import orders from CSV; accepts optional preview-confirmation `row_overrides` and `alias_saves` form fields with strict `422` validation for malformed or invalid payloads. Each row must include `supplier`. Primary contract is metadata-only document URLs: `quotation_document_url` is required and `purchase_order_document_url` is optional. Successful and missing-item responses include `import_job_id` |
 | POST | `/orders/{order_id}/arrival` | Process order arrival |
 | POST | `/orders/{order_id}/partial-arrival` | Process partial arrival |
 | GET | `/quotations` | List quotations |
@@ -1208,6 +1200,7 @@ Compatibility rule:
 | POST | `/suppliers` | Create supplier |
 | GET | `/suppliers/{supplier_id}/aliases` | List supplier item aliases |
 | POST | `/suppliers/{supplier_id}/aliases` | Create/update alias |
+| POST | `/aliases/upsert` | Create/update alias by `supplier_name`, creating the supplier row when needed |
 | DELETE | `/aliases/{alias_id}` | Delete alias |
 | GET | `/categories` | List categories (canonical) |
 | GET | `/categories/raw` | List raw categories |
@@ -1257,6 +1250,7 @@ Compatibility rule:
 
 | Column | Required | Type |
 |--------|----------|------|
+| supplier | Yes | String |
 | item_number | Yes | String |
 | quantity | Yes | Integer > 0 |
 | quotation_number | Yes | String |
@@ -1269,9 +1263,10 @@ Compatibility rule:
 *Required unless shared order date provided.
 
 Browser/shared-server contract:
+- `supplier` is required on every order-import CSV row; browser flows should not rely on supplier folder names or a top-level supplier form field
 - `quotation_document_url` is required for manual CSV import and should point to the external quotation document
 - `purchase_order_document_url` is optional and stores the external PO document when available
-- legacy ZIP/PDF batch flows remain compatibility-only for deployments that still manage PDFs inside this application
+- legacy ZIP/PDF batch flows remain compatibility-only for deployments that still manage PDFs inside this application, and are out of scope for the GCP-target browser workflow
 
 ### **6.2 missing_items_registration.csv**
 

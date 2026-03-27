@@ -178,13 +178,17 @@ For targeted backend slices from the repo root, keep the same `TEST_DATABASE_URL
   - `POST /api/items/import-preview`
   - previews duplicate item rows, alias create/update behavior, and canonical-item reconciliation before final `POST /api/items/import`
   - the Items page can preview/import one or more CSV files in a single run
+  - order-generated missing-item CSVs now come back through this same Items import flow after the user edits the downloaded CSV
   - final item import accepts optional per-row `row_overrides` (`canonical_item_number`, `units_per_order`) and archives successful manual-import CSV content into `imports/items/registered/<YYYY-MM>/` as durable history without a follow-up folder rescan
   - `POST /api/inventory/import-preview`
   - validates movement rows, simulates stock balance changes, and allows per-row `item_id` correction before final `POST /api/inventory/import-csv`
   - `POST /api/orders/import-preview`
   - classifies rows as `exact`, `high_confidence`, `needs_review`, or `unresolved`
+  - requires `supplier` on every CSV row
   - surfaces duplicate quotation conflicts before commit
   - supports per-row canonical item correction plus optional supplier-alias save on final `POST /api/orders/import`
+  - the Orders page can preview/import multiple CSV files in a single run
+  - when orders still contain unresolved item numbers, the page exposes a downloadable missing-item CSV instead of routing into a dedicated Items resolver
   - `POST /api/reservations/import-preview`
   - validates item/assembly targets, previews assembly expansion, and allows per-row `item_id`/`assembly_id` correction before final `POST /api/reservations/import-csv`
   - preview-confirmation JSON fields are strict: malformed JSON, wrong top-level shapes, missing required keys, and override row numbers not present in the uploaded CSV return `422` instead of bubbling as server errors

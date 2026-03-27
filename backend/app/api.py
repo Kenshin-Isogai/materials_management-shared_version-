@@ -36,6 +36,7 @@ from .db import get_connection, init_db
 from .errors import AppError
 from . import service, storage
 from .schemas import (
+    AliasUpsertBySupplierNameRequest,
     AliasUpsertRequest,
     BomAnalyzeRequest,
     BomReserveRequest,
@@ -49,7 +50,6 @@ from .schemas import (
     ItemCreate,
     ItemMetadataBulkUpdateRequest,
     ItemUpdate,
-    MissingItemRegistrationRequest,
     ManufacturerCreate,
     OrderMergeRequest,
     OrderUpdateRequest,
@@ -127,30 +127,6 @@ def _public_item_import_result(result: dict[str, Any]) -> dict[str, Any]:
         archive_payload.pop("cleanup_unreg_file", None)
         archive_payload.pop("archive_storage_ref", None)
         payload["archive"] = archive_payload
-    return payload
-
-
-def _public_item_batch_result(result: dict[str, Any]) -> dict[str, Any]:
-    payload = dict(result)
-    payload.pop("staging_root", None)
-    uploaded_files = payload.get("uploaded_files")
-    if isinstance(uploaded_files, list):
-        payload["uploaded_files"] = [Path(str(value)).name for value in uploaded_files]
-    files = payload.get("files")
-    if isinstance(files, list):
-        public_files: list[dict[str, Any]] = []
-        for entry in files:
-            if not isinstance(entry, dict):
-                continue
-            file_payload = dict(entry)
-            if file_payload.get("file"):
-                file_payload["file"] = Path(str(file_payload["file"])).name
-            file_payload.pop("moved_to", None)
-            file_payload.pop("storage_ref", None)
-            file_payload.pop("missing_csv_path", None)
-            file_payload.pop("missing_storage_ref", None)
-            public_files.append(file_payload)
-        payload["files"] = public_files
     return payload
 
 
@@ -592,21 +568,6 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         service.delete_item(conn, item_id)
         conn.commit()
         return ok({"deleted": True})
-
-    @app.post("/api/items/batch-upload")
-    async def post_items_batch_upload(
-        files: list[UploadFile] = File(...),
-        continue_on_error: bool = Form(default=True),
-        conn= db,
-    ):
-        uploaded_files = [(file.filename or "items_batch.csv", await file.read()) for file in files]
-        result = service.upload_and_register_item_batch_csvs(
-            conn,
-            files=uploaded_files,
-            continue_on_error=continue_on_error,
-        )
-        conn.commit()
-        return ok(_public_item_batch_result(result))
 
     @app.get("/api/items/{item_id}/history")
     def get_item_history(item_id: int, conn= db):
@@ -1456,6 +1417,19 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         conn.commit()
         return ok(result)
 
+    @app.post("/api/aliases/upsert")
+    def post_alias_by_supplier_name(body: AliasUpsertBySupplierNameRequest, conn= db):
+        result = service.upsert_supplier_item_alias_by_name(
+            conn,
+            supplier_name=body.supplier_name,
+            ordered_item_number=body.ordered_item_number,
+            canonical_item_id=body.canonical_item_id,
+            canonical_item_number=body.canonical_item_number,
+            units_per_order=body.units_per_order,
+        )
+        conn.commit()
+        return ok(result)
+
     @app.delete("/api/aliases/{alias_id}")
     def delete_alias(alias_id: int, conn= db):
         service.delete_supplier_item_alias(conn, alias_id)
@@ -1489,30 +1463,6 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         service.remove_category_alias(conn, alias_category)
         conn.commit()
         return ok({"deleted": True})
-
-    @app.post("/api/register-missing")
-    async def post_register_missing(
-        file: UploadFile = File(...),
-        skip_unresolved: bool = Form(False),
-        conn= db,
-    ):
-        content = await file.read()
-        result = service.register_missing_items_from_content(
-            conn,
-            content,
-            skip_unresolved=skip_unresolved,
-        )
-        conn.commit()
-        return ok(result)
-
-    @app.post("/api/register-missing/rows")
-    def post_register_missing_rows(body: MissingItemRegistrationRequest, conn= db):
-        result = service.register_missing_items_from_rows(
-            conn,
-            [row.model_dump() for row in body.rows],
-        )
-        conn.commit()
-        return ok(result)
 
     return app
 

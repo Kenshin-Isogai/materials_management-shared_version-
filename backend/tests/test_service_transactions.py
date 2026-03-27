@@ -356,104 +356,32 @@ def test_item_flow_ignores_allocation_only_reserve_logs(conn):
 
     assert [event["delta"] for event in transaction_events] == [10]
 
-def test_register_missing_requires_details_for_new_item(conn):
-    with pytest.raises(AppError) as exc_info:
-        service.register_missing_items_from_rows(
-            conn,
-            [
-                {
-                    "supplier": "SupplierA",
-                    "item_number": "UNRESOLVED-001",
-                    "resolution_type": "new_item",
-                    "category": "",
-                    "url": "",
-                    "description": "",
-                }
-            ],
-        )
-
-    assert exc_info.value.code == "MISSING_ITEM_UNRESOLVED"
-
-def test_register_missing_new_item_uses_manufacturer_from_csv(conn):
-    result = service.register_missing_items_from_rows(
-        conn,
-        [
-            {
-                "supplier": "SupplierA",
-                "item_number": "MFG-SPEC-001",
-                "manufacturer_name": "MFG-SPEC",
-                "resolution_type": "new_item",
-                "category": "Lens",
-                "url": "",
-                "description": "",
-            }
-        ],
-    )
-
-    assert result["created_items"] == 1
-    row = conn.execute(
-        """
-        SELECT i.item_number, m.name AS manufacturer_name
-        FROM items_master i
-        JOIN manufacturers m ON m.manufacturer_id = i.manufacturer_id
-        WHERE i.item_number = ?
-        """,
-        ("MFG-SPEC-001",),
-    ).fetchone()
-    assert row is not None
-    assert row["manufacturer_name"] == "MFG-SPEC"
-
-def test_register_missing_new_item_existing_row_is_noop(conn):
-    manufacturer = service.create_manufacturer(conn, "MFG-EXISTING")
-    service.create_item(
+def test_upsert_supplier_item_alias_by_name_creates_supplier_when_missing(conn):
+    manufacturer = service.create_manufacturer(conn, "MFG-SERVICE-ALIAS")
+    item = service.create_item(
         conn,
         {
-            "item_number": "EXISTING-MISSING-001",
+            "item_number": "SERVICE-ALIAS-CANONICAL-001",
             "manufacturer_id": manufacturer["manufacturer_id"],
             "category": "Lens",
         },
     )
 
-    result = service.register_missing_items_from_rows(
+    result = service.upsert_supplier_item_alias_by_name(
         conn,
-        [
-            {
-                "supplier": "SupplierA",
-                "item_number": "EXISTING-MISSING-001",
-                "manufacturer_name": "MFG-EXISTING",
-                "resolution_type": "new_item",
-                "category": "Lens",
-                "url": "",
-                "description": "already registered",
-            }
-        ],
+        supplier_name="ServiceAliasSupplier",
+        ordered_item_number="SERVICE-ALIAS-ORDERED-001",
+        canonical_item_number=item["item_number"],
+        units_per_order=3,
     )
 
-    assert result == {
-        "created_items": 0,
-        "created_aliases": 0,
-        "skipped_unresolved": 0,
-        "is_completely_unresolved": False,
-    }
+    assert result["supplier_name"] == "ServiceAliasSupplier"
+    assert result["ordered_item_number"] == "SERVICE-ALIAS-ORDERED-001"
+    assert result["canonical_item_number"] == item["item_number"]
+    assert result["units_per_order"] == 3
 
-def test_register_missing_content_skips_unresolved_when_requested(conn):
-    content = "\n".join(
-        [
-            "supplier,item_number,resolution_type,category,url,description",
-            "SupplierA,UNRESOLVED-CONTENT-001,new_item,,,",
-        ]
-    ).encode("utf-8")
-
-    result = service.register_missing_items_from_content(
-        conn,
-        content,
-        skip_unresolved=True,
-    )
-
-    assert result["created_items"] == 0
-    assert result["created_aliases"] == 0
-    assert result["skipped_unresolved"] == 1
-    assert result["is_completely_unresolved"] is True
+    suppliers = service.list_suppliers(conn)
+    assert any(row["name"] == "ServiceAliasSupplier" for row in suppliers)
 
 def test_import_orders_missing_items_csv_includes_manufacturer_column(conn, tmp_path: Path):
     supplier = service.create_supplier(conn, "SupplierA")
@@ -526,7 +454,7 @@ def test_import_orders_resolves_alias_with_case_insensitive_supplier_name(conn):
     assert int(order["ordered_quantity"]) == 2
     assert int(order["order_amount"]) == 6
 
-def test_register_missing_items_alias_uses_case_insensitive_supplier_lookup(conn):
+def test_upsert_supplier_item_alias_by_name_uses_case_insensitive_supplier_lookup(conn):
     supplier = service.create_supplier(conn, "SupplierCase")
     manufacturer = service.create_manufacturer(conn, "MFG-CASE")
     service.create_item(
@@ -538,74 +466,31 @@ def test_register_missing_items_alias_uses_case_insensitive_supplier_lookup(conn
         },
     )
 
-    result = service.register_missing_items_from_rows(
+    result = service.upsert_supplier_item_alias_by_name(
         conn,
-        [
-            {
-                "supplier": "suppliercase",
-                "item_number": "CASE-ALIAS-001",
-                "resolution_type": "alias",
-                "canonical_item_number": "CASE-CANONICAL-001",
-                "units_per_order": "2",
-            }
-        ],
+        supplier_name="suppliercase",
+        ordered_item_number="CASE-ALIAS-001",
+        canonical_item_number="CASE-CANONICAL-001",
+        units_per_order=2,
     )
 
-    assert result["created_aliases"] == 1
+    assert result["ordered_item_number"] == "CASE-ALIAS-001"
     aliases = service.list_supplier_item_aliases(conn, int(supplier["supplier_id"]))
     assert len(aliases) == 1
     assert aliases[0]["ordered_item_number"] == "CASE-ALIAS-001"
 
-def test_register_missing_items_accepts_legacy_row_type_alias(conn):
-    supplier = service.create_supplier(conn, "SupplierLegacy")
-    manufacturer = service.create_manufacturer(conn, "MFG-LEGACY")
-    service.create_item(
-        conn,
-        {
-            "item_number": "LEGACY-CANONICAL-001",
-            "manufacturer_id": manufacturer["manufacturer_id"],
-            "category": "Mirror",
-        },
-    )
-
-    result = service.register_missing_items_from_rows(
-        conn,
-        [
-            {
-                "supplier": "SupplierLegacy",
-                "item_number": "LEGACY-ALIAS-001",
-                "row_type": "alias",
-                "canonical_item_number": "LEGACY-CANONICAL-001",
-                "units_per_order": "4",
-            }
-        ],
-    )
-
-    assert result["created_aliases"] == 1
-    aliases = service.list_supplier_item_aliases(conn, int(supplier["supplier_id"]))
-    assert len(aliases) == 1
-    assert aliases[0]["ordered_item_number"] == "LEGACY-ALIAS-001"
-
-def test_register_missing_items_propagates_alias_import_failures(conn):
+def test_upsert_supplier_item_alias_by_name_propagates_item_not_found(conn):
     with pytest.raises(AppError) as exc_info:
-        service.register_missing_items_from_rows(
+        service.upsert_supplier_item_alias_by_name(
             conn,
-            [
-                {
-                    "supplier": "SupplierFail",
-                    "item_number": "ALIAS-FAIL-001",
-                    "resolution_type": "alias",
-                    "canonical_item_number": "DOES-NOT-EXIST",
-                    "units_per_order": "1",
-                }
-            ],
+            supplier_name="SupplierFail",
+            ordered_item_number="ALIAS-FAIL-001",
+            canonical_item_number="DOES-NOT-EXIST",
+            units_per_order=1,
         )
 
-    assert exc_info.value.code == "MISSING_ITEMS_IMPORT_FAILED"
-    assert exc_info.value.status_code == 422
-    assert exc_info.value.details is not None
-    assert exc_info.value.details["failed_count"] == 1
-    assert exc_info.value.details["status"] == "error"
+    assert exc_info.value.code == "ITEM_NOT_FOUND"
+    assert exc_info.value.status_code == 404
 
 def test_import_orders_resolves_alias_with_dash_variant_item_number(conn):
     supplier = service.create_supplier(conn, "SupplierDash")
