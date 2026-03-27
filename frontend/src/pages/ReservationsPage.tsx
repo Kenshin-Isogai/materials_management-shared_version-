@@ -100,16 +100,20 @@ export function ReservationsPage() {
   const { data: openOrders } = useSWR("/orders-open-options-reservations", () =>
     apiGetAllPages<Order>("/orders?include_arrived=false&per_page=200")
   );
+  const { data: allReservations } = useSWR("/reservations-summary-options", () =>
+    apiGetAllPages<Reservation>("/reservations?per_page=200")
+  );
   const items = useMemo(() => itemsResp?.data ?? [], [itemsResp]);
   const projects = useMemo(() => projectsResp ?? [], [projectsResp]);
   const openOrderRows = useMemo(() => openOrders ?? [], [openOrders]);
+  const allReservationRows = useMemo(() => allReservations ?? [], [allReservations]);
   const itemCatalogById = useMemo(
     () => new Map(items.map((item) => [item.item_id, itemToCatalogResult(item)])),
     [items]
   );
 
   const provisionalSummary = useMemo(() => {
-    const reservations = (data?.data ?? []).filter((row) => row.status === "ACTIVE");
+    const reservations = allReservationRows.filter((row) => row.status === "ACTIVE");
     const projectRows = new Map<
       number,
       {
@@ -169,7 +173,7 @@ export function ReservationsPage() {
       open_incoming_uncommitted_quantity: openIncomingUncommittedQuantity,
       rows,
     };
-  }, [data?.data, openOrderRows]);
+  }, [allReservationRows, openOrderRows]);
 
   useEffect(() => {
     if (!location.search) return;
