@@ -169,6 +169,7 @@ npm run build
   - columns: `item_id` or `assembly`, `quantity`, optional `assembly_quantity,purpose,deadline,note,project_id`
 - Reservations page `Reservation Entry` now also supports optional project selection directly in the UI for provisional project linkage.
 - Orders page `Order Details` now includes `Create Provisional Reservation…` to open Reservations with prefilled draft fields from the selected order.
+- Reservations page now includes `Provisional Allocation Summary` and `Export Summary CSV` for project-level provisional reservation and incoming-supply review.
 
 ### Catalog search shortcut
 

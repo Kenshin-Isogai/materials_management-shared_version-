@@ -28,6 +28,7 @@ Support provisional project linkage for long-lead/general-purpose items *before*
   - provisional allocations by project
   - uncommitted vs project-dedicated incoming supply
 - Add CSV export for provisional allocation review.
+  - **Implemented (Reservations page):** `Provisional Allocation Summary` now shows project-level active reserved qty/count plus open incoming dedicated qty and global uncommitted incoming qty, with `Export Summary CSV`.
 
 ## Validation approach
 

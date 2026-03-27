@@ -4,7 +4,7 @@ import { useLocation } from "react-router-dom";
 import { apiDownload, apiGetAllPages, apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
 import { CatalogPicker } from "../components/CatalogPicker";
 import { formatActionError, resolvePreviewSelection } from "../lib/previewState";
-import type { CatalogSearchResult, Item, ProjectRow, Reservation } from "../lib/types";
+import type { CatalogSearchResult, Item, Order, ProjectRow, Reservation } from "../lib/types";
 
 type ReservationRow = {
   item_id: string;
@@ -97,12 +97,79 @@ export function ReservationsPage() {
   const { data: projectsResp } = useSWR("/projects-options-reservations", () =>
     apiGetAllPages<ProjectRow>("/projects?per_page=200")
   );
+  const { data: openOrders } = useSWR("/orders-open-options-reservations", () =>
+    apiGetAllPages<Order>("/orders?include_arrived=false&per_page=200")
+  );
   const items = useMemo(() => itemsResp?.data ?? [], [itemsResp]);
   const projects = useMemo(() => projectsResp ?? [], [projectsResp]);
+  const openOrderRows = useMemo(() => openOrders ?? [], [openOrders]);
   const itemCatalogById = useMemo(
     () => new Map(items.map((item) => [item.item_id, itemToCatalogResult(item)])),
     [items]
   );
+
+  const provisionalSummary = useMemo(() => {
+    const reservations = (data?.data ?? []).filter((row) => row.status === "ACTIVE");
+    const projectRows = new Map<
+      number,
+      {
+        project_id: number;
+        project_name: string;
+        active_reserved_quantity: number;
+        active_reservation_count: number;
+        open_incoming_dedicated_quantity: number;
+      }
+    >();
+    let activeProvisionalQuantity = 0;
+    let activeProvisionalCount = 0;
+    let openIncomingDedicatedQuantity = 0;
+    let openIncomingUncommittedQuantity = 0;
+
+    for (const row of reservations) {
+      if (!row.project_id) continue;
+      activeProvisionalQuantity += row.quantity;
+      activeProvisionalCount += 1;
+      const existing = projectRows.get(row.project_id) ?? {
+        project_id: row.project_id,
+        project_name: row.project_name ?? `(project #${row.project_id})`,
+        active_reserved_quantity: 0,
+        active_reservation_count: 0,
+        open_incoming_dedicated_quantity: 0,
+      };
+      existing.active_reserved_quantity += row.quantity;
+      existing.active_reservation_count += 1;
+      projectRows.set(row.project_id, existing);
+    }
+
+    for (const order of openOrderRows) {
+      if (order.status !== "Ordered") continue;
+      if (order.project_id) {
+        openIncomingDedicatedQuantity += order.order_amount;
+        const existing = projectRows.get(order.project_id) ?? {
+          project_id: order.project_id,
+          project_name: order.project_name ?? `(project #${order.project_id})`,
+          active_reserved_quantity: 0,
+          active_reservation_count: 0,
+          open_incoming_dedicated_quantity: 0,
+        };
+        existing.open_incoming_dedicated_quantity += order.order_amount;
+        projectRows.set(order.project_id, existing);
+      } else {
+        openIncomingUncommittedQuantity += order.order_amount;
+      }
+    }
+
+    const rows = Array.from(projectRows.values()).sort((a, b) =>
+      a.project_name.localeCompare(b.project_name)
+    );
+    return {
+      active_provisional_quantity: activeProvisionalQuantity,
+      active_provisional_count: activeProvisionalCount,
+      open_incoming_dedicated_quantity: openIncomingDedicatedQuantity,
+      open_incoming_uncommitted_quantity: openIncomingUncommittedQuantity,
+      rows,
+    };
+  }, [data?.data, openOrderRows]);
 
   useEffect(() => {
     if (!location.search) return;
@@ -172,6 +239,51 @@ export function ReservationsPage() {
     }
     setReservationPreview(preview);
     setReservationPreviewSelections(nextSelections);
+  }
+
+  function downloadProvisionalSummaryCsv() {
+    const timestamp = new Date().toISOString();
+    const header = [
+      "project_id",
+      "project_name",
+      "active_provisional_reserved_qty",
+      "active_provisional_reservation_count",
+      "open_incoming_dedicated_qty",
+      "open_incoming_uncommitted_qty",
+      "generated_at",
+    ];
+    const csvRows = [header.join(",")];
+    for (const row of provisionalSummary.rows) {
+      csvRows.push(
+        [
+          row.project_id,
+          `"${(row.project_name ?? "").replace(/"/g, '""')}"`,
+          row.active_reserved_quantity,
+          row.active_reservation_count,
+          row.open_incoming_dedicated_quantity,
+          "",
+          timestamp,
+        ].join(",")
+      );
+    }
+    csvRows.push(
+      [
+        "",
+        '"(UNCOMMITTED_INCOMING_POOL)"',
+        "",
+        "",
+        "",
+        provisionalSummary.open_incoming_uncommitted_quantity,
+        timestamp,
+      ].join(",")
+    );
+    const blob = new Blob([csvRows.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "provisional_allocation_summary.csv";
+    link.click();
+    URL.revokeObjectURL(url);
   }
 
   function selectedReservationPreviewMatch(
@@ -627,6 +739,68 @@ export function ReservationsPage() {
         <button className="button" disabled={loading} onClick={createBulk}>
           Submit Batch
         </button>
+      </section>
+
+      <section className="panel space-y-3 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="font-display text-lg font-semibold">Provisional Allocation Summary</h2>
+          <button type="button" className="button-subtle" onClick={downloadProvisionalSummaryCsv}>
+            Export Summary CSV
+          </button>
+        </div>
+        <p className="text-xs text-slate-500">
+          Tracks project-linked ACTIVE reservations and open incoming supply split into dedicated vs uncommitted pools.
+        </p>
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded border border-slate-200 bg-slate-50 p-3 text-sm">
+            <p className="text-xs text-slate-500">Active provisional reserved qty</p>
+            <p className="font-semibold">{provisionalSummary.active_provisional_quantity}</p>
+          </div>
+          <div className="rounded border border-slate-200 bg-slate-50 p-3 text-sm">
+            <p className="text-xs text-slate-500">Active provisional reservations</p>
+            <p className="font-semibold">{provisionalSummary.active_provisional_count}</p>
+          </div>
+          <div className="rounded border border-slate-200 bg-slate-50 p-3 text-sm">
+            <p className="text-xs text-slate-500">Open incoming dedicated qty</p>
+            <p className="font-semibold">{provisionalSummary.open_incoming_dedicated_quantity}</p>
+          </div>
+          <div className="rounded border border-slate-200 bg-slate-50 p-3 text-sm">
+            <p className="text-xs text-slate-500">Open incoming uncommitted qty</p>
+            <p className="font-semibold">{provisionalSummary.open_incoming_uncommitted_quantity}</p>
+          </div>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 text-left text-slate-500">
+                <th className="px-2 py-2">Project</th>
+                <th className="px-2 py-2">Active Reserved Qty</th>
+                <th className="px-2 py-2">Active Reservations</th>
+                <th className="px-2 py-2">Open Incoming Dedicated Qty</th>
+              </tr>
+            </thead>
+            <tbody>
+              {provisionalSummary.rows.length ? (
+                provisionalSummary.rows.map((row) => (
+                  <tr key={row.project_id} className="border-b border-slate-100">
+                    <td className="px-2 py-2">
+                      {row.project_name} (#{row.project_id})
+                    </td>
+                    <td className="px-2 py-2">{row.active_reserved_quantity}</td>
+                    <td className="px-2 py-2">{row.active_reservation_count}</td>
+                    <td className="px-2 py-2">{row.open_incoming_dedicated_quantity}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td className="px-2 py-2 text-slate-500" colSpan={4}>
+                    No project-linked provisional reservations or dedicated incoming orders yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </section>
 
       <section className="panel p-4">

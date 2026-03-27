@@ -129,6 +129,7 @@ Last updated: 2026-03-26 (JST)
 - Reservations page supports partial release/consume via quantity prompt.
 - Reservations page now uses a single expanded `Reservation Entry` table for both one-off and multi-row reservation creation (the separate `Single Reservation` form was removed).
 - Reservations `Reservation Entry` now includes optional project selection for provisional project linkage, and Reservation List now shows linked project names/ids when present.
+- Reservations page now includes `Provisional Allocation Summary` with project-level provisional reserved totals plus open incoming dedicated/uncommitted supply metrics, and supports `Export Summary CSV` for review handoff.
 - Reservations and Projects page headers now include guidance clarifying scope: Reservations is execution-time allocation, Projects is future-demand planning.
 - Added typed catalog search endpoint `/api/catalog/search` for write-flow selectors (`item`, `assembly`, `supplier`, `project`).
 - Projects page requirement entry now uses `CatalogPicker` for item and assembly targets instead of ad hoc `#id` text matching/datalist suggestions.

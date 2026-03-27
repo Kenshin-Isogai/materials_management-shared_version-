@@ -35,6 +35,10 @@
   - Reservations project selector now loads all project pages (`apiGetAllPages`) so older projects are not silently omitted when total project count exceeds a single page.
 - Started phase-2 provisional-allocation UX stream with an Orders-side entry path.
   - Orders `Order Details` now exposes `Create Provisional Reservation…`, which opens the Reservations page with prefilled draft fields (`item_id`, `quantity`, optional `project_id`, and source-order context) for faster stock-backed provisional linking.
+- Implemented phase-3 provisional-allocation summary/export UX on Reservations.
+  - Added `Provisional Allocation Summary` panel with project-level active provisional reservation totals/counts.
+  - Added open incoming supply split metrics (`dedicated` vs `uncommitted`) based on open orders.
+  - Added `Export Summary CSV` for provisional-allocation review handoff.
 
 ### Documentation
 
