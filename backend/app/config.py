@@ -11,6 +11,8 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
 RUNTIME_TARGET_LOCAL = "local"
 RUNTIME_TARGET_CLOUD_RUN = "cloud_run"
+STORAGE_BACKEND_LOCAL = "local"
+STORAGE_BACKEND_GCS = "gcs"
 
 
 def get_runtime_target() -> str:
@@ -38,6 +40,13 @@ def _env_int(name: str, default: int) -> int:
     if raw is None or not raw.strip():
         return default
     return int(raw)
+
+
+def _env_text(name: str, default: str = "") -> str:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip()
 
 
 def _default_app_data_root() -> Path:
@@ -83,6 +92,15 @@ DB_POOL_SIZE = _env_int("DB_POOL_SIZE", 5)
 DB_MAX_OVERFLOW = _env_int("DB_MAX_OVERFLOW", 10)
 DB_POOL_TIMEOUT = _env_int("DB_POOL_TIMEOUT", 30)
 DB_POOL_RECYCLE_SECONDS = _env_int("DB_POOL_RECYCLE_SECONDS", 1800 if is_cloud_run_runtime() else 0)
+MAX_UPLOAD_BYTES = _env_int("MAX_UPLOAD_BYTES", 32 * 1024 * 1024)
+HEAVY_REQUEST_TARGET_SECONDS = _env_int("HEAVY_REQUEST_TARGET_SECONDS", 60)
+CLOUD_RUN_CONCURRENCY_TARGET = _env_int("CLOUD_RUN_CONCURRENCY_TARGET", 10)
+INSTANCE_CONNECTION_NAME = _env_text("INSTANCE_CONNECTION_NAME")
+BACKEND_PUBLIC_BASE_URL = _env_text("BACKEND_PUBLIC_BASE_URL")
+FRONTEND_PUBLIC_BASE_URL = _env_text("FRONTEND_PUBLIC_BASE_URL")
+GCS_BUCKET = _env_text("GCS_BUCKET")
+GCS_OBJECT_PREFIX = _env_text("GCS_OBJECT_PREFIX").strip("/")
+STORAGE_BACKEND = _env_text("STORAGE_BACKEND", STORAGE_BACKEND_LOCAL).lower() or STORAGE_BACKEND_LOCAL
 
 AUTH_MODE_NONE = "none"
 AUTH_MODE_DRY_RUN = "rbac_dry_run"
@@ -94,6 +112,22 @@ def get_auth_mode() -> str:
     if raw not in {AUTH_MODE_NONE, AUTH_MODE_DRY_RUN, AUTH_MODE_ENFORCED}:
         return AUTH_MODE_NONE
     return raw
+
+
+def get_storage_backend() -> str:
+    if STORAGE_BACKEND in {STORAGE_BACKEND_LOCAL, STORAGE_BACKEND_GCS}:
+        return STORAGE_BACKEND
+    return STORAGE_BACKEND_LOCAL
+
+
+def get_storage_prefix(*parts: str) -> str:
+    values = [value.strip("/") for value in (GCS_OBJECT_PREFIX, *parts) if value and value.strip("/")]
+    return "/".join(values)
+
+
+def uses_cloud_sql_unix_socket() -> bool:
+    normalized = DATABASE_URL.lower()
+    return "/cloudsql/" in normalized or "@/" in normalized
 
 
 def get_cors_allowed_origins() -> list[str]:

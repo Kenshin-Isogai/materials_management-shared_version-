@@ -14,6 +14,8 @@ This document explains the implemented architecture of the Materials Management 
   - Cloud Run mode defaults runtime file roots under the OS temp directory and skips legacy workspace folder migration
   - Cloud Run mode defaults `AUTO_MIGRATE_ON_STARTUP` to off, so Alembic can run as a deployment step instead of on autoscaled request-serving startup
   - DB engine tuning is environment-driven through `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT`, and `DB_POOL_RECYCLE_SECONDS`
+  - first-rollout request guardrails are environment-driven through `MAX_UPLOAD_BYTES` (default 32 MB), `HEAVY_REQUEST_TARGET_SECONDS` (default 60), and `CLOUD_RUN_CONCURRENCY_TARGET` (default 10)
+  - deployment metadata is now explicit through `INSTANCE_CONNECTION_NAME`, `BACKEND_PUBLIC_BASE_URL`, and `FRONTEND_PUBLIC_BASE_URL`
 - CORS posture is now explicit by runtime.
   - local defaults allow the common localhost frontend origins
   - Cloud Run defaults to no allowed browser origins until `CORS_ALLOWED_ORIGINS` is set explicitly
@@ -26,6 +28,7 @@ This document explains the implemented architecture of the Materials Management 
   - resolved users are stored in `request.state.user`
   - database-side audit triggers populate `created_by` / `updated_by` / `performed_by` where supported
   - bootstrap exception: `POST /api/users` is allowed without `X-User-Name` only while the system has zero active users, so the first user can be created from `/users`
+  - this remains an explicit temporary Cloud Run rollout compromise, not the intended long-term public-cloud trust boundary
 - Frontend user administration at `/users` page.
   - `GET /api/users` provides the active-user feed for the global picker
   - `GET /api/users?include_inactive=true` backs the management screen
@@ -41,6 +44,7 @@ This document explains the implemented architecture of the Materials Management 
   - `GET /api/artifacts`, `GET /api/artifacts/{artifact_id}`, `GET /api/artifacts/{artifact_id}/download`
   - storage-backed registry now goes through `backend/app/storage.py`
   - current implementation persists generated artifacts under a local storage reference (`local://generated_artifacts/...`) so the API no longer depends on browser-visible workspace paths
+  - storage now supports both `local://...` and `gcs://...` refs; Cloud Run durable storage can use `STORAGE_BACKEND=gcs` with `GCS_BUCKET` and `GCS_OBJECT_PREFIX`
   - the Orders UI now treats artifact entries as download-only records and no longer displays workspace-relative paths
 - Manual Items CSV import archives now use the same storage boundary for their archive reference metadata, while still writing into the current registered-month folder so consolidation behavior stays unchanged during the rollout.
 - Default durable move targets for registered item CSVs and registered order CSV/PDF files now also route through the storage layer, while request-scoped staging remains local-path based.
@@ -54,6 +58,10 @@ This document explains the implemented architecture of the Materials Management 
   - `cloud_run_mode`
   - `app_data_root`
   - `app_port`
+  - upload/concurrency guardrails
+  - Cloud SQL strategy/configuration presence
+  - storage backend summary and public-url metadata
+  - temporary mutation-identity posture
 
 ## Operating Profile (Confirmed)
 

@@ -58,6 +58,21 @@ Outputs:
 - migration ownership decision for Alembic execution
 - frontend/backend deployment contract
 
+Current locked decisions:
+
+- split frontend/backend Cloud Run services with an absolute backend `/api` base URL
+- initial public URLs use native Cloud Run `*.run.app`
+- Cloud SQL Connector / Unix socket connectivity
+- Google Secret Manager as the cloud secret source
+- `dev` / `staging` / `prod` environment separation
+- one GCS bucket per environment with prefix-based storage classes
+- first-rollout retention of 7-day staging, 30-day exports, 90-day artifacts, and no auto-delete archives
+- temporary continued use of `X-User-Name` even though the backend remains browser-reachable
+- backend-mediated download endpoints instead of direct signed-object browser URLs
+- small-team / conservative-concurrency operating assumptions
+- 32 MB upload ceiling and about 60-second target for heavy synchronous requests
+- no migration of historic local import/export/archive files in the first rollout
+
 ### Phase 2: Remove persistent local filesystem assumptions
 
 Goals:

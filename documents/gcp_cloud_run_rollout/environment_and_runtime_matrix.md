@@ -6,6 +6,12 @@ This document lists the repository runtime variables and deployment-facing confi
 
 Backward compatibility is explicitly out of scope.
 
+Planned cloud environments for the first rollout:
+
+- `dev`
+- `staging`
+- `prod`
+
 ## Classification Legend
 
 - **Service**: where the variable is consumed
@@ -17,7 +23,7 @@ Backward compatibility is explicitly out of scope.
 
 | Variable | Service | Secret | Target | Current use | Action |
 |---|---|---:|---|---|---|
-| `DATABASE_URL` | Backend | Yes | both | DB connection string in `backend\app\config.py` and `backend\app\db.py` | Keep, but source from managed secrets in cloud deployment |
+| `DATABASE_URL` | Backend | Yes | both | DB connection string in `backend\app\config.py` and `backend\app\db.py` | Keep; source from Secret Manager in cloud deployment and build it for the Cloud SQL Connector / Unix socket path |
 | `APP_RUNTIME_TARGET` | Backend | No | both | Runtime posture selection in `backend\app\config.py` | Keep, but use explicitly in deployment config |
 | `APP_DATA_ROOT` | Backend | No | both | Base local filesystem root in `backend\app\config.py` | De-emphasize for cloud; keep only for temporary local working files if still needed |
 | `IMPORTS_ROOT` | Backend | No | local | Overrides local imports root in `backend\app\config.py` | Avoid as a durable cloud contract |
@@ -37,7 +43,7 @@ Backward compatibility is explicitly out of scope.
 
 | Variable | Service | Secret | Target | Current use | Action |
 |---|---|---:|---|---|---|
-| `VITE_API_BASE` | Frontend | No | both | API base in `frontend\src\lib\api.ts`; build arg in `frontend\Dockerfile`; client now normalizes relative and absolute values | Keep; use an absolute backend `/api` URL for split Cloud Run services |
+| `VITE_API_BASE` | Frontend | No | both | API base in `frontend\src\lib\api.ts`; build arg in `frontend\Dockerfile`; client now normalizes relative and absolute values | Keep; use an absolute backend HTTPS URL ending in `/api` for split Cloud Run services |
 
 ## Local Docker Compose variables already visible in the repo
 
@@ -47,9 +53,9 @@ Backward compatibility is explicitly out of scope.
 | `POSTGRES_PASSWORD` | DB | Yes | local | Compose DB bootstrap | Local/dev only |
 | `POSTGRES_DB` | DB | No | local | Compose DB bootstrap | Local/dev only |
 
-## Additional recommended variables for the rollout
+## Additional canonical rollout variables
 
-These are not yet the documented canonical repository contract, but they are recommended targets for implementation.
+These variables now reflect the preferred rollout contract that should be implemented/documented around the existing runtime.
 
 | Variable | Service | Secret | Target | Why add it |
 |---|---|---:|---|---|
@@ -57,12 +63,15 @@ These are not yet the documented canonical repository contract, but they are rec
 | `DB_MAX_OVERFLOW` | Backend | No | both | Externalize burst connection behavior |
 | `DB_POOL_TIMEOUT` | Backend | No | both | Make connection wait behavior explicit |
 | `DB_POOL_RECYCLE_SECONDS` | Backend | No | cloud | Improve long-lived connection handling |
-| `GCS_BUCKET_ARTIFACTS` | Backend | No | cloud | Durable storage for generated artifacts |
-| `GCS_BUCKET_ARCHIVES` | Backend | No | cloud | Durable import/archive storage if retained |
-| `GCS_BUCKET_STAGING` | Backend | No | cloud | Durable or multi-step staging if required |
-| `GCS_OBJECT_PREFIX` | Backend | No | cloud | Namespace separation inside buckets |
-| `FRONTEND_PUBLIC_BASE_URL` | Frontend | No | cloud | Optional explicit public URL handling |
-| `BACKEND_PUBLIC_BASE_URL` | Frontend/Backend | No | cloud | Optional explicit service-to-service/browser endpoint target |
+| `MAX_UPLOAD_BYTES` | Backend | No | both | Enforce the first-rollout upload ceiling from the backend |
+| `HEAVY_REQUEST_TARGET_SECONDS` | Backend | No | both | Surface the heavy synchronous request target in runtime/health metadata |
+| `CLOUD_RUN_CONCURRENCY_TARGET` | Backend | No | cloud | Keep the first-rollout Cloud Run concurrency assumption explicit in runtime/docs |
+| `INSTANCE_CONNECTION_NAME` | Backend | No | cloud | Cloud SQL instance identifier required by the Cloud SQL Connector / Unix socket deployment model |
+| `GCS_BUCKET` | Backend | No | cloud | Single bucket per environment for all persistent application-managed objects |
+| `GCS_OBJECT_PREFIX` | Backend | No | cloud | Shared base prefix inside `GCS_BUCKET`; object classes then use fixed subprefixes `staging/`, `artifacts/`, `archives/`, and `exports/` |
+| `STORAGE_BACKEND` | Backend | No | both | Select the durable storage backend; `local` remains the local default and `gcs` is now supported for Cloud Run durable object storage |
+| `FRONTEND_PUBLIC_BASE_URL` | Frontend | No | cloud | Optional explicit public URL handling if absolute asset/API references are ever needed |
+| `BACKEND_PUBLIC_BASE_URL` | Frontend/Backend | No | cloud | Explicit browser-facing backend base URL for the split-service Cloud Run topology |
 
 ## Runtime surfaces that are not pure environment variables but still matter
 
@@ -92,9 +101,24 @@ These files together define:
 - whether nginx remains part of the cloud deployment
 - where browser uploads and downloads are sent
 
+Current decision:
+
+- browser/API traffic is cross-origin between separate frontend/backend Cloud Run services
+- first rollout public URLs are native Cloud Run `*.run.app` addresses unless custom domains are added later
+- nginx remains part of the frontend container for static delivery in the first rollout
+- downloads stay backend-mediated rather than using browser-visible GCS signed URLs
+
+### Initial operating assumptions
+
+- small-team workload, roughly under 10 concurrent active users
+- backend Cloud Run concurrency target around 10 requests per instance
+- first-rollout upload ceiling of 32 MB for CSV/ZIP requests
+- heavy synchronous request target of about 60 seconds or less in normal cases
+
 ## Rollout recommendations
 
 1. Keep only variables that express durable target behavior.
 2. Avoid preserving variables whose main purpose is legacy local folder compatibility.
 3. Make production-secret sourcing explicit rather than implicit.
 4. Keep cloud and local defaults intentionally different where needed.
+5. Prefer one bucket per environment with prefix-based class separation over many per-purpose buckets in the first rollout.

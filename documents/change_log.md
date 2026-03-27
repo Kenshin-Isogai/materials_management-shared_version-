@@ -2,6 +2,20 @@
 
 ### Changed
 
+- Completed the next Cloud Run-essential storage slice.
+  - `backend/app/storage.py` now supports both `local://...` and `gcs://...` durable object refs
+  - backend durable writes/moves can now target GCS when `STORAGE_BACKEND=gcs` with `GCS_BUCKET`
+  - backend order/item durable archive flows now use that GCS-capable storage boundary instead of local-only assumptions
+  - backend build dependencies now include `google-cloud-storage`
+- Started turning the locked GCP rollout decisions into explicit runtime behavior instead of doc-only assumptions.
+  - backend runtime now exposes Cloud SQL/GCS/public-URL deployment metadata through config and `/api/health`
+  - `/api/health` and `/api/auth/capabilities` now describe the temporary `X-User-Name` mutation model explicitly, including the initial admin/operator boundary
+  - backend request handling now enforces the first-rollout upload ceiling via `MAX_UPLOAD_BYTES` and returns `413 REQUEST_TOO_LARGE` for oversized requests
+  - frontend nginx upload limit now matches the same 32 MB first-rollout ceiling
+  - selecting `STORAGE_BACKEND=gcs` now fails explicitly as not-yet-implemented instead of silently implying Cloud Run durable storage is already complete
+- Extended runtime/deployment configuration docs and examples for the started Decision-track work.
+  - `.env.example`, `README.md`, `backend/README.md`, `documents/technical_documentation.md`, and `documents/source_current_state.md` now include the rollout guardrail and deployment-metadata variables
+
 - Continued the GCP Cloud Run rollout implementation on the runtime contract surfaces.
   - Cloud Run runtime now defaults `AUTO_MIGRATE_ON_STARTUP` to off while local runtime still defaults to startup migration unless explicitly disabled.
   - SQLAlchemy pool behavior is now environment-driven via `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT`, and `DB_POOL_RECYCLE_SECONDS`.
@@ -19,9 +33,24 @@
   - `.env.example`, `README.md`, `backend/README.md`, `documents/technical_documentation.md`, `documents/source_current_state.md`
   - `documents/gcp_cloud_run_rollout/environment_and_runtime_matrix.md`
   - `documents/gcp_cloud_run_rollout/migration_checklist.md`
+- Locked the remaining first-rollout decisions that were still causing scope ambiguity in the GCP plan.
+  - split frontend/backend Cloud Run services stay in place and the frontend keeps nginx for static delivery
+  - Cloud SQL uses the Cloud SQL Connector / Unix socket model, with secrets sourced from Google Secret Manager
+  - GCS uses one bucket per environment plus prefix-based class separation and lifecycle retention of 7-day staging, 30-day exports, 90-day artifacts, and non-expiring archives
+  - the first rollout assumes `dev` / `staging` / `prod`, native `*.run.app` URLs, backend-mediated downloads, a public browser-reachable backend with temporary `X-User-Name` mutations, a 32 MB upload ceiling, a roughly 60-second heavy-request target, and small-team / conservative-concurrency operation
+  - rollout planning now also fixes the initial admin/operator boundary, audit scope, monitoring baseline, and production-index review scope, while still deferring stronger end-user auth
+- Clarified checklist semantics in `documents/gcp_cloud_run_rollout/migration_checklist.md`.
+  - added an explicit legend separating locked decisions from implementation/validation-complete items
+  - converted decision-only entries from `[x]` to `[Decision]` so rollout progress no longer implies those items are already implemented
 
 ### Tests
 
+- Added backend regression coverage for:
+  - GCS-backed storage write/read/move/delete behavior through the storage abstraction
+- Added backend regression coverage for:
+  - runtime parsing of upload-limit, concurrency, Cloud SQL, public-URL, and GCS/storage config
+  - `/api/health` and `/api/auth/capabilities` rollout metadata fields
+  - oversized upload rejection through the new request-size middleware
 - Added backend runtime-config regression coverage for:
   - Cloud Run default migration/CORS/pool behavior
   - local default migration/CORS behavior

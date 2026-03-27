@@ -16,6 +16,7 @@ dependencies = [
     "python-multipart>=0.0.20",
     "sqlalchemy>=2.0.43",
     "uvicorn>=0.38.0",
+    "google-cloud-storage>=3.10.1",
 ]
 
 [project.scripts]

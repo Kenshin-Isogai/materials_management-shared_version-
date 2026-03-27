@@ -32,6 +32,8 @@ For Cloud Run deployment posture, the backend now supports:
 - startup that skips legacy repo/workspace folder migration in Cloud Run mode
 - startup migration disabled by default in Cloud Run mode
 - environment-driven DB pool settings (`DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT`, `DB_POOL_RECYCLE_SECONDS`)
+- environment-driven upload/concurrency guardrails (`MAX_UPLOAD_BYTES`, `HEAVY_REQUEST_TARGET_SECONDS`, `CLOUD_RUN_CONCURRENCY_TARGET`)
+- explicit cloud deployment metadata for Cloud SQL and storage (`INSTANCE_CONNECTION_NAME`, `STORAGE_BACKEND`, `GCS_BUCKET`, `GCS_OBJECT_PREFIX`, `BACKEND_PUBLIC_BASE_URL`, `FRONTEND_PUBLIC_BASE_URL`)
 - explicit CORS origins instead of wildcard defaults
 
 ## Repository Structure
@@ -107,8 +109,13 @@ npm run dev
 
 - Set `APP_RUNTIME_TARGET=cloud_run`
 - Set `DATABASE_URL` from Secret Manager / Cloud SQL connection config
+- Set `INSTANCE_CONNECTION_NAME` for the target Cloud SQL instance and keep `DATABASE_URL` on the Cloud SQL Unix-socket form
 - Set `VITE_API_BASE` to the backend Cloud Run public `/api` URL for split-service deployment
+- Set `BACKEND_PUBLIC_BASE_URL` and `FRONTEND_PUBLIC_BASE_URL` if you want the runtime health surface to report the intended public URLs explicitly
 - Set `CORS_ALLOWED_ORIGINS` to the frontend Cloud Run origin explicitly
+- Keep `MAX_UPLOAD_BYTES=33554432` unless you intentionally revise the first-rollout 32 MB ceiling
+- Keep `CLOUD_RUN_CONCURRENCY_TARGET=10` and align actual Cloud Run/Gunicorn settings with Cloud SQL capacity
+- Set `STORAGE_BACKEND=gcs` plus `GCS_BUCKET` and optional `GCS_OBJECT_PREFIX` for Cloud Run durable storage; `local` remains the local/shared-server default
 - `PORT` is honored automatically; you do not need to force `APP_PORT`
 - If `APP_DATA_ROOT` is omitted, the backend now defaults to an ephemeral temp directory suitable for Cloud Run
 - Cloud Run startup no longer copies legacy `quotations/` or repo-local `imports/` folders into runtime storage
@@ -121,6 +128,7 @@ npm run dev
 - API base: `http://127.0.0.1:8000/api`
 - API docs (Swagger): `http://127.0.0.1:8000/docs`
 - Mutation requests require `X-User-Name` for a pre-registered active user.
+- `X-User-Name` is a temporary rollout identity mechanism, not the intended long-term public-cloud auth boundary.
 - The frontend header bar now includes a user selector backed by `/api/users`.
 
 ## Database and File Layout

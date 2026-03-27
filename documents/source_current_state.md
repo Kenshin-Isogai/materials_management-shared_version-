@@ -40,8 +40,11 @@ Last updated: 2026-03-28 (JST)
   - Cloud Run mode skips legacy workspace/import folder migration on startup
   - Cloud Run mode defaults `AUTO_MIGRATE_ON_STARTUP=0`; local runtime still defaults to startup migration unless explicitly disabled
   - DB pool behavior is controlled by `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT`, and `DB_POOL_RECYCLE_SECONDS`
+  - first-rollout Cloud Run guardrails are controlled by `MAX_UPLOAD_BYTES`, `HEAVY_REQUEST_TARGET_SECONDS`, and `CLOUD_RUN_CONCURRENCY_TARGET`
   - browser CORS defaults are runtime-specific: localhost-friendly defaults locally, explicit `CORS_ALLOWED_ORIGINS` required for Cloud Run browser traffic
+  - deployment metadata/config now also exposes `INSTANCE_CONNECTION_NAME`, `BACKEND_PUBLIC_BASE_URL`, `FRONTEND_PUBLIC_BASE_URL`, `STORAGE_BACKEND`, `GCS_BUCKET`, and `GCS_OBJECT_PREFIX`
   - generated artifact persistence now goes through a storage boundary (`backend/app/storage.py`), with current local refs stored as `local://generated_artifacts/...`
+  - the storage layer now supports `gcs://...` refs for durable Cloud Run storage and keeps `local://...` for local/shared-server operation
   - default durable item/order archive moves now also route through that storage boundary; local disk remains the mechanism for temporary staging and compatibility directory scans
 
 ## 3. Backend State
@@ -51,6 +54,7 @@ Last updated: 2026-03-28 (JST)
 - API wrapper uses common response envelope:
   - success: `status=ok`
   - error: `status=error` with code/message/details
+- Request-size enforcement now rejects bodies larger than `MAX_UPLOAD_BYTES` with `413 REQUEST_TOO_LARGE`, aligning backend behavior with the first-rollout 32 MB upload ceiling.
 - Business rules are centralized in `backend/app/service.py` and shared by API and CLI.
 - Mutation requests now pass through `UserIdentityMiddleware`.
   - read methods stay anonymous
@@ -58,6 +62,7 @@ Last updated: 2026-03-28 (JST)
   - bootstrap exception: when there are zero active users, `POST /api/users` is allowed without a selected header user so the first browser user can be created
   - basic user endpoints now exist under `/api/users`
   - `GET /api/users` returns active picker rows; `GET /api/users?include_inactive=true` returns the full management list
+  - `/api/auth/capabilities` and `/api/health` now both describe this as a temporary rollout identity model
 - Planning snapshot hot paths now batch project/requirement loads, assembly component expansion (including legacy assembly-only project requirements), and per-item inventory totals; item planning context further narrows expansion to the requested item.
 - Current auth posture:
   - no enforced auth for PoC

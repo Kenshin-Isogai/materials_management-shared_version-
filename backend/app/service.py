@@ -19,6 +19,8 @@ from .config import (
     ITEMS_IMPORT_STAGING_ROOT,
     ITEMS_IMPORT_UNREGISTERED_ROOT,
     ITEMS_IMPORT_REGISTERED_ROOT,
+    ORDERS_IMPORT_REGISTERED_CSV_ROOT,
+    ORDERS_IMPORT_REGISTERED_PDF_ROOT,
 )
 from .errors import AppError
 from .order_import_paths import (
@@ -37,7 +39,8 @@ from .storage import (
     ORDERS_REGISTERED_CSV_BUCKET,
     ORDERS_REGISTERED_PDF_BUCKET,
     StoredObject,
-    get_storage_root,
+    delete_storage_ref,
+    is_local_storage_backend,
     move_file_to_storage,
     read_storage_bytes,
     stat_storage_ref,
@@ -71,6 +74,10 @@ def _infer_generated_artifact_type(path: Path) -> str:
     if "missing_items_registration" in name:
         return "missing_items_register"
     return "generated_file"
+
+
+def _infer_generated_artifact_type_from_filename(filename: str) -> str:
+    return _infer_generated_artifact_type(Path(filename))
 
 
 def _artifact_payload_from_row(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
@@ -118,7 +125,7 @@ def _register_generated_artifact(
     source_job_type: str | None = None,
     source_job_id: str | None = None,
 ) -> dict[str, Any]:
-    artifact_type = _infer_generated_artifact_type(stored.path)
+    artifact_type = _infer_generated_artifact_type_from_filename(stored.filename)
     existing = conn.execute(
         """
         SELECT
@@ -6998,7 +7005,10 @@ def register_unregistered_item_csvs(
                 conn.execute(f"RELEASE {savepoint}")
                 succeeded += 1
             except Exception:
-                if moved_to is not None and moved_to.exists() and not csv_path.exists():
+                if moved_to_storage is not None and moved_to is None and not csv_path.exists():
+                    delete_storage_ref(moved_to_storage.storage_ref)
+                    moved_to_storage = None
+                elif moved_to is not None and moved_to.exists() and not csv_path.exists():
                     _move_file_to_target(moved_to, csv_path)
                     moved_to = None
                     moved_to_storage = None
@@ -7218,8 +7228,11 @@ def _import_unregistered_order_csv_file(
     moved_pdf_files: list[dict[str, str]] = []
     registered_pdf_dir = registered_pdf_supplier_dir(roots, supplier_name).resolve()
     use_storage_registered_roots = (
-        roots.registered_csv_root.resolve() == get_storage_root(ORDERS_REGISTERED_CSV_BUCKET).resolve()
-        and roots.registered_pdf_root.resolve() == get_storage_root(ORDERS_REGISTERED_PDF_BUCKET).resolve()
+        not is_local_storage_backend()
+        or (
+            roots.registered_csv_root.resolve() == ORDERS_IMPORT_REGISTERED_CSV_ROOT.resolve()
+            and roots.registered_pdf_root.resolve() == ORDERS_IMPORT_REGISTERED_PDF_ROOT.resolve()
+        )
     )
 
     for row in rows:
@@ -7270,8 +7283,9 @@ def _import_unregistered_order_csv_file(
 
     csv_source = csv_path.resolve()
     if use_storage_registered_roots:
-        rollback_moves: list[tuple[Path, Path]] = []
+        rollback_storage_refs: list[str] = []
         actual_moved_pdf_files: list[dict[str, str]] = []
+        csv_dest_display: str | None = None
         try:
             for source_pdf, _predicted_target in planned_pdf_moves:
                 stored_pdf = move_file_to_storage(
@@ -7279,11 +7293,11 @@ def _import_unregistered_order_csv_file(
                     source_path=source_pdf,
                     subdir=supplier_name,
                 )
-                rollback_moves.append((stored_pdf.path, source_pdf))
+                rollback_storage_refs.append(stored_pdf.storage_ref)
                 actual_moved_pdf_files.append(
                     {
                         "source_path": str(source_pdf),
-                        "registered_path": str(stored_pdf.path),
+                        "registered_path": stored_pdf.storage_ref if stored_pdf.path is None else str(stored_pdf.path),
                     }
                 )
             stored_csv = move_file_to_storage(
@@ -7291,12 +7305,13 @@ def _import_unregistered_order_csv_file(
                 source_path=csv_source,
                 subdir=supplier_name,
             )
+            rollback_storage_refs.append(stored_csv.storage_ref)
             csv_dest = stored_csv.path
+            csv_dest_display = stored_csv.storage_ref if stored_csv.path is None else str(stored_csv.path)
             moved_pdf_files = actual_moved_pdf_files
         except Exception:
-            for moved_path, original_src in reversed(rollback_moves):
-                if moved_path.exists() and not original_src.exists():
-                    _move_file_to_target(moved_path, original_src)
+            for storage_ref in reversed(rollback_storage_refs):
+                delete_storage_ref(storage_ref)
             raise
     else:
         csv_dest, _ = _predict_move_target(
@@ -7305,11 +7320,12 @@ def _import_unregistered_order_csv_file(
             set(),
         )
         _execute_planned_file_moves([*planned_pdf_moves, (csv_source, csv_dest.resolve())])
+        csv_dest_display = str(csv_dest)
     return {
         "file": str(csv_path),
         "supplier": supplier_name,
         "status": "ok",
-        "moved_to": str(csv_dest),
+        "moved_to": csv_dest_display,
         "imported_count": result.get("imported_count", 0),
         "moved_pdf_files": moved_pdf_files,
         "warnings": file_warnings,

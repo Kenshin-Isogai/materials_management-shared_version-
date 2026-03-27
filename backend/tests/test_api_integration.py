@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import csv
+import importlib
 import json
+import os
 from io import BytesIO, StringIO
 from pathlib import Path
 import zipfile
@@ -51,6 +53,13 @@ def test_health_endpoint(client):
     assert payload["data"]["migration_strategy"] in {"startup", "external"}
     assert isinstance(payload["data"]["cors_allowed_origins"], list)
     assert payload["data"]["db_pool"]["pool_size"] >= 1
+    assert payload["data"]["upload_limits"]["max_upload_bytes"] == 32 * 1024 * 1024
+    assert payload["data"]["operating_targets"]["heavy_request_target_seconds"] == 60
+    assert payload["data"]["operating_targets"]["cloud_run_concurrency_target"] == 10
+    assert payload["data"]["cloud_sql"]["strategy"] == "connector_unix_socket"
+    assert "storage" in payload["data"]
+    assert payload["data"]["temporary_identity_model"]["mode"] == "x-user-name"
+    assert payload["data"]["temporary_identity_model"]["temporary"] is True
 
 
 def test_inventory_snapshot_endpoint_supports_net_available_basis(client):
@@ -434,11 +443,64 @@ def test_auth_capabilities_endpoint_defaults_and_header(client):
     assert payload["auth_enforced"] is False
     assert payload["planned_roles"] == ["admin", "operator", "viewer"]
     assert payload["effective_role"] == "operator"
+    assert payload["mutation_identity"]["mode"] == "x-user-name"
+    assert payload["mutation_identity"]["temporary"] is True
+    assert payload["mutation_identity"]["stronger_auth_required"] is True
+    assert "/api/users" in payload["mutation_identity"]["admin_only_scope"]
 
     header_response = client.get("/api/auth/capabilities", headers={"X-User-Role": "Viewer"})
     assert header_response.status_code == 200
     header_payload = header_response.json()["data"]
     assert header_payload["effective_role"] == "viewer"
+
+
+def test_request_size_limit_rejects_oversized_upload(database_url: str):
+    original_env = os.environ.copy()
+    try:
+        os.environ["MAX_UPLOAD_BYTES"] = "32"
+        import app.config as config_module
+        import app.api as api_module
+
+        config = importlib.reload(config_module)
+        api = importlib.reload(api_module)
+
+        _reset_database(database_url)
+        init_db(database_url)
+        seed_conn = get_connection(database_url)
+        try:
+            service.create_user(
+                seed_conn,
+                {
+                    "username": "pytest",
+                    "display_name": "Pytest User",
+                    "role": "admin",
+                    "is_active": True,
+                },
+            )
+            seed_conn.commit()
+        finally:
+            seed_conn.close()
+
+        app = api.create_app(database_url=database_url)
+        with TestClient(app) as test_client:
+            test_client.headers.update({"X-User-Name": "pytest"})
+            response = test_client.post(
+                "/api/register-missing",
+                files={"file": ("oversized.csv", b"x" * 64, "text/csv")},
+            )
+
+        assert response.status_code == 413
+        payload = response.json()
+        assert payload["status"] == "error"
+        assert payload["error"]["code"] == "REQUEST_TOO_LARGE"
+        assert payload["error"]["details"]["max_upload_bytes"] == 32
+    finally:
+        os.environ.clear()
+        os.environ.update(original_env)
+        import app.config as config_module
+        import app.api as api_module
+        importlib.reload(config_module)
+        importlib.reload(api_module)
 
 
 def test_users_endpoint_allows_anonymous_read(client):

@@ -16,18 +16,25 @@ from .config import (
     APP_PORT,
     APP_DATA_ROOT,
     AUTO_MIGRATE_ON_STARTUP,
+    BACKEND_PUBLIC_BASE_URL,
+    CLOUD_RUN_CONCURRENCY_TARGET,
     DB_MAX_OVERFLOW,
     DB_POOL_RECYCLE_SECONDS,
     DB_POOL_SIZE,
     DB_POOL_TIMEOUT,
+    FRONTEND_PUBLIC_BASE_URL,
+    HEAVY_REQUEST_TARGET_SECONDS,
+    INSTANCE_CONNECTION_NAME,
+    MAX_UPLOAD_BYTES,
     get_auth_mode,
     get_cors_allowed_origins,
     get_runtime_target,
     is_cloud_run_runtime,
+    uses_cloud_sql_unix_socket,
 )
 from .db import get_connection, init_db
 from .errors import AppError
-from . import service
+from . import service, storage
 from .schemas import (
     AliasUpsertRequest,
     BomAnalyzeRequest,
@@ -243,6 +250,32 @@ class UserIdentityMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                if int(content_length) > MAX_UPLOAD_BYTES:
+                    return JSONResponse(
+                        status_code=413,
+                        content={
+                            "status": "error",
+                            "error": {
+                                "code": "REQUEST_TOO_LARGE",
+                                "message": (
+                                    f"Request body exceeds the configured limit of {MAX_UPLOAD_BYTES} bytes"
+                                ),
+                                "details": {
+                                    "max_upload_bytes": MAX_UPLOAD_BYTES,
+                                },
+                            },
+                        },
+                    )
+            except ValueError:
+                pass
+        return await call_next(request)
+
+
 def create_app(database_url: str | None = None, db_path: str | None = None) -> FastAPI:
     cors_allowed_origins = get_cors_allowed_origins()
 
@@ -266,6 +299,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(RequestSizeLimitMiddleware)
     app.add_middleware(UserIdentityMiddleware)
 
     @app.exception_handler(AppError)
@@ -301,6 +335,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
 
     @app.get("/api/health")
     def healthcheck():
+        storage_summary = storage.get_storage_backend_summary()
         return ok(
             {
                 "healthy": True,
@@ -317,6 +352,29 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
                     "pool_timeout": DB_POOL_TIMEOUT,
                     "pool_recycle_seconds": DB_POOL_RECYCLE_SECONDS,
                 },
+                "upload_limits": {
+                    "max_upload_bytes": MAX_UPLOAD_BYTES,
+                    "max_upload_mebibytes": round(MAX_UPLOAD_BYTES / (1024 * 1024), 2),
+                },
+                "operating_targets": {
+                    "heavy_request_target_seconds": HEAVY_REQUEST_TARGET_SECONDS,
+                    "cloud_run_concurrency_target": CLOUD_RUN_CONCURRENCY_TARGET,
+                },
+                "cloud_sql": {
+                    "strategy": "connector_unix_socket",
+                    "instance_connection_name_configured": bool(INSTANCE_CONNECTION_NAME),
+                    "database_url_uses_unix_socket": uses_cloud_sql_unix_socket(),
+                },
+                "storage": storage_summary,
+                "public_urls": {
+                    "backend_public_base_url": BACKEND_PUBLIC_BASE_URL or None,
+                    "frontend_public_base_url": FRONTEND_PUBLIC_BASE_URL or None,
+                },
+                "temporary_identity_model": {
+                    "mode": "x-user-name",
+                    "temporary": True,
+                    "stronger_auth_required": True,
+                },
             }
         )
 
@@ -331,6 +389,16 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
                 "auth_enforced": auth_mode != "none",
                 "planned_roles": planned_roles,
                 "effective_role": effective_role,
+                "mutation_identity": {
+                    "mode": "x-user-name",
+                    "temporary": True,
+                    "stronger_auth_required": True,
+                    "admin_only_scope": [
+                        "/api/users",
+                        "future role/setting management",
+                    ],
+                    "operator_scope": "normal business mutations, imports, exports, and planning workflows",
+                },
             }
         )
 

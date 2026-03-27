@@ -30,6 +30,11 @@ def test_cloud_run_runtime_defaults_to_tmp_app_data_root_and_port():
         assert config.AUTO_MIGRATE_ON_STARTUP is False
         assert config.get_cors_allowed_origins() == []
         assert config.DB_POOL_RECYCLE_SECONDS == 1800
+        assert config.MAX_UPLOAD_BYTES == 32 * 1024 * 1024
+        assert config.HEAVY_REQUEST_TARGET_SECONDS == 60
+        assert config.CLOUD_RUN_CONCURRENCY_TARGET == 10
+        assert config.get_storage_backend() == config.STORAGE_BACKEND_LOCAL
+        assert config.get_storage_prefix("artifacts") == "artifacts"
     finally:
         os.environ.clear()
         os.environ.update(original_env)
@@ -91,6 +96,16 @@ def test_runtime_config_honors_explicit_pool_and_cors_settings():
         os.environ["DB_POOL_TIMEOUT"] = "12"
         os.environ["DB_POOL_RECYCLE_SECONDS"] = "45"
         os.environ["CORS_ALLOWED_ORIGINS"] = "https://frontend.example.com, https://admin.example.com "
+        os.environ["MAX_UPLOAD_BYTES"] = "4096"
+        os.environ["HEAVY_REQUEST_TARGET_SECONDS"] = "75"
+        os.environ["CLOUD_RUN_CONCURRENCY_TARGET"] = "8"
+        os.environ["INSTANCE_CONNECTION_NAME"] = "project:region:instance"
+        os.environ["BACKEND_PUBLIC_BASE_URL"] = "https://backend-abc.a.run.app"
+        os.environ["FRONTEND_PUBLIC_BASE_URL"] = "https://frontend-abc.a.run.app"
+        os.environ["GCS_BUCKET"] = "materials-prod"
+        os.environ["GCS_OBJECT_PREFIX"] = "/materials-management/prod/"
+        os.environ["STORAGE_BACKEND"] = "gcs"
+        os.environ["DATABASE_URL"] = "postgresql+psycopg://user:pass@/materials_db?host=/cloudsql/project:region:instance"
 
         config = _reload_config()
 
@@ -98,6 +113,17 @@ def test_runtime_config_honors_explicit_pool_and_cors_settings():
         assert config.DB_MAX_OVERFLOW == 3
         assert config.DB_POOL_TIMEOUT == 12
         assert config.DB_POOL_RECYCLE_SECONDS == 45
+        assert config.MAX_UPLOAD_BYTES == 4096
+        assert config.HEAVY_REQUEST_TARGET_SECONDS == 75
+        assert config.CLOUD_RUN_CONCURRENCY_TARGET == 8
+        assert config.INSTANCE_CONNECTION_NAME == "project:region:instance"
+        assert config.BACKEND_PUBLIC_BASE_URL == "https://backend-abc.a.run.app"
+        assert config.FRONTEND_PUBLIC_BASE_URL == "https://frontend-abc.a.run.app"
+        assert config.GCS_BUCKET == "materials-prod"
+        assert config.GCS_OBJECT_PREFIX == "materials-management/prod"
+        assert config.get_storage_backend() == config.STORAGE_BACKEND_GCS
+        assert config.get_storage_prefix("archives") == "materials-management/prod/archives"
+        assert config.uses_cloud_sql_unix_socket() is True
         assert config.get_cors_allowed_origins() == [
             "https://frontend.example.com",
             "https://admin.example.com",

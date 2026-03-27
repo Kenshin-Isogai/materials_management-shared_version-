@@ -22,6 +22,43 @@ Backward compatibility is out of scope.
 
 The target architecture does not need to preserve old shared-server folder contracts or compatibility-only filesystem behavior.
 
+## Locked rollout decisions
+
+- Frontend and backend remain separate Cloud Run services.
+- The frontend calls the backend through an absolute HTTPS base URL ending in `/api`.
+- The first rollout assumes native Cloud Run `*.run.app` public URLs; custom domains may come later.
+- The frontend container continues to use nginx for static asset delivery in the first rollout.
+- Cloud Run connects to Cloud SQL through the Cloud SQL Connector / Unix socket model.
+- Cloud secrets are sourced from Google Secret Manager and injected into Cloud Run.
+- The rollout is planned around `dev`, `staging`, and `prod` as distinct environments.
+- Persistent file storage uses one GCS bucket per environment, with class-based prefixes under a shared base prefix.
+- New post-cutover files become GCS-authoritative; historic local import/export/archive files are not migrated in the first rollout.
+- Browser downloads remain backend-mediated through opaque download endpoints rather than direct GCS signed URLs.
+- The first rollout is sized for a small-team operating profile and conservative backend concurrency.
+
+## Canonical object prefix model
+
+Use one bucket per environment and reserve a shared deployment prefix, then place object classes under fixed subprefixes:
+
+- `<base-prefix>/staging/`
+- `<base-prefix>/artifacts/`
+- `<base-prefix>/archives/`
+- `<base-prefix>/exports/`
+
+Example:
+
+- `gs://<env-bucket>/<base-prefix>/staging/...`
+- `gs://<env-bucket>/<base-prefix>/artifacts/...`
+- `gs://<env-bucket>/<base-prefix>/archives/...`
+- `gs://<env-bucket>/<base-prefix>/exports/...`
+
+Recommended retention for the first rollout:
+
+- `staging`: 7 days
+- `exports`: 30 days
+- `artifacts`: 90 days
+- `archives`: no automatic deletion
+
 ## Proposed Runtime Boundaries
 
 ### Frontend Cloud Run service
@@ -35,6 +72,8 @@ Responsibilities:
 Notes:
 
 - If the frontend and backend are on different Cloud Run services, explicit CORS policy is required on the backend.
+- The first rollout assumes the backend is still a browser-reachable public HTTPS endpoint, not a private internal-only service.
+- The first rollout keeps nginx in the frontend container even though the backend is a separate service.
 - If a simple static-hosting model becomes preferable later, the frontend should still keep the same API contract.
 
 ### Backend Cloud Run service
@@ -62,6 +101,8 @@ Operational notes:
 
 - connection count must be managed explicitly
 - startup migrations should not run concurrently from many autoscaled instances
+- deployment should assume Cloud SQL Connector / Unix socket connectivity rather than direct long-lived public TCP assumptions
+- first-rollout planning assumes a conservative backend Cloud Run concurrency target around 10 requests per instance
 
 ### Google Cloud Storage
 
@@ -78,6 +119,13 @@ Object classes to define:
 - generated artifacts
 - durable archives
 - temporary exports
+
+Naming/retention decision for the first rollout:
+
+- use one bucket per environment, not one bucket per object class
+- separate classes by fixed prefixes under a shared base prefix
+- apply lifecycle retention to `staging`, `exports`, and `artifacts`
+- leave `archives` without automatic deletion until an explicit archival policy is introduced
 
 ## Design Implications for This Repository
 
@@ -117,6 +165,21 @@ The backend should assume:
 - possibly internal service-to-service calls later
 
 This requires explicit CORS, explicit secret management, and an authentication strategy that is stronger than the current mutation header model.
+
+For the first rollout, the mutation trust boundary remains temporary:
+
+- reads may remain broadly available according to the current application contract
+- mutation requests still rely on `X-User-Name`
+- the backend may still be a public HTTPS browser endpoint, so that temporary model is explicitly accepted only as a short-lived rollout compromise
+- stronger end-user authentication remains a follow-up requirement rather than part of the first rollout completion bar
+
+## Initial operational guardrails
+
+- first-rollout upload ceiling: 32 MB per CSV/ZIP request
+- heavy synchronous request target: usually complete within 60 seconds
+- multi-request upload/preview-confirm flows must persist intermediate state in GCS-backed staging, not instance-local disk
+- normal JSON planning responses remain synchronous for now
+- file-producing exports and artifacts are delivered through backend download endpoints rather than direct object-store URLs
 
 ## Suggested Architecture Decisions to Lock Early
 
