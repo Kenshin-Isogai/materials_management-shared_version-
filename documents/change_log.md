@@ -32,6 +32,7 @@
   - Batch create payload now submits optional `project_id` from that UI.
   - Reservation List now shows linked project name/id when present.
   - Backend reservation create now validates provided `project_id` and returns controlled `PROJECT_NOT_FOUND` when invalid.
+  - Reservations project selector now loads all project pages (`apiGetAllPages`) so older projects are not silently omitted when total project count exceeds a single page.
 
 ### Documentation
 

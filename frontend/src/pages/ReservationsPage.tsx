@@ -1,6 +1,6 @@
 import { FormEvent, useMemo, useState } from "react";
 import useSWR from "swr";
-import { apiDownload, apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
+import { apiDownload, apiGetAllPages, apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
 import { CatalogPicker } from "../components/CatalogPicker";
 import { formatActionError, resolvePreviewSelection } from "../lib/previewState";
 import type { CatalogSearchResult, Item, ProjectRow, Reservation } from "../lib/types";
@@ -93,10 +93,10 @@ export function ReservationsPage() {
     apiGetWithPagination<Item[]>("/items?per_page=1000")
   );
   const { data: projectsResp } = useSWR("/projects-options-reservations", () =>
-    apiGetWithPagination<ProjectRow[]>("/projects?per_page=200")
+    apiGetAllPages<ProjectRow>("/projects?per_page=200")
   );
   const items = useMemo(() => itemsResp?.data ?? [], [itemsResp]);
-  const projects = useMemo(() => projectsResp?.data ?? [], [projectsResp]);
+  const projects = useMemo(() => projectsResp ?? [], [projectsResp]);
   const itemCatalogById = useMemo(
     () => new Map(items.map((item) => [item.item_id, itemToCatalogResult(item)])),
     [items]
