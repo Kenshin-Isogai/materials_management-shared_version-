@@ -111,7 +111,7 @@ describe("OrdersPage", () => {
             supplier_name: "オーテックス",
             quotation_number: "0000001809",
             issue_date: "2025-10-20",
-            pdf_link: "imports/orders/registered/pdf_files/オーテックス/0000001809.pdf",
+            quotation_document_url: "https://example.sharepoint.com/sites/procurement/0000001809",
           },
         ];
       }
@@ -494,7 +494,7 @@ describe("OrdersPage", () => {
 
     expect(
       await screen.findByText(
-        "Preview failed: Manual import requires pdf_link to be blank, filename-only, or imports/orders/registered/pdf_files/<supplier>/<file>.pdf. If the PDF is part of the same browser upload, use 'Upload Orders ZIP'.",
+        "Preview failed: quotation_document_url (row 2) is required",
       ),
     ).toBeTruthy();
   });

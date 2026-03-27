@@ -4,6 +4,8 @@ from contextlib import asynccontextmanager
 import json
 from typing import Any
 
+from pathlib import Path
+
 from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,12 +13,14 @@ from fastapi.responses import JSONResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import (
-    APP_HOST,
     APP_PORT,
+    APP_DATA_ROOT,
     AUTO_MIGRATE_ON_STARTUP,
     ITEMS_IMPORT_UNREGISTERED_ROOT,
     get_auth_mode,
     get_cors_allowed_origins,
+    get_runtime_target,
+    is_cloud_run_runtime,
 )
 from .db import get_connection, init_db
 from .errors import AppError
@@ -44,6 +48,7 @@ from .schemas import (
     ProcurementBatchCreateRequest,
     ProcurementBatchUpdate,
     ProcurementLineUpdate,
+    QuotationUpdateRequest,
     UnregisteredItemBatchRequest,
     ProjectCreate,
     ProjectRequirementUnresolvedItemsCsvRequest,
@@ -56,8 +61,6 @@ from .schemas import (
     ShortageInboxToProcurementRequest,
     SupplierCreate,
     TransactionUndoRequest,
-    UnregisteredBatchRequest,
-    UnregisteredFileRetryRequest,
     UserCreate,
     UserUpdate,
 )
@@ -251,7 +254,16 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
 
     @app.get("/api/health")
     def healthcheck():
-        return ok({"healthy": True})
+        return ok(
+            {
+                "healthy": True,
+                "runtime_target": get_runtime_target(),
+                "cloud_run_mode": is_cloud_run_runtime(),
+                "app_port": APP_PORT,
+                "app_data_root": str(APP_DATA_ROOT),
+                "auto_migrate_on_startup": AUTO_MIGRATE_ON_STARTUP,
+            }
+        )
 
     @app.get("/api/auth/capabilities")
     def get_auth_capabilities(current_role: str | None = role):
@@ -268,16 +280,16 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         )
 
     @app.get("/api/artifacts")
-    def get_artifacts(artifact_type: str | None = None):
-        return ok(service.list_generated_artifacts(artifact_type=artifact_type))
+    def get_artifacts(artifact_type: str | None = None, conn= db):
+        return ok(service.list_generated_artifacts(conn, artifact_type=artifact_type))
 
     @app.get("/api/artifacts/{artifact_id}")
-    def get_artifact_detail(artifact_id: str):
-        return ok(service.get_generated_artifact(artifact_id))
+    def get_artifact_detail(artifact_id: str, conn= db):
+        return ok(service.get_generated_artifact(conn, artifact_id))
 
     @app.get("/api/artifacts/{artifact_id}/download")
-    def download_artifact(artifact_id: str):
-        filename, content = service.get_generated_artifact_download(artifact_id)
+    def download_artifact(artifact_id: str, conn= db):
+        filename, content = service.get_generated_artifact_download(conn, artifact_id)
         return file_attachment(filename, content)
 
     @app.get("/api/users")
@@ -640,6 +652,67 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         )
         return csv_attachment(filename, content)
 
+    @app.post("/api/orders/import-preview")
+    async def post_orders_import_preview(
+        file: UploadFile = File(...),
+        supplier_id: int | None = Form(default=None),
+        supplier_name: str | None = Form(default=None),
+        default_order_date: str | None = Form(default=None),
+        conn= db,
+    ):
+        content = await file.read()
+        result = service.preview_orders_import_from_content(
+            conn,
+            supplier_id=supplier_id,
+            supplier_name=supplier_name,
+            content=content,
+            default_order_date=default_order_date,
+            source_name=file.filename or "order_import.csv",
+        )
+        return ok(result)
+
+    @app.post("/api/orders/import")
+    async def post_orders_import(
+        file: UploadFile = File(...),
+        supplier_id: int | None = Form(default=None),
+        supplier_name: str | None = Form(default=None),
+        default_order_date: str | None = Form(default=None),
+        row_overrides: str | None = Form(default=None),
+        alias_saves: str | None = Form(default=None),
+        conn= db,
+    ):
+        content = await file.read()
+        result = service.import_orders_from_content_with_job(
+            conn,
+            supplier_id=supplier_id,
+            supplier_name=supplier_name,
+            content=content,
+            default_order_date=default_order_date,
+            source_name=file.filename or "order_import.csv",
+            missing_output_dir=ITEMS_IMPORT_UNREGISTERED_ROOT,
+            row_overrides=_parse_optional_json_form(row_overrides, "row_overrides"),
+            alias_saves=_parse_optional_json_form(alias_saves, "alias_saves"),
+        )
+        conn.commit()
+        return ok(result)
+
+    @app.get("/api/orders/import-jobs")
+    def get_order_import_jobs(
+        page: int = 1,
+        per_page: int = 50,
+        conn= db,
+    ):
+        data, pagination = service.list_order_import_jobs(
+            conn,
+            page=page,
+            per_page=per_page,
+        )
+        return ok(data, pagination)
+
+    @app.get("/api/orders/import-jobs/{import_job_id}")
+    def get_order_import_job(import_job_id: int, conn= db):
+        return ok(service.get_order_import_job(conn, import_job_id))
+
     @app.get("/api/orders/{order_id}")
     def get_order(order_id: int, conn= db):
         return ok(service.get_order(conn, order_id))
@@ -671,97 +744,11 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
     def get_order_lineage(order_id: int, conn= db):
         return ok(service.list_order_lineage_events(conn, order_id=order_id))
 
-    @app.post("/api/orders/import-preview")
-    async def post_orders_import_preview(
-        file: UploadFile = File(...),
-        supplier_id: int | None = Form(default=None),
-        supplier_name: str | None = Form(default=None),
-        default_order_date: str | None = Form(default=None),
-        conn= db,
-    ):
-        content = await file.read()
-        result = service.preview_orders_import_from_content(
-            conn,
-            supplier_id=supplier_id,
-            supplier_name=supplier_name,
-            content=content,
-            default_order_date=default_order_date,
-            source_name=file.filename or "order_import.csv",
-        )
-        return ok(result)
-
-    @app.post("/api/orders/import")
-    async def post_orders_import(
-        file: UploadFile = File(...),
-        supplier_id: int | None = Form(default=None),
-        supplier_name: str | None = Form(default=None),
-        default_order_date: str | None = Form(default=None),
-        row_overrides: str | None = Form(default=None),
-        alias_saves: str | None = Form(default=None),
-        conn= db,
-    ):
-        content = await file.read()
-        result = service.import_orders_from_content(
-            conn,
-            supplier_id=supplier_id,
-            supplier_name=supplier_name,
-            content=content,
-            default_order_date=default_order_date,
-            source_name=file.filename or "order_import.csv",
-            missing_output_dir=ITEMS_IMPORT_UNREGISTERED_ROOT,
-            row_overrides=_parse_optional_json_form(row_overrides, "row_overrides"),
-            alias_saves=_parse_optional_json_form(alias_saves, "alias_saves"),
-        )
-        conn.commit()
-        return ok(result)
-
     @app.post("/api/orders/import/confirm-procurement-links")
     def post_confirm_procurement_links(body: ConfirmProcurementLinksRequest, conn= db):
         result = service.confirm_procurement_links(
             conn,
             links=[row.model_dump() for row in body.links],
-        )
-        conn.commit()
-        return ok(result)
-
-    @app.post("/api/orders/import-unregistered")
-    def post_import_unregistered_orders(body: UnregisteredBatchRequest, conn= db):
-        result = service.import_unregistered_order_csvs(
-            conn,
-            unregistered_root=body.unregistered_root,
-            registered_root=body.registered_root,
-            default_order_date=body.default_order_date,
-            continue_on_error=body.continue_on_error,
-        )
-        conn.commit()
-        return ok(result)
-
-    @app.post("/api/orders/batch-upload")
-    async def post_orders_batch_upload(
-        file: UploadFile = File(...),
-        default_order_date: str | None = Form(default=None),
-        continue_on_error: bool = Form(default=True),
-        conn= db,
-    ):
-        content = await file.read()
-        result = service.upload_and_import_orders_batch_zip(
-            conn,
-            filename=file.filename or "orders_batch.zip",
-            content=content,
-            default_order_date=default_order_date,
-            continue_on_error=continue_on_error,
-        )
-        conn.commit()
-        return ok(result)
-
-    @app.post("/api/orders/retry-unregistered-file")
-    def post_retry_unregistered_file(body: UnregisteredFileRetryRequest, conn= db):
-        result = service.retry_unregistered_order_csv(
-            conn,
-            csv_path=body.csv_path,
-            unregistered_root=body.unregistered_root,
-            registered_root=body.registered_root,
-            default_order_date=body.default_order_date,
         )
         conn.commit()
         return ok(result)
@@ -797,8 +784,8 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         return ok(data, pagination)
 
     @app.put("/api/quotations/{quotation_id}")
-    def put_quotation(quotation_id: int, payload: dict[str, Any], conn= db):
-        result = service.update_quotation(conn, quotation_id, payload)
+    def put_quotation(quotation_id: int, payload: QuotationUpdateRequest, conn= db):
+        result = service.update_quotation(conn, quotation_id, payload.model_dump(exclude_unset=True))
         conn.commit()
         return ok(result)
 

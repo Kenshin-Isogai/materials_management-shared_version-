@@ -22,10 +22,28 @@ uv run alembic upgrade head
 
 The backend is now PostgreSQL-first and expects `DATABASE_URL` to be set.
 
+### Cloud Run Runtime
+
+- Set `APP_RUNTIME_TARGET=cloud_run`
+- `PORT` is used automatically for the listener port
+- If `APP_DATA_ROOT` is not set, runtime file roots default under the OS temp directory
+- In Cloud Run mode, startup skips legacy workspace/import folder migration and only creates the required empty runtime directories
+
 ### Docker
 
 ```bash
 docker compose up --build
+```
+
+### Backend Tests (Docker PostgreSQL)
+
+From the repository root:
+
+```powershell
+docker compose -f docker-compose.test.yml up -d db-test
+$env:TEST_DATABASE_URL = "postgresql+psycopg://develop:test@localhost:5433/materials_test"
+$env:PYTHONPATH = "backend"
+uv run --project backend python -m pytest --import-mode=importlib
 ```
 
 ### Authentication

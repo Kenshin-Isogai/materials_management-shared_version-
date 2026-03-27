@@ -119,7 +119,7 @@ erDiagram
     INTEGER supplier_id FK
     TEXT quotation_number
     TEXT issue_date
-    TEXT pdf_link
+    TEXT quotation_document_url
   }
 
   orders {
@@ -132,6 +132,7 @@ erDiagram
     TEXT order_date
     TEXT expected_arrival
     TEXT arrival_date
+    TEXT purchase_order_document_url
     TEXT status
   }
 
@@ -335,7 +336,7 @@ Stores quotation metadata.
 | supplier_id | INTEGER | FK ↁEsuppliers | Supplier reference |
 | quotation_number | TEXT | NOT NULL | Supplier quotation number |
 | issue_date | TEXT | | YYYY-MM-DD |
-| pdf_link | TEXT | | File path to quotation PDF |
+| quotation_document_url | TEXT | | External quotation document URL (for example SharePoint) |
 
 **Unique Constraint:** `(supplier_id, quotation_number)`
 
@@ -614,9 +615,14 @@ Maps raw category names to canonical category names for soft-merge behavior.
      to prevent duplicate quotation re-import
    - apply requested alias saves only after duplicate-quotation checks pass
 9. Normalize date fields to `YYYY-MM-DD`; reject invalid date strings
-10. For manual CSV import, `pdf_link` must be blank or `imports/orders/registered/pdf_files/<supplier>/<file>.pdf`
-   - Filename-only values are normalized to the selected supplier's registered path
-11. Import-capable CSV workflows expose companion downloads:
+10. For manual CSV import, `quotation_document_url` is required and must be a valid `https://...` URL
+11. `purchase_order_document_url` is optional and, when provided, must also be a valid `https://...` URL
+12. Manual `POST /orders/import` creates an `import_jobs` row with `import_type='orders'` and records row-level `import_job_effects`
+   - created rows use `effect_type='order_created'`
+   - duplicate quotation rejection uses `effect_type='order_duplicate_quotation'`
+   - unresolved item output uses `effect_type='order_missing_item'`
+   - job status uses the shared import-job vocabulary (`ok`, `partial`, `error`), while the immediate import response may still return `status="missing_items"`
+13. Import-capable CSV workflows expose companion downloads:
    - template CSV: header-only exact import columns, UTF-8 with BOM
    - reference CSV: live canonical DB values relevant to that flow, generated on demand from current state
 
@@ -624,7 +630,7 @@ Maps raw category names to canonical category names for soft-merge behavior.
 1. Scan all `*.csv` under `imports/orders/unregistered/csv_files`
 2. Derive supplier from CSV relative folder (must be under `<root>/csv_files/<supplier>/<file>.csv`)
 3. Run standard `import_orders()` for each CSV (`import_unregistered_order_csvs`):
-   - If result is `ok`: move CSV to `registered/csv_files`, move referenced PDFs to `registered/pdf_files`, normalize CSV/quotation `pdf_link`
+   - If result is `ok`: move CSV to `registered/csv_files` and move referenced PDFs to `registered/pdf_files`
    - If result is `missing_items`: keep source CSV/PDF under `unregistered`; collect missing rows into one consolidated batch register CSV under `imports/items/unregistered/`; do not move source files
 
 **Unregistered Item Batch Procedure:**
@@ -783,7 +789,7 @@ Projected Available =
 | `merge_open_orders()` | Merge two open split-compatible orders | source_order_id, target_order_id, expected_arrival |
 | `list_order_lineage_events()` | Retrieve split/merge lineage events for one order | order_id |
 | `list_quotations()` | Query quotations with filters | supplier |
-| `update_quotation()` | Edit quotation | quotation_id, issue_date, pdf_link |
+| `update_quotation()` | Edit quotation | quotation_id, issue_date, quotation_document_url |
 | `list_supplier_item_aliases()` | Query alias mappings | supplier |
 | `upsert_supplier_item_alias()` | Create/update one alias | supplier, ordered_item_number, canonical_item_number, units_per_order |
 | `register_supplier_item_aliases_df()` | Bulk import aliases | supplier, dataframe |
@@ -791,7 +797,6 @@ Projected Available =
 | `delete_supplier_item_alias()` | Delete one alias | alias_id |
 | `register_unregistered_item_csvs()` | Batch register unregistered item CSV files, move successful files to registered, restore the source file if a post-move per-file failure occurs before the savepoint is released, and consolidate registered CSVs only when the batch completes without file errors | items_unregistered_root, items_registered_root, continue_on_error |
 | `consolidate_registered_item_csvs()` | Consolidate small CSVs in each `imports/items/registered/<YYYY-MM>/` subfolder into `items_YYYY-MM_NNN.csv` files (max 5,000 rows each); deletes originals after merge and removes header-only inputs without writing an empty archive | items_registered_root |
-| `import_unregistered_order_csvs()` | Batch import unregistered order CSV files and move successful CSV/PDF files | unregistered/registered roots, items_unregistered_root, default_order_date, continue_on_error |
 | `rename_category()` | Backward-compatible soft merge wrapper | source_category, target_category |
 
 **Constraints:**
@@ -969,9 +974,10 @@ Base URL: `http://localhost:8000/api`
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/artifacts` | List managed generated-file artifacts; supports optional `?artifact_type=` filtering |
+| GET | `/artifacts` | List managed generated-file artifacts from the DB-backed artifact registry; supports optional `?artifact_type=` filtering |
 | GET | `/artifacts/{artifact_id}` | Get generated artifact metadata |
 | GET | `/artifacts/{artifact_id}/download` | Download one generated artifact through the browser |
+| GET | `/health` | Health check plus runtime posture summary (`runtime_target`, `cloud_run_mode`, `app_data_root`, `app_port`) |
 
 #### **Workspace**
 
@@ -1028,12 +1034,13 @@ Base URL: `http://localhost:8000/api`
 | GET | `/orders/import-template` | Download header-only order import template CSV (UTF-8 with BOM) |
 | GET | `/orders/import-reference` | Download live order reference CSV; supports optional `?supplier_name=` to scope alias rows |
 | POST | `/orders/import-preview` | Preview order CSV reconciliation, classify rows, and surface duplicate quotation conflicts before commit |
+| GET | `/orders/import-jobs` | List manual order import jobs recorded in `import_jobs` (`import_type='orders'`) |
+| GET | `/orders/import-jobs/{import_job_id}` | Get one manual order import job with row-level `import_job_effects` |
 | GET | `/orders/{order_id}` | Get order details |
 | PUT | `/orders/{order_id}` | Update order ETA, project assignment for non-RFQ-managed orders, or split partial ETA via `split_quantity` |
 | POST | `/orders/merge` | Merge two open compatible orders |
 | GET | `/orders/{order_id}/lineage` | List split/merge lineage events for the order |
-| POST | `/orders/import` | Import orders from CSV; accepts optional preview-confirmation `row_overrides` and `alias_saves` form fields with strict `422` validation for malformed or invalid payloads. Browser/shared-server guidance is `pdf_link = blank or filename-only`; canonical server paths remain compatibility fallback for admin/server-resident imports |
-| POST | `/orders/batch-upload` | Upload one ZIP package, extract it into server-managed staging, then run the existing unregistered batch order import flow against the staged CSV/PDF layout. In uploaded CSVs, `pdf_link` should be blank or filename-only such as `Q2026-0001.pdf`; generated missing-item register CSVs are returned as managed artifact metadata plus browser-download endpoints |
+| POST | `/orders/import` | Import orders from CSV; accepts optional preview-confirmation `row_overrides` and `alias_saves` form fields with strict `422` validation for malformed or invalid payloads. Primary contract is metadata-only document URLs: `quotation_document_url` is required and `purchase_order_document_url` is optional. Successful and missing-item responses include `import_job_id` |
 | POST | `/orders/{order_id}/arrival` | Process order arrival |
 | POST | `/orders/{order_id}/partial-arrival` | Process partial arrival |
 | GET | `/quotations` | List quotations |
@@ -1256,14 +1263,15 @@ Compatibility rule:
 | issue_date | Yes | YYYY-MM-DD |
 | order_date | Conditional* | YYYY-MM-DD |
 | expected_arrival | No | YYYY-MM-DD |
-| pdf_link | No | Blank, filename-only, or compatibility server path |
+| quotation_document_url | Yes | Valid `https://...` document URL |
+| purchase_order_document_url | No | Valid `https://...` document URL |
 
 *Required unless shared order date provided.
 
 Browser/shared-server contract:
-- `pdf_link` should normally be blank or filename-only such as `Q2026-0001.pdf`
-- upload-first ZIP imports resolve that filename against PDFs included in the same staged upload package
-- canonical server paths remain accepted only as a compatibility fallback for legacy/admin flows
+- `quotation_document_url` is required for manual CSV import and should point to the external quotation document
+- `purchase_order_document_url` is optional and stores the external PO document when available
+- legacy ZIP/PDF batch flows remain compatibility-only for deployments that still manage PDFs inside this application
 
 ### **6.2 missing_items_registration.csv**
 
@@ -1394,11 +1402,12 @@ Managed generated-file delivery:
 ### **7.3 PDF Storage Rules**
 
 - All quotation PDFs are stored under `imports/orders/registered/pdf_files/<supplier>/`
-- `pdf_link` in database stores relative path from workspace root
+- `pdf_link` is no longer a database field on `quotations`
+- legacy compatibility CSVs may still carry `pdf_link` as an input-only filename/path hint for staged PDF movement
 - PDF files are moved (not copied) during batch import processing
 - Upload-first Orders batch imports first extract browser-uploaded ZIP contents into `imports/staging/orders/<job-id>/...`, then move accepted PDFs into canonical registered storage during the existing import flow
 - For upload-first browser batches, CSV `pdf_link` values are resolved by uploaded filename first; path-shaped values are normalized only for compatibility
-- Input paths are normalized (including known legacy typos and mixed separators)
+- Input paths are normalized only inside the legacy compatibility importer
 - Missing/unresolved PDF links are returned as warnings in batch reports
 - Filename collisions are handled by deterministic suffixing (`_1`, `_2`, ...)
 - Future hardening target: hash-based duplicate detection and original-filename retention
@@ -1526,7 +1535,7 @@ Minimum gate for non-trivial changes:
 ### 11.4 Order/Quotation maintenance from UI
 
 - Users may correct imported purchase data from frontend by:
-  - editing quotation metadata (`issue_date`, `pdf_link`)
+  - editing quotation metadata (`issue_date`, `quotation_document_url`)
   - editing open-order `expected_arrival`, optional split quantity, and manual `project_id`
   - deleting non-arrived orders
   - deleting quotations only when all linked orders are non-arrived (then cascade delete linked orders)

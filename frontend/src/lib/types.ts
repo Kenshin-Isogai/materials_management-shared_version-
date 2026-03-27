@@ -84,6 +84,8 @@ export type Order = {
   status: "Ordered" | "Arrived";
   supplier_name: string;
   quotation_number: string;
+  quotation_document_url?: string | null;
+  purchase_order_document_url?: string | null;
 };
 
 export type Quotation = {
@@ -92,7 +94,7 @@ export type Quotation = {
   supplier_name: string;
   quotation_number: string;
   issue_date: string | null;
-  pdf_link: string | null;
+  quotation_document_url?: string | null;
 };
 
 export type Transaction = {

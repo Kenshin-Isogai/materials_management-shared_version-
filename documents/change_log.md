@@ -1,3 +1,84 @@
+## 2026-03-27
+
+### Changed
+
+- Removed the remaining legacy order ZIP/PDF compatibility workflow now that backward compatibility is no longer required.
+  - deleted `POST /api/orders/import-unregistered`, `POST /api/orders/batch-upload`, `POST /api/orders/retry-unregistered-file`, `GET /api/orders/legacy-batch-jobs`, and `GET /api/orders/legacy-batch-jobs/{import_job_id}`
+  - removed the Orders-page legacy ZIP/PDF UI and the Items-page retry bridge that depended on compatibility batch jobs
+  - tightened order-import path handling to canonical `csv_files/<supplier>/` layout only and removed typo/path-normalization helpers
+  - removed the remaining quotation-path rewrite process because imported document URLs remain external references and do not need to change when records move between import states
+  - removed the backend-only `orders_legacy_batch` service path and added a schema cleanup migration that drops `legacy_batch_staged_files` and restores `import_jobs.import_type` to `items|orders`
+- Completed Phase 7 of the GCP + SharePoint migration plan.
+  - backend runtime now distinguishes local vs Cloud Run mode through `APP_RUNTIME_TARGET`
+  - Cloud Run mode defaults `APP_DATA_ROOT` to an ephemeral temp directory and skips legacy workspace/import folder migration on startup
+  - backend container startup now honors Cloud Run `PORT` instead of relying on a fixed baked-in bind port
+  - `/api/health` now reports runtime posture fields for deployment validation
+  - local Docker Compose explicitly pins `APP_RUNTIME_TARGET=local`
+- Completed Phase 6 of the GCP + SharePoint migration.
+  - removed the legacy `quotations.pdf_link` schema field in favor of `quotation_document_url`
+  - quotation update requests now use the typed document-URL contract instead of an open payload that could still carry `pdf_link`
+  - legacy batch `pdf_link` remains input-only inside the compatibility importer and is no longer persisted back into quotation metadata
+  - order-layout maintenance no longer rewrites archived CSV rows or quotation DB state solely to keep filesystem paths canonical
+- Reduced remaining folder semantics in the legacy order-batch compatibility path.
+  - generated artifacts are now registered in `generated_artifacts` and exposed through opaque DB-backed `artifact_id` values instead of path-derived IDs and folder-scan listing
+  - legacy batch responses now include `import_job_id`
+  - per-file retry references now use `file_id` instead of browser-visible `csv_path` / root fields
+  - Orders and Items pages now persist retry context by job/file IDs rather than workspace paths
+  - added `GET /api/orders/legacy-batch-jobs` and `GET /api/orders/legacy-batch-jobs/{import_job_id}` so compatibility jobs can be inspected without exposing internal path snapshots
+  - server-root legacy batch imports (`POST /api/orders/import-unregistered`) now snapshot discovered CSV/PDF files into `legacy_batch_staged_files` and process CSV work from those staged-file rows rather than driving execution directly from folder scans
+  - uploaded ZIP compatibility batches now record staged archive/CSV/PDF entries in `legacy_batch_staged_files`
+  - uploaded ZIP batch processing is now driven from DB-tracked staged-file rows rather than scanning the extracted unregistered folder to discover CSV work
+  - successful uploaded ZIP batches now update staged CSV/PDF rows with final move status and storage paths, so the DB reflects post-import file outcomes too
+- Updated legacy batch compatibility behavior in the UI.
+  - Orders page no longer asks the browser user to enter custom unregistered/registered root paths
+  - the compatibility section runs against the configured server-side roots or a staged ZIP upload only
+- Extended the GCP + SharePoint migration into DB-tracked manual order imports.
+  - `POST /api/orders/import` now creates `import_jobs(import_type='orders')` records and returns `import_job_id`.
+  - Added `GET /api/orders/import-jobs` and `GET /api/orders/import-jobs/{import_job_id}` for order-import job inspection.
+  - Row-level order import outcomes are now stored in `import_job_effects` as `order_created`, `order_missing_item`, and `order_duplicate_quotation`.
+  - Order import jobs reuse the shared import-job status vocabulary (`ok`, `partial`, `error`) even when the immediate import response remains `status="missing_items"`.
+- Fixed order import-job API routing and status finalization.
+  - `GET /api/orders/import-jobs` no longer collides with `GET /api/orders/{order_id}`.
+  - Missing-item order imports now finalize job rows as `partial` instead of violating the shared import-job status constraint.
+- Started the GCP + SharePoint migration implementation stream for order/quotation document handling.
+  - Added `quotation_document_url` for quotations and `purchase_order_document_url` for orders.
+  - Manual Orders CSV import now requires `quotation_document_url` and validates external `https://` document links instead of path-style `pdf_link` values.
+  - Orders UI now presents quotation and purchase-order references as openable document links and updates quotation editing to use `quotation_document_url`.
+  - Legacy ZIP/PDF batch handling remains in place only as a compatibility path.
+
+### Documentation
+
+- Updated migration-related contract notes in:
+  - `specification.md`
+  - `documents/technical_documentation.md`
+  - `documents/source_current_state.md`
+  - `documents/gcp_sharepoint_migration_plan/gcp_sharepoint_migration_plan.md`
+
+### Tests
+
+- Docker-backed backend pytest:
+  - `uv run --project backend python -m pytest --import-mode=importlib backend/tests/test_document_url_migration.py`
+    - result: `5 passed`
+  - `uv run --project backend python -m pytest --import-mode=importlib backend/tests/test_api_integration.py -k "generated_artifact_endpoints_expose_missing_items_register_download or orders_batch_upload_endpoint_stages_zip_and_imports or orders_batch_upload_endpoint_normalizes_path_like_pdf_link_to_filename_contract or items_import_jobs_listing_endpoint"`
+    - result: `4 passed, 98 deselected`
+  - `uv run --project backend python -m pytest --import-mode=importlib backend/tests/test_document_url_migration.py backend/tests/test_api_integration.py -k "generated_artifact_endpoints_expose_missing_items_register_download or order_import_returns_missing_item_details or orders_batch_upload_endpoint_stages_zip_and_imports or retry_unregistered_file_endpoint or retry_unregistered_legacy_layout_returns_warnings or generated_artifact_metadata_hides_workspace_paths or manual_order_import_accepts_external_document_urls"`
+    - result: `7 passed, 100 deselected`
+  - `uv run --project backend python -m pytest --import-mode=importlib backend/tests/test_api_integration.py -k "generated_artifact_endpoints_expose_missing_items_register_download or orders_batch_upload_endpoint_stages_zip_and_imports"`
+    - result: `2 passed, 100 deselected`
+  - `uv run --project backend python -m pytest --import-mode=importlib backend/tests/test_api_integration.py -k "orders_batch_upload_endpoint_stages_zip_and_imports or generated_artifact_endpoints_expose_missing_items_register_download or retry_unregistered_file_endpoint"`
+    - result: `3 passed, 99 deselected`
+
+### Changed
+
+- Continued the GCP + SharePoint migration cleanup in the Orders UI.
+  - The ZIP/PDF batch flow is now explicitly hidden behind a legacy compatibility section.
+  - Recent generated-file entries now show browser-facing metadata only (`filename`, timestamp, size) instead of workspace-relative paths.
+- Tightened backend compatibility/API signaling for migration-era flows.
+  - generated artifact metadata no longer exposes `relative_path` in the public response shape
+  - legacy order batch responses now include explicit compatibility markers
+- Updated repository guidance for Docker-backed backend pytest execution.
+  - `AGENTS.md`, `README.md`, and `backend/README.md` now document the working `uv run --project backend ...` flow with `docker-compose.test.yml`, `TEST_DATABASE_URL`, `PYTHONPATH=backend`, and `--import-mode=importlib`.
+
 ## 2026-03-26
 
 ### Fixed
@@ -1021,12 +1102,12 @@
   - `DELETE /api/quotations/{quotation_id}`
 - Orders frontend UI actions:
   - delete order from `Order List`
-  - edit quotation `issue_date` / `pdf_link`
+  - edit quotation `issue_date` / `quotation_document_url`
   - delete quotation (and linked orders)
 
 ### Changed
 
-- Quotation update flow now synchronizes matching source order CSV rows (`issue_date`, `pdf_link`) with DB updates.
+- Quotation update flow now synchronizes matching source order CSV rows (`issue_date`, `quotation_document_url`) with DB updates.
 - Order delete and quotation delete flows now synchronize matching rows in quotation CSV files so CSV and DB remain consistent.
 - Fixed order CSV maintenance targeting for duplicate item rows: `update_order`/`delete_order` now update/delete only the CSV row corresponding to the target order identity instead of fan-out matching all duplicate `(supplier, quotation_number, item_number)` rows.
 - Hardened quotation deletion guard: `delete_quotation` now returns conflict when any linked order is `Arrived`, preventing bypass of arrived-order immutability.

@@ -8,6 +8,10 @@ This document explains the implemented architecture of the Materials Management 
 
 - Backend targets PostgreSQL through a SQLAlchemy-managed engine and Alembic baseline migration.
 - The raw-SQL service layer is preserved behind a compatibility connection wrapper while the storage engine is PostgreSQL.
+- Runtime mode is now explicit.
+  - local/shared-server Docker mode: `APP_RUNTIME_TARGET=local`
+  - Cloud Run mode: `APP_RUNTIME_TARGET=cloud_run` or implicit Cloud Run `K_SERVICE`
+  - Cloud Run mode defaults runtime file roots under the OS temp directory and skips legacy workspace folder migration
 - Docker deployment stack:
   - `docker-compose.yml` (production), `docker-compose.override.yml` (local dev), `docker-compose.test.yml` (test DB)
   - `backend/Dockerfile`, `frontend/Dockerfile`, `frontend/nginx.conf`
@@ -21,15 +25,27 @@ This document explains the implemented architecture of the Materials Management 
   - `GET /api/users` provides the active-user feed for the global picker
   - `GET /api/users?include_inactive=true` backs the management screen
   - create/update/deactivate flows emit a frontend refresh signal so the shared header picker stays aligned
-- Upload-first shared-server batch import adapters for browser-facing batch workflows:
+- Upload-first shared-server batch import adapters remain only for missing-item registration workflows.
   - `POST /api/items/batch-upload` stages uploaded CSVs under `imports/staging/items/<job-id>/...` and reuses `register_unregistered_item_csvs(...)`
-  - `POST /api/orders/batch-upload` stages an uploaded ZIP under `imports/staging/orders/<job-id>/...`, extracts CSV/PDF files into the expected layout, and reuses `import_unregistered_order_csvs(...)`
-  - upload-first Orders ZIP imports treat `pdf_link` as a filename-first field; path-shaped values are stripped to filename semantics
-  - the UI presents upload-first controls on Items and Orders pages while keeping server-resident batch actions as advanced fallback paths
+  - the Orders page no longer exposes or depends on ZIP/PDF batch upload behavior
+- Manual Orders CSV import now uses external document URLs as the primary contract.
+  - `quotation_document_url` is required and validated as `https://...`
+  - `purchase_order_document_url` is optional and also validated as `https://...`
+  - the Orders UI renders those values as openable document links instead of filesystem-style path text
 - Generated artifact delivery for batch-produced missing-item register CSVs:
   - `GET /api/artifacts`, `GET /api/artifacts/{artifact_id}`, `GET /api/artifacts/{artifact_id}/download`
   - lightweight filesystem-backed registry over generated CSVs under `imports/items/unregistered/`
+  - the Orders UI now treats artifact entries as download-only records and no longer displays workspace-relative paths
+- Retired order-batch compatibility internals have been removed.
+  - no `orders_legacy_batch` import-job mode remains in the schema
+  - no `legacy_batch_staged_files` table remains in the runtime model
+  - artifact metadata is now browser-facing (`filename`, timestamps, size, detail/download endpoints) rather than a UI contract around `relative_path`
 - `backend/main.py` is a server entrypoint only (no CLI).
+- `/api/health` now reports runtime posture fields useful for deployment validation:
+  - `runtime_target`
+  - `cloud_run_mode`
+  - `app_data_root`
+  - `app_port`
 
 ## Operating Profile (Confirmed)
 
@@ -122,11 +138,12 @@ flowchart LR
    `inventory_ledger` gives fast current stock lookup, while `transaction_log` enables traceability and undo.
 3. Filesystem-aware order ingestion.
     Orders are imported from CSV/PDF folders, then moved to canonical registered paths to preserve auditability.
-   The order-layout migration also rewrites stale `pdf_link` values in both unregistered and registered order CSV archives, plus quotation DB rows, so historical links stay aligned after directory-layout changes.
-   The live unregistered batch import now also rewrites the moved registered CSV archive with its final registered `pdf_link` values, keeping the archive consistent with the post-move filesystem state.
+   Legacy CSV `pdf_link` text is now treated as compatibility-import input only, not as persisted quotation metadata.
+   The order-layout migration no longer rewrites archived CSVs or quotation DB rows just to keep path text aligned.
    Shared-server upload adapters now stage browser uploads under `imports/staging/...` first, then materialize them into the same folder shape that the existing domain import logic already understands.
-4. Reversible bulk imports.
+4. Reversible and inspectable bulk imports.
    Item imports store job and row-level effects (`import_jobs`, `import_job_effects`) so undo/redo can be state-checked and safe.
+   Manual order CSV imports now also write `import_jobs` / `import_job_effects` records (`import_type='orders'`) so missing-item outcomes and created-order rows are inspectable without relying on folder state.
    Backend pytest fixtures remap workspace import/export roots into per-test temporary directories so import-related tests cannot leak CSV artifacts into the real repository workspace.
 5. Migration-safe manual project assignment retention.
    DB migration backfills `orders.project_id_manual` for legacy rows that have `project_id` but no ORDERED RFQ ownership, preventing RFQ unlink synchronization from clearing historical manual assignments.
@@ -198,13 +215,14 @@ erDiagram
         int supplier_id FK
         string quotation_number
         string issue_date
-        string pdf_link
+        string quotation_document_url
     }
 
     ORDERS {
         int order_id PK
         int item_id FK
         int quotation_id FK
+        string purchase_order_document_url
         int order_amount
         int ordered_quantity
         string ordered_item_number
@@ -439,18 +457,27 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 
 ### 4) Order and quotation file workflow
 
-- Manual order import accepts only canonical registered PDF links or filename-only values.
-- Unregistered batch import resolves/moves CSV and PDF files and rewrites links to canonical workspace-relative paths.
+- Manual Orders CSV import now uses external document URLs as the primary contract.
+  - `quotation_document_url` is required and must be `https://...`
+  - `purchase_order_document_url` is optional and, when present, must be `https://...`
+- Unregistered batch import resolves/moves CSV and PDF files, but no longer rewrites archived CSV content or quotation DB rows just to keep filesystem paths canonical.
 - Upload-first adapters stage browser payloads under:
   - `imports/staging/items/<job-id>/unregistered/`
   - `imports/staging/orders/<job-id>/unregistered/csv_files/<supplier>/`
   - `imports/staging/orders/<job-id>/unregistered/pdf_files/<supplier>/`
 - Orders ZIP staging accepts either canonical `csv_files/...` + `pdf_files/...` paths or simpler supplier-subfolder layouts, then normalizes them into the canonical unregistered structure before domain import starts.
-- Upload-first Orders ZIP CSVs should use `pdf_link = blank or filename-only`.
+- Upload-first Orders ZIP CSVs should use the legacy `pdf_link` filename/path compatibility contract only when that legacy batch flow is intentionally used.
   - browser uploads resolve that filename against staged PDFs for the same supplier
-  - path-shaped `pdf_link` text is normalized for compatibility, but it is no longer the primary shared-server contract
+  - path-shaped `pdf_link` text is normalized for compatibility inside the importer only, and is not persisted as quotation metadata
+- Manual Orders CSV import should use external document URLs instead of filesystem-style PDF references.
+- `quotations.pdf_link` is removed from the schema; `quotation_document_url` is the document-reference field.
+- Manual order import now records DB-backed import jobs and row-level effects.
+  - `POST /api/orders/import` creates `import_jobs(import_type='orders')`
+  - `GET /api/orders/import-jobs` and `GET /api/orders/import-jobs/{import_job_id}` expose summary and row-level results
+  - job rows keep shared import-job statuses (`ok`, `partial`, `error`) even when the immediate API response uses `status="missing_items"`
 - Missing items discovered during unregistered batch import are aggregated into a single register CSV per batch run under `imports/items/unregistered/` (instead of per-quotation output beside source CSVs).
 - Generated missing-item register CSVs now return artifact metadata in API responses and are downloadable through `/api/artifacts/{artifact_id}/download`, so the frontend no longer has to display raw server file paths.
+- Generated artifact lookup is now DB-backed (`generated_artifacts`) with opaque `artifact_id` values rather than filesystem-derived IDs or folder scans.
 - Consolidated missing-item rows are de-duplicated by `(supplier, manufacturer_name, item_number)` so repeated unresolved rows across quotations are emitted once per batch register CSV.
 - Batch consolidation uses collision-safe temporary per-file register naming (supplier-prefixed) and deletes temporary files only after consolidated-register write succeeds.
 - Consolidated register files may include rows from multiple suppliers; successful unregistered-item registration moves the processed CSV into `imports/items/registered/<YYYY-MM>/` while preserving row-level supplier columns.
