@@ -16,6 +16,7 @@ Support provisional project linkage for long-lead/general-purpose items *before*
 ## Phase 2 (next)
 
 - Add a dedicated “Provisional Allocation” entry path on Workspace and/or Orders to reduce context switching.
+  - **Implemented (partial):** Orders `Order Details` now offers `Create Provisional Reservation…` that navigates to prefilled Reservations entry fields.
 - Allow selecting source type:
   - stock-backed reservation
   - open-order dedication (where ownership is not RFQ/procurement-managed)
@@ -36,4 +37,3 @@ Support provisional project linkage for long-lead/general-purpose items *before*
    - create reservation with project
    - list reservation project linkage
    - release/consume regression check
-

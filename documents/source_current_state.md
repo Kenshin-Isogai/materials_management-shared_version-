@@ -183,6 +183,7 @@ Last updated: 2026-03-26 (JST)
 - ETA edit flow supports partial postponement using split quantity (e.g., postpone 30 of 50), which creates a second open-order row with the new ETA while preserving traceability-safe quantities.
 - The same edit flow now lets users assign or clear `project_id` unless the order is controlled by an ORDERED RFQ/procurement link.
 - When split ETA editing is combined with project selection from the Orders page, the UI now performs the split first and then assigns only the created consumed child order.
+- Orders page `Order Details` now includes `Create Provisional Reservation…`, which opens Reservations with prefilled draft fields (`item_id`, `quantity`, optional `project_id`, and source-order context note/purpose) to reduce context switching for provisional stock-link workflows.
 - Backend now persists split/merge/partial-arrival order lineage in `order_lineage_events`; API exposes `POST /api/orders/merge` and `GET /api/orders/{order_id}/lineage` for durable traceability and future scale-out reporting.
 - Orders manual CSV import is now preview-first:
   - `POST /api/orders/import-preview` classifies each row as `exact`, `high_confidence`, `needs_review`, or `unresolved`

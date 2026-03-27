@@ -1,5 +1,6 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
+import { useLocation } from "react-router-dom";
 import { apiDownload, apiGetAllPages, apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
 import { CatalogPicker } from "../components/CatalogPicker";
 import { formatActionError, resolvePreviewSelection } from "../lib/previewState";
@@ -73,6 +74,7 @@ function itemToCatalogResult(item: Item): CatalogSearchResult {
 }
 
 export function ReservationsPage() {
+  const location = useLocation();
   const [bulkRows, setBulkRows] = useState<ReservationRow[]>([
     blankRow(),
     blankRow(),
@@ -101,6 +103,54 @@ export function ReservationsPage() {
     () => new Map(items.map((item) => [item.item_id, itemToCatalogResult(item)])),
     [items]
   );
+
+  useEffect(() => {
+    if (!location.search) return;
+    const params = new URLSearchParams(location.search);
+    const hasPrefill =
+      params.has("item_id") ||
+      params.has("quantity") ||
+      params.has("purpose") ||
+      params.has("deadline") ||
+      params.has("note") ||
+      params.has("project_id");
+    if (!hasPrefill) return;
+
+    const itemIdRaw = params.get("item_id");
+    const quantityRaw = params.get("quantity");
+    const projectIdRaw = params.get("project_id");
+    const sourceOrderIdRaw = params.get("source_order_id");
+
+    const next: ReservationRow = {
+      ...blankRow(),
+      item_id:
+        itemIdRaw && Number.isFinite(Number(itemIdRaw)) && Number(itemIdRaw) > 0 ? itemIdRaw : "",
+      quantity:
+        quantityRaw && Number.isFinite(Number(quantityRaw)) && Number(quantityRaw) > 0 ? quantityRaw : "",
+      purpose: params.get("purpose")?.trim() ?? "",
+      deadline: params.get("deadline")?.trim() ?? "",
+      note: params.get("note")?.trim() ?? "",
+      project_id:
+        projectIdRaw && Number.isFinite(Number(projectIdRaw)) && Number(projectIdRaw) > 0
+          ? projectIdRaw
+          : "",
+    };
+
+    setBulkRows((prev) => {
+      if (!prev.length) return [next];
+      const copy = [...prev];
+      copy[0] = { ...copy[0], ...next };
+      return copy;
+    });
+
+    if (sourceOrderIdRaw && Number.isFinite(Number(sourceOrderIdRaw))) {
+      setReservationMessage(
+        `Prefilled from Order #${sourceOrderIdRaw}. Confirm item/qty/project before submitting.`
+      );
+    } else {
+      setReservationMessage("Prefilled reservation entry. Confirm values before submitting.");
+    }
+  }, [location.search]);
 
   function updateBulkRow(index: number, patch: Partial<ReservationRow>) {
     setBulkRows((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));

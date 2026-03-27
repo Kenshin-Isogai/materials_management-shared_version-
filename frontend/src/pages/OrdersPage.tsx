@@ -419,6 +419,19 @@ export function OrdersPage() {
     scrollToSection(orderDetailsRef);
   }
 
+  function openReservationPrefill(order: Order) {
+    const params = new URLSearchParams({
+      item_id: String(order.item_id),
+      quantity: String(order.order_amount),
+      source_order_id: String(order.order_id),
+      purpose: `Provisional reserve from order #${order.order_id}`,
+    });
+    if (order.project_id) {
+      params.set("project_id", String(order.project_id));
+    }
+    navigate(`/reservations?${params.toString()}`);
+  }
+
   function openQuotationDetails(quotationId: number) {
     setMessage("");
     setSelectedQuotationId(quotationId);
@@ -1791,6 +1804,19 @@ export function OrdersPage() {
               <p>
                 <strong>Category:</strong> {selectedOrderItem?.category ?? "-"} / <strong>Description:</strong>{" "}
                 {selectedOrderItem?.description ?? "-"}
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                className="button-subtle"
+                onClick={() => openReservationPrefill(selectedOrder)}
+              >
+                Create Provisional Reservation…
+              </button>
+              <p className="text-xs text-slate-500">
+                Creates a stock-backed reservation draft on the Reservations page. Order dedication remains managed from
+                order/procurement linkage rules.
               </p>
             </div>
 

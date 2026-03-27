@@ -168,6 +168,7 @@ npm run build
 - Reservations CSV upload: `POST /api/reservations/import-csv`
   - columns: `item_id` or `assembly`, `quantity`, optional `assembly_quantity,purpose,deadline,note,project_id`
 - Reservations page `Reservation Entry` now also supports optional project selection directly in the UI for provisional project linkage.
+- Orders page `Order Details` now includes `Create Provisional Reservation…` to open Reservations with prefilled draft fields from the selected order.
 
 ### Catalog search shortcut
 
