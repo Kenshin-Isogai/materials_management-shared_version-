@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from io import StringIO
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,27 @@ def _create_basic_item(conn, item_number: str = "ITEM-001") -> dict:
     )
     return item
 
+
+def _make_orders_csv_bytes(rows: list[dict[str, str]]) -> bytes:
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "item_number",
+            "quantity",
+            "quotation_number",
+            "issue_date",
+            "quotation_document_url",
+            "purchase_order_document_url",
+            "order_date",
+            "expected_arrival",
+        ],
+    )
+    writer.writeheader()
+    for row in rows:
+        writer.writerow(row)
+    return output.getvalue().encode("utf-8")
+
 def test_move_and_undo_restores_quantities(conn):
     item = _create_basic_item(conn)
     service.adjust_inventory(
@@ -52,6 +74,73 @@ def test_move_and_undo_restores_quantities(conn):
     assert undo_result["applied_quantity"] == 4
     assert _inventory_qty(conn, item["item_id"], "STOCK") == 10
     assert _inventory_qty(conn, item["item_id"], "BENCH_A") == 0
+
+
+def test_order_import_job_tracks_undecodable_csv_failures(conn):
+    def _raise_decode_error(_content: bytes) -> str:
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(service, "_decode_csv_bytes", _raise_decode_error)
+    with pytest.raises(UnicodeDecodeError):
+        service.import_orders_from_content_with_job(
+            conn,
+            supplier_name="SupplierBadEncoding",
+            content=b"\xff",
+            source_name="broken-orders.csv",
+        )
+    monkeypatch.undo()
+    conn.commit()
+
+    jobs, _ = service.list_order_import_jobs(conn)
+    assert len(jobs) == 1
+    assert jobs[0]["source_name"] == "broken-orders.csv"
+    assert jobs[0]["status"] == "error"
+    assert jobs[0]["failed_count"] == 1
+
+
+def test_order_import_job_rolls_back_partial_changes_on_unexpected_error(conn, monkeypatch: pytest.MonkeyPatch):
+    content = _make_orders_csv_bytes(
+        [
+            {
+                "item_number": "ROLLBACK-ITEM",
+                "quantity": "1",
+                "quotation_number": "Q-ROLLBACK-001",
+                "issue_date": "2026-03-01",
+                "quotation_document_url": "https://example.com/q-rollback-001",
+                "purchase_order_document_url": "",
+                "order_date": "2026-03-02",
+                "expected_arrival": "2026-03-10",
+            }
+        ]
+    )
+
+    def _raise_after_side_effect(*args, **kwargs):
+        conn.execute("INSERT INTO suppliers (name) VALUES (?)", ("SHOULD-ROLLBACK",))
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(service, "import_orders_from_content", _raise_after_side_effect)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        service.import_orders_from_content_with_job(
+            conn,
+            supplier_name="SupplierRollback",
+            content=content,
+            source_name="rollback-orders.csv",
+        )
+    conn.commit()
+
+    jobs, _ = service.list_order_import_jobs(conn)
+    assert len(jobs) == 1
+    assert jobs[0]["source_name"] == "rollback-orders.csv"
+    assert jobs[0]["status"] == "error"
+    assert jobs[0]["failed_count"] == 1
+
+    rolled_back = conn.execute(
+        "SELECT supplier_id FROM suppliers WHERE name = ?",
+        ("SHOULD-ROLLBACK",),
+    ).fetchone()
+    assert rolled_back is None
 
 def test_reservation_release_roundtrip(conn):
     item = _create_basic_item(conn, item_number="ITEM-RES-001")

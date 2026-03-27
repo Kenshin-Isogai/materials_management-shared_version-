@@ -1128,6 +1128,14 @@ def _read_csv_text(content: bytes) -> str:
     return _decode_csv_bytes(content)
 
 
+def _read_import_job_source_text(content: bytes) -> str:
+    """Capture a text snapshot for import jobs even when the CSV bytes are malformed."""
+    try:
+        return _read_csv_text(content)
+    except UnicodeDecodeError:
+        return content.decode("utf-8-sig", errors="replace")
+
+
 def _load_csv_rows_from_path(path: str | Path) -> list[dict[str, str]]:
     content = Path(path).read_bytes()
     text = _decode_csv_bytes(content)
@@ -6692,7 +6700,7 @@ def import_orders_from_content_with_job(
     alias_saves: list[dict[str, Any]] | None = None,
     import_job_id: int | None = None,
 ) -> dict[str, Any]:
-    source_text = content.decode("utf-8-sig")
+    source_text = _read_import_job_source_text(content)
     import_job_id = _record_import_job(
         conn,
         import_type="orders",
@@ -6700,6 +6708,7 @@ def import_orders_from_content_with_job(
         source_content=source_text,
         continue_on_error=False,
     )
+    conn.execute("SAVEPOINT order_import_job")
     try:
         result = import_orders_from_content(
             conn,
@@ -6713,13 +6722,16 @@ def import_orders_from_content_with_job(
             alias_saves=alias_saves,
             import_job_id=import_job_id,
         )
-    except AppError:
+    except Exception:
+        conn.execute("ROLLBACK TO SAVEPOINT order_import_job")
+        conn.execute("RELEASE SAVEPOINT order_import_job")
         _finalize_import_job(
             conn,
             import_job_id=import_job_id,
             result={"status": "error", "processed": 0, "created_count": 0, "duplicate_count": 0, "failed_count": 1},
         )
         raise
+    conn.execute("RELEASE SAVEPOINT order_import_job")
     _finalize_import_job(
         conn,
         import_job_id=import_job_id,

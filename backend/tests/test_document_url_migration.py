@@ -131,6 +131,14 @@ def test_manual_order_import_requires_quotation_document_url(client):
     assert payload["error"]["code"] == "INVALID_FIELD"
     assert "quotation_document_url" in payload["error"]["message"]
 
+    jobs = client.get("/api/orders/import-jobs")
+    assert jobs.status_code == 200
+    rows = jobs.json()["data"]
+    assert len(rows) == 1
+    assert rows[0]["source_name"] == "orders.csv"
+    assert rows[0]["status"] == "error"
+    assert rows[0]["failed_count"] == 1
+
 
 def test_generated_artifact_metadata_hides_workspace_paths(client):
     response = client.post(
@@ -212,4 +220,3 @@ def test_order_import_preview_rejects_non_https_document_url(client):
     payload = response.json()
     assert payload["status"] == "error"
     assert payload["error"]["code"] == "INVALID_DOCUMENT_URL"
-

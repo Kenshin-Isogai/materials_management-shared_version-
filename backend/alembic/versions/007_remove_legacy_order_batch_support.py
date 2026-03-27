@@ -3,7 +3,7 @@ from __future__ import annotations
 from alembic import op
 
 
-revision = "007_remove_legacy_order_batch_support"
+revision = "007_remove_legacy_batch"
 down_revision = "006_drop_quotation_pdf_link"
 branch_labels = None
 depends_on = None

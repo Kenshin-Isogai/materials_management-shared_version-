@@ -1,5 +1,13 @@
 ## 2026-03-27
 
+### Fixed
+
+- Hardened manual order import job tracking for failure paths.
+  - order-import jobs now persist `error` finalization even when the API request exits through an exception path
+  - unexpected exceptions during order import now roll back in-flight import writes before the job is finalized
+  - undecodable order-import CSV bytes now still produce a tracked import job record instead of failing before job creation
+- Shortened the newest Alembic revision ID so PostgreSQL test/bootstrap runs no longer overflow `alembic_version.version_num`.
+
 ### Changed
 
 - Removed the remaining legacy order ZIP/PDF compatibility workflow now that backward compatibility is no longer required.

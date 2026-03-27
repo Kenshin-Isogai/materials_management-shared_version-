@@ -682,17 +682,21 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         conn= db,
     ):
         content = await file.read()
-        result = service.import_orders_from_content_with_job(
-            conn,
-            supplier_id=supplier_id,
-            supplier_name=supplier_name,
-            content=content,
-            default_order_date=default_order_date,
-            source_name=file.filename or "order_import.csv",
-            missing_output_dir=ITEMS_IMPORT_UNREGISTERED_ROOT,
-            row_overrides=_parse_optional_json_form(row_overrides, "row_overrides"),
-            alias_saves=_parse_optional_json_form(alias_saves, "alias_saves"),
-        )
+        try:
+            result = service.import_orders_from_content_with_job(
+                conn,
+                supplier_id=supplier_id,
+                supplier_name=supplier_name,
+                content=content,
+                default_order_date=default_order_date,
+                source_name=file.filename or "order_import.csv",
+                missing_output_dir=ITEMS_IMPORT_UNREGISTERED_ROOT,
+                row_overrides=_parse_optional_json_form(row_overrides, "row_overrides"),
+                alias_saves=_parse_optional_json_form(alias_saves, "alias_saves"),
+            )
+        except Exception:
+            conn.commit()
+            raise
         conn.commit()
         return ok(result)
 
