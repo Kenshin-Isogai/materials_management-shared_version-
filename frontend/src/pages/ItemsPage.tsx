@@ -325,7 +325,6 @@ type OrderImportResult = {
   status: string;
   imported_count?: number;
   missing_count?: number;
-  missing_csv_path?: string;
   rows?: MissingItemResolverRow[];
 };
 

@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
-from app import config, order_import_paths, service
+from app import config, order_import_paths, service, storage
 from app.api import create_app
 from app.db import get_connection, init_db
 
@@ -17,6 +17,7 @@ def workspace_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
     workspace_root = tmp_path / "workspace"
     backend_root = workspace_root / "backend"
     exports_root = workspace_root / "exports"
+    generated_artifacts_root = workspace_root / "generated_artifacts"
     imports_root = workspace_root / "imports"
     items_import_root = imports_root / "items"
     items_unregistered_root = items_import_root / "unregistered"
@@ -36,6 +37,7 @@ def workspace_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
         "WORKSPACE_ROOT": workspace_root,
         "BACKEND_ROOT": backend_root,
         "APP_DATA_ROOT": workspace_root,
+        "GENERATED_ARTIFACTS_ROOT": generated_artifacts_root,
         "DEFAULT_EXPORTS_DIR": exports_root,
         "EXPORTS_ROOT": exports_root,
         "IMPORTS_ROOT": imports_root,
@@ -56,7 +58,7 @@ def workspace_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
     for name, value in config_overrides.items():
         monkeypatch.setattr(config, name, value)
 
-    monkeypatch.setattr(service, "DEFAULT_EXPORTS_DIR", exports_root)
+    monkeypatch.setattr(storage.config, "GENERATED_ARTIFACTS_ROOT", generated_artifacts_root)
     monkeypatch.setattr(service, "ITEMS_IMPORT_UNREGISTERED_ROOT", items_unregistered_root)
     monkeypatch.setattr(service, "ITEMS_IMPORT_REGISTERED_ROOT", items_registered_root)
     monkeypatch.setattr(service, "ITEMS_IMPORT_STAGING_ROOT", items_staging_root)

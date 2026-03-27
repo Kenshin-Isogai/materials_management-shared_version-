@@ -1,12 +1,22 @@
 import type { ApiResponse } from "./types";
 
-const API_BASE = String(import.meta.env.VITE_API_BASE ?? "/api").trim() || "/api";
+function normalizeApiBase(value: unknown): string {
+  const raw = String(value ?? "/api").trim() || "/api";
+  if (raw === "/") return "";
+  return raw.endsWith("/") ? raw.slice(0, -1) : raw;
+}
+
+const API_BASE = normalizeApiBase(import.meta.env.VITE_API_BASE);
 const USERNAME_STORAGE_KEY = "materials.username";
 const USERS_CHANGED_EVENT = "materials:users-changed";
 
 function toAbsolutePath(path: string): string {
   if (path.startsWith("/")) return path;
   return `/${path}`;
+}
+
+function buildApiUrl(path: string): string {
+  return `${API_BASE}${toAbsolutePath(path)}`;
 }
 
 function getStoredUsername(): string | null {
@@ -66,7 +76,7 @@ function buildHeaders(init?: RequestInit, options?: BuildHeadersOptions): Header
 }
 
 async function fetchApi(path: string, init?: RequestInit): Promise<Response> {
-  return fetch(`${API_BASE}${toAbsolutePath(path)}`, {
+  return fetch(buildApiUrl(path), {
     ...init,
     headers: buildHeaders(init),
   });
@@ -160,7 +170,7 @@ export async function apiSend<T>(
 ): Promise<T> {
   const headers = buildHeaders({ ...init, method: init?.method ?? "POST" }, options);
   headers.set("Content-Type", "application/json");
-  const res = await fetch(`${API_BASE}${toAbsolutePath(path)}`, {
+  const res = await fetch(buildApiUrl(path), {
     ...init,
     method: init?.method ?? "POST",
     headers,

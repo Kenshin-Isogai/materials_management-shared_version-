@@ -1,6 +1,6 @@
 # Source Current State
 
-Last updated: 2026-03-27 (JST)
+Last updated: 2026-03-28 (JST)
 
 ## 1. System Snapshot
 
@@ -23,7 +23,7 @@ Last updated: 2026-03-27 (JST)
   - `tests/`: integration/service/path tests
 - `frontend/`
   - `src/pages/`: active pages wired into the router: Dashboard, Workspace, Items (Search), Locations, Projects, Procurement, Orders, Inventory (Movements), Reservations (Reserve), BOM, Snapshot, History, Master, Users. Unused page files retained but not routed: `PlanningPage.tsx`, `RfqPage.tsx`, `AssembliesPage.tsx`, `PurchaseCandidatesPage.tsx`.
-  - `src/lib/api.ts`: API client now defaults to `VITE_API_BASE` / `/api` and injects `X-User-Name` on mutations
+  - `src/lib/api.ts`: API client now normalizes `VITE_API_BASE`, supports absolute backend URLs for split Cloud Run services, and injects `X-User-Name` on mutations
 - `documents/`
   - `technical_documentation.md`
   - `team_onboarding.md`
@@ -38,6 +38,11 @@ Last updated: 2026-03-27 (JST)
   - `PORT` overrides listener port automatically
   - Cloud Run mode defaults `APP_DATA_ROOT` under the temp directory when unset
   - Cloud Run mode skips legacy workspace/import folder migration on startup
+  - Cloud Run mode defaults `AUTO_MIGRATE_ON_STARTUP=0`; local runtime still defaults to startup migration unless explicitly disabled
+  - DB pool behavior is controlled by `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT`, and `DB_POOL_RECYCLE_SECONDS`
+  - browser CORS defaults are runtime-specific: localhost-friendly defaults locally, explicit `CORS_ALLOWED_ORIGINS` required for Cloud Run browser traffic
+  - generated artifact persistence now goes through a storage boundary (`backend/app/storage.py`), with current local refs stored as `local://generated_artifacts/...`
+  - default durable item/order archive moves now also route through that storage boundary; local disk remains the mechanism for temporary staging and compatibility directory scans
 
 ## 3. Backend State
 
@@ -109,6 +114,9 @@ Last updated: 2026-03-27 (JST)
   - backend exposes `/api/artifacts`, `/api/artifacts/{artifact_id}`, and `/api/artifacts/{artifact_id}/download`
   - Orders page surfaces download buttons for current missing-item register output and a recent generated-files list using filename, timestamp, and size instead of showing workspace-relative paths
   - artifact IDs are now opaque DB-registered values from `generated_artifacts`, not encoded workspace paths
+  - manual order-import responses no longer expose raw missing-item storage fields; the browser should consume `missing_artifact` only
+  - manual item-import archive metadata is also now cleaned before it leaves the API; internal cleanup/storage-ref fields stay server-side
+  - item batch-upload and batch-register responses now expose file names only, not staging or archive paths
 - Phase 6 cleanup is now applied on top of that compatibility boundary.
   - `quotations.pdf_link` is no longer part of the schema
   - `quotation_document_url` is the persisted quotation document field

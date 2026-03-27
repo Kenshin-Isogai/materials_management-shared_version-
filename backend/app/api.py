@@ -16,7 +16,10 @@ from .config import (
     APP_PORT,
     APP_DATA_ROOT,
     AUTO_MIGRATE_ON_STARTUP,
-    ITEMS_IMPORT_UNREGISTERED_ROOT,
+    DB_MAX_OVERFLOW,
+    DB_POOL_RECYCLE_SECONDS,
+    DB_POOL_SIZE,
+    DB_POOL_TIMEOUT,
     get_auth_mode,
     get_cors_allowed_origins,
     get_runtime_target,
@@ -101,6 +104,48 @@ def _parse_optional_json_form(value: str | None, field_name: str) -> Any | None:
             message=f"{field_name} must be valid JSON",
             status_code=422,
         ) from exc
+
+
+def _public_order_import_result(result: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(result)
+    payload.pop("missing_csv_path", None)
+    payload.pop("missing_storage_ref", None)
+    return payload
+
+
+def _public_item_import_result(result: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(result)
+    archive = payload.get("archive")
+    if isinstance(archive, dict):
+        archive_payload = dict(archive)
+        archive_payload.pop("cleanup_unreg_file", None)
+        archive_payload.pop("archive_storage_ref", None)
+        payload["archive"] = archive_payload
+    return payload
+
+
+def _public_item_batch_result(result: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(result)
+    payload.pop("staging_root", None)
+    uploaded_files = payload.get("uploaded_files")
+    if isinstance(uploaded_files, list):
+        payload["uploaded_files"] = [Path(str(value)).name for value in uploaded_files]
+    files = payload.get("files")
+    if isinstance(files, list):
+        public_files: list[dict[str, Any]] = []
+        for entry in files:
+            if not isinstance(entry, dict):
+                continue
+            file_payload = dict(entry)
+            if file_payload.get("file"):
+                file_payload["file"] = Path(str(file_payload["file"])).name
+            file_payload.pop("moved_to", None)
+            file_payload.pop("storage_ref", None)
+            file_payload.pop("missing_csv_path", None)
+            file_payload.pop("missing_storage_ref", None)
+            public_files.append(file_payload)
+        payload["files"] = public_files
+    return payload
 
 
 def _db_dep(app: FastAPI):
@@ -199,6 +244,8 @@ class UserIdentityMiddleware(BaseHTTPMiddleware):
 
 
 def create_app(database_url: str | None = None, db_path: str | None = None) -> FastAPI:
+    cors_allowed_origins = get_cors_allowed_origins()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if AUTO_MIGRATE_ON_STARTUP:
@@ -214,7 +261,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=get_cors_allowed_origins(),
+        allow_origins=cors_allowed_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -262,6 +309,14 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
                 "app_port": APP_PORT,
                 "app_data_root": str(APP_DATA_ROOT),
                 "auto_migrate_on_startup": AUTO_MIGRATE_ON_STARTUP,
+                "migration_strategy": "startup" if AUTO_MIGRATE_ON_STARTUP else "external",
+                "cors_allowed_origins": cors_allowed_origins,
+                "db_pool": {
+                    "pool_size": DB_POOL_SIZE,
+                    "max_overflow": DB_MAX_OVERFLOW,
+                    "pool_timeout": DB_POOL_TIMEOUT,
+                    "pool_recycle_seconds": DB_POOL_RECYCLE_SECONDS,
+                },
             }
         )
 
@@ -391,7 +446,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         conn.commit()
         if result.get("archive") and result["archive"].get("cleanup_unreg_file"):
             background_tasks.add_task(cleanup_unreg_file_with_retry, result["archive"]["cleanup_unreg_file"])
-        return ok(result)
+        return ok(_public_item_import_result(result))
 
     @app.post("/api/items/import-preview")
     async def post_items_import_preview(
@@ -478,7 +533,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
             continue_on_error=body.continue_on_error,
         )
         conn.commit()
-        return ok(result)
+        return ok(_public_item_batch_result(result))
 
     @app.post("/api/items/batch-upload")
     async def post_items_batch_upload(
@@ -493,7 +548,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
             continue_on_error=continue_on_error,
         )
         conn.commit()
-        return ok(result)
+        return ok(_public_item_batch_result(result))
 
     @app.get("/api/items/{item_id}/history")
     def get_item_history(item_id: int, conn= db):
@@ -690,7 +745,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
                 content=content,
                 default_order_date=default_order_date,
                 source_name=file.filename or "order_import.csv",
-                missing_output_dir=ITEMS_IMPORT_UNREGISTERED_ROOT,
+                missing_output_dir=None,
                 row_overrides=_parse_optional_json_form(row_overrides, "row_overrides"),
                 alias_saves=_parse_optional_json_form(alias_saves, "alias_saves"),
             )
@@ -698,7 +753,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
             conn.commit()
             raise
         conn.commit()
-        return ok(result)
+        return ok(_public_order_import_result(result))
 
     @app.get("/api/orders/import-jobs")
     def get_order_import_jobs(

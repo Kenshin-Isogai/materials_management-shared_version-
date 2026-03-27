@@ -27,7 +27,11 @@ services:
       AUTO_MIGRATE_ON_STARTUP: 0
       LOG_LEVEL: ${LOG_LEVEL:-info}
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-4}
-      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-5}
+      DB_MAX_OVERFLOW: ${DB_MAX_OVERFLOW:-10}
+      DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-30}
+      DB_POOL_RECYCLE_SECONDS: ${DB_POOL_RECYCLE_SECONDS:-0}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost,http://127.0.0.1}
     volumes:
       - appdata:${APP_DATA_ROOT:-/app/data}
     depends_on:

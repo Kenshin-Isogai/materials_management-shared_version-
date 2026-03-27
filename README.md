@@ -30,6 +30,9 @@ For Cloud Run deployment posture, the backend now supports:
 - automatic `PORT` pickup from Cloud Run
 - default ephemeral app-data root under `/tmp` when `APP_DATA_ROOT` is not set
 - startup that skips legacy repo/workspace folder migration in Cloud Run mode
+- startup migration disabled by default in Cloud Run mode
+- environment-driven DB pool settings (`DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT`, `DB_POOL_RECYCLE_SECONDS`)
+- explicit CORS origins instead of wildcard defaults
 
 ## Repository Structure
 
@@ -104,9 +107,13 @@ npm run dev
 
 - Set `APP_RUNTIME_TARGET=cloud_run`
 - Set `DATABASE_URL` from Secret Manager / Cloud SQL connection config
+- Set `VITE_API_BASE` to the backend Cloud Run public `/api` URL for split-service deployment
+- Set `CORS_ALLOWED_ORIGINS` to the frontend Cloud Run origin explicitly
 - `PORT` is honored automatically; you do not need to force `APP_PORT`
 - If `APP_DATA_ROOT` is omitted, the backend now defaults to an ephemeral temp directory suitable for Cloud Run
 - Cloud Run startup no longer copies legacy `quotations/` or repo-local `imports/` folders into runtime storage
+- Cloud Run should run Alembic as a deployment step; request-serving startup should keep `AUTO_MIGRATE_ON_STARTUP=0`
+- manual order-import missing-item outputs are now exposed through artifact metadata/download endpoints rather than raw path fields
 - Legacy ZIP/PDF compatibility import remains a local/shared-server workflow, not the target Cloud Run path
 
 ## API

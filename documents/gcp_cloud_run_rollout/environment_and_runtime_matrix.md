@@ -28,16 +28,16 @@ Backward compatibility is explicitly out of scope.
 | `APP_HOST` | Backend | No | local | Local bind host in `backend\app\config.py` | Keep for local only |
 | `LOG_LEVEL` | Backend | No | both | Logging level in `backend\app\config.py` and `backend\main.py` | Keep |
 | `WEB_CONCURRENCY` | Backend | No | both | Gunicorn workers in compose and Dockerfile | Keep, but align with Cloud SQL pool/concurrency plan |
-| `AUTO_MIGRATE_ON_STARTUP` | Backend | No | both | Startup migration gate in `backend\app\config.py` and `backend\app\api.py` | Disable in production Cloud Run |
+| `AUTO_MIGRATE_ON_STARTUP` | Backend | No | both | Startup migration gate in `backend\app\config.py` and `backend\app\api.py`; now defaults to off in Cloud Run and on locally | Keep for local/test bootstrap, disable in production Cloud Run |
 | `INVENTORY_AUTH_MODE` | Backend | No | both | Auth posture mode in `backend\app\config.py` | Keep, but treat current modes as transitional |
-| `CORS_ALLOWED_ORIGINS` | Backend | No | both | Origin parsing in `backend\app\config.py`; middleware use in `backend\app\api.py` | Keep, but require explicit cloud values |
+| `CORS_ALLOWED_ORIGINS` | Backend | No | both | Origin parsing in `backend\app\config.py`; middleware use in `backend\app\api.py`; now defaults to localhost-only values locally and empty in Cloud Run | Keep, and require explicit cloud values |
 | `K_SERVICE` | Backend | No | cloud | Implicit Cloud Run detection in `backend\app\config.py` | No code change required; deployment-provided |
 
 ## Frontend build/runtime variables
 
 | Variable | Service | Secret | Target | Current use | Action |
 |---|---|---:|---|---|---|
-| `VITE_API_BASE` | Frontend | No | both | API base in `frontend\src\lib\api.ts`; build arg in `frontend\Dockerfile` | Keep, but define one production convention clearly |
+| `VITE_API_BASE` | Frontend | No | both | API base in `frontend\src\lib\api.ts`; build arg in `frontend\Dockerfile`; client now normalizes relative and absolute values | Keep; use an absolute backend `/api` URL for split Cloud Run services |
 
 ## Local Docker Compose variables already visible in the repo
 

@@ -48,6 +48,9 @@ def test_health_endpoint(client):
     assert payload["data"]["runtime_target"] in {"local", "cloud_run"}
     assert isinstance(payload["data"]["cloud_run_mode"], bool)
     assert isinstance(payload["data"]["app_data_root"], str)
+    assert payload["data"]["migration_strategy"] in {"startup", "external"}
+    assert isinstance(payload["data"]["cors_allowed_origins"], list)
+    assert payload["data"]["db_pool"]["pool_size"] >= 1
 
 
 def test_inventory_snapshot_endpoint_supports_net_available_basis(client):
@@ -678,7 +681,7 @@ def test_reservation_partial_release_and_consume_endpoints(client):
     assert over_payload["status"] == "error"
     assert over_payload["error"]["code"] == "INVALID_RESERVATION_QUANTITY"
 
-def test_order_import_returns_missing_item_details(client):
+def test_order_import_returns_missing_item_details(client, database_url):
     output = StringIO()
     writer = csv.DictWriter(
         output,
@@ -716,6 +719,8 @@ def test_order_import_returns_missing_item_details(client):
     assert data["rows"][0]["row"] == 2
     assert data["rows"][0]["supplier"] == "SupplierMissing"
     assert data["rows"][0]["item_number"] == "MISSING-ITEM-001"
+    assert "missing_csv_path" not in data
+    assert "missing_storage_ref" not in data
     artifact = data["missing_artifact"]
     assert artifact["artifact_type"] == "missing_items_register"
     assert artifact["detail_path"] == f"/api/artifacts/{artifact['artifact_id']}"
@@ -724,6 +729,17 @@ def test_order_import_returns_missing_item_details(client):
     download = client.get(f"/api/artifacts/{artifact['artifact_id']}/download")
     assert download.status_code == 200
     assert "MISSING-ITEM-001" in download.text
+
+    conn = get_connection(database_url)
+    try:
+        row = conn.execute(
+            "SELECT storage_path FROM generated_artifacts WHERE artifact_id = ?",
+            (artifact["artifact_id"],),
+        ).fetchone()
+        assert row is not None
+        assert str(row["storage_path"]).startswith("local://generated_artifacts/")
+    finally:
+        conn.close()
 
 def test_order_import_requires_quotation_document_url_instead_of_pdf_link(client):
     client.post("/api/manufacturers", json={"name": "API-MANUAL-MFG"})
@@ -1556,6 +1572,9 @@ def test_items_import_endpoint_archives_uploaded_csv_into_registered_month_folde
     assert response.status_code == 200
     payload = response.json()["data"]
     assert payload["status"] == "ok"
+    assert "archive_storage_ref" not in payload["archive"]
+    assert "cleanup_unreg_file" not in payload["archive"]
+    assert payload["archive"]["archived_filename"] == "items_archive.csv"
     assert payload["archive"]["consolidation"]["consolidated"] == 1
 
     month_dir = workspace_roots["items_registered_root"] / today_jst()[:7]
@@ -1611,6 +1630,7 @@ def test_items_batch_upload_endpoint_stages_and_registers_csvs(client, workspace
     assert payload["succeeded"] == 2
     assert payload["upload_job_id"].startswith("items_")
     assert len(payload["uploaded_files"]) == 2
+    assert all("\\" not in path and "/" not in path for path in payload["uploaded_files"])
 
     month_dir = workspace_roots["items_registered_root"] / today_jst()[:7]
     archived_files = sorted(month_dir.glob("*.csv"))
@@ -1646,6 +1666,7 @@ def test_items_batch_upload_endpoint_accepts_non_ascii_csv_filename(client):
     assert payload["status"] == "ok"
     assert payload["succeeded"] == 1
     assert any(str(path).endswith(".csv") for path in payload["uploaded_files"])
+    assert all("\\" not in path and "/" not in path for path in payload["uploaded_files"])
 
 
 def test_items_import_preview_endpoint_classifies_duplicate_and_alias_resolution(client):

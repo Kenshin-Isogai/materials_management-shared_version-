@@ -46,7 +46,6 @@ type ImportResult = {
   status: string;
   imported_count?: number;
   missing_count?: number;
-  missing_csv_path?: string;
   missing_artifact?: GeneratedArtifact;
   saved_alias_count?: number;
   rows?: MissingItemResolverRow[];

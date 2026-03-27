@@ -26,6 +26,20 @@ def is_cloud_run_runtime() -> bool:
     return get_runtime_target() == RUNTIME_TARGET_CLOUD_RUN
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no"}
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return int(raw)
+
+
 def _default_app_data_root() -> Path:
     if is_cloud_run_runtime():
         return Path(tempfile.gettempdir()) / "materials-management"
@@ -36,6 +50,7 @@ APP_DATA_ROOT = Path(os.getenv("APP_DATA_ROOT", str(_default_app_data_root()))).
 IMPORTS_ROOT = Path(os.getenv("IMPORTS_ROOT", str(APP_DATA_ROOT / "imports"))).expanduser().resolve()
 EXPORTS_ROOT = Path(os.getenv("EXPORTS_ROOT", str(APP_DATA_ROOT / "exports"))).expanduser().resolve()
 DEFAULT_EXPORTS_DIR = EXPORTS_ROOT
+GENERATED_ARTIFACTS_ROOT = APP_DATA_ROOT / "generated_artifacts"
 
 ITEMS_IMPORT_ROOT = IMPORTS_ROOT / "items"
 ITEMS_IMPORT_UNREGISTERED_ROOT = ITEMS_IMPORT_ROOT / "unregistered"
@@ -63,7 +78,11 @@ APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
 APP_PORT = int(os.getenv("PORT") or os.getenv("APP_PORT", "8000"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "info")
 WEB_CONCURRENCY = int(os.getenv("WEB_CONCURRENCY", "4"))
-AUTO_MIGRATE_ON_STARTUP = (os.getenv("AUTO_MIGRATE_ON_STARTUP", "1").strip().lower() not in {"0", "false", "no"})
+AUTO_MIGRATE_ON_STARTUP = _env_flag("AUTO_MIGRATE_ON_STARTUP", default=not is_cloud_run_runtime())
+DB_POOL_SIZE = _env_int("DB_POOL_SIZE", 5)
+DB_MAX_OVERFLOW = _env_int("DB_MAX_OVERFLOW", 10)
+DB_POOL_TIMEOUT = _env_int("DB_POOL_TIMEOUT", 30)
+DB_POOL_RECYCLE_SECONDS = _env_int("DB_POOL_RECYCLE_SECONDS", 1800 if is_cloud_run_runtime() else 0)
 
 AUTH_MODE_NONE = "none"
 AUTH_MODE_DRY_RUN = "rbac_dry_run"
@@ -78,9 +97,14 @@ def get_auth_mode() -> str:
 
 
 def get_cors_allowed_origins() -> list[str]:
-    raw = os.getenv("CORS_ALLOWED_ORIGINS", "*")
+    default = (
+        ""
+        if is_cloud_run_runtime()
+        else "http://localhost,http://127.0.0.1,http://localhost:80,http://127.0.0.1:80,http://localhost:5173,http://127.0.0.1:5173"
+    )
+    raw = os.getenv("CORS_ALLOWED_ORIGINS", default)
     origins = [value.strip() for value in raw.split(",") if value.strip()]
-    return origins or ["*"]
+    return origins
 
 
 def _remove_readonly(func, path, _exc_info):  # type: ignore[no-untyped-def]
@@ -127,6 +151,7 @@ def ensure_workspace_layout() -> None:
 
     for path in (
         APP_DATA_ROOT,
+        GENERATED_ARTIFACTS_ROOT,
         EXPORTS_ROOT,
         IMPORTS_ROOT,
         ITEMS_IMPORT_ROOT,

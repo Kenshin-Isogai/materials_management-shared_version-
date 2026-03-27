@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import csv
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
@@ -16,7 +15,6 @@ from typing import Any, Iterable
 from uuid import uuid4
 
 from .config import (
-    DEFAULT_EXPORTS_DIR,
     ITEMS_IMPORT_MAX_CONSOLIDATED_ROWS,
     ITEMS_IMPORT_STAGING_ROOT,
     ITEMS_IMPORT_UNREGISTERED_ROOT,
@@ -31,6 +29,19 @@ from .order_import_paths import (
     registered_pdf_supplier_dir,
     safe_workspace_relative,
     supplier_from_unregistered_csv_path,
+)
+from .storage import (
+    GENERATED_ARTIFACTS_BUCKET,
+    ITEMS_REGISTERED_ARCHIVES_BUCKET,
+    ITEMS_UNREGISTERED_BUCKET,
+    ORDERS_REGISTERED_CSV_BUCKET,
+    ORDERS_REGISTERED_PDF_BUCKET,
+    StoredObject,
+    get_storage_root,
+    move_file_to_storage,
+    read_storage_bytes,
+    stat_storage_ref,
+    write_storage_bytes,
 )
 from .utils import (
     normalize_external_document_url,
@@ -55,40 +66,11 @@ def _rows_to_dict(rows: Iterable[sqlite3.Row]) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def _generated_artifact_roots() -> tuple[Path, ...]:
-    return (ITEMS_IMPORT_UNREGISTERED_ROOT.resolve(),)
-
-
 def _infer_generated_artifact_type(path: Path) -> str:
     name = path.name.lower()
     if "missing_items_registration" in name:
         return "missing_items_register"
     return "generated_file"
-
-
-def _encode_generated_artifact_id(relative_path: str) -> str:
-    raw = relative_path.encode("utf-8")
-    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
-
-
-def _decode_generated_artifact_id(artifact_id: str) -> str:
-    text = require_non_empty(artifact_id, "artifact_id")
-    padding = "=" * (-len(text) % 4)
-    try:
-        decoded = base64.urlsafe_b64decode(f"{text}{padding}".encode("ascii")).decode("utf-8")
-    except Exception as exc:  # noqa: BLE001
-        raise AppError(
-            code="ARTIFACT_NOT_FOUND",
-            message=f"Generated artifact '{artifact_id}' not found",
-            status_code=404,
-        ) from exc
-    if not decoded.strip():
-        raise AppError(
-            code="ARTIFACT_NOT_FOUND",
-            message=f"Generated artifact '{artifact_id}' not found",
-            status_code=404,
-        )
-    return decoded
 
 
 def _artifact_payload_from_row(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
@@ -110,13 +92,7 @@ def _artifact_payload_from_row(row: sqlite3.Row | dict[str, Any]) -> dict[str, A
     return payload
 
 
-def _register_generated_artifact(
-    conn: sqlite3.Connection,
-    path: Path,
-    *,
-    source_job_type: str | None = None,
-    source_job_id: str | None = None,
-) -> dict[str, Any]:
+def _stored_object_from_path(path: Path) -> StoredObject:
     resolved = path.resolve()
     if not resolved.exists() or not resolved.is_file():
         raise AppError(
@@ -126,8 +102,23 @@ def _register_generated_artifact(
         )
 
     stats = resolved.stat()
-    created_at = datetime.fromtimestamp(stats.st_mtime).isoformat(timespec="seconds")
-    artifact_type = _infer_generated_artifact_type(resolved)
+    return StoredObject(
+        storage_ref=str(resolved),
+        filename=resolved.name,
+        size_bytes=int(stats.st_size),
+        created_at=datetime.fromtimestamp(stats.st_mtime).isoformat(timespec="seconds"),
+        path=resolved,
+    )
+
+
+def _register_generated_artifact(
+    conn: sqlite3.Connection,
+    stored: StoredObject,
+    *,
+    source_job_type: str | None = None,
+    source_job_id: str | None = None,
+) -> dict[str, Any]:
+    artifact_type = _infer_generated_artifact_type(stored.path)
     existing = conn.execute(
         """
         SELECT
@@ -144,7 +135,7 @@ def _register_generated_artifact(
         ORDER BY created_at DESC, artifact_id DESC
         LIMIT 1
         """,
-        (str(resolved),),
+        (stored.storage_ref,),
     ).fetchone()
     if existing is not None:
         return _artifact_payload_from_row(existing)
@@ -166,10 +157,10 @@ def _register_generated_artifact(
         (
             artifact_id,
             artifact_type,
-            resolved.name,
-            str(resolved),
-            int(stats.st_size),
-            created_at,
+            stored.filename,
+            stored.storage_ref,
+            stored.size_bytes,
+            stored.created_at,
             source_job_type,
             source_job_id,
         ),
@@ -178,9 +169,9 @@ def _register_generated_artifact(
         {
             "artifact_id": artifact_id,
             "artifact_type": artifact_type,
-            "filename": resolved.name,
-            "size_bytes": int(stats.st_size),
-            "created_at": created_at,
+            "filename": stored.filename,
+            "size_bytes": stored.size_bytes,
+            "created_at": stored.created_at,
             "source_job_type": source_job_type,
             "source_job_id": source_job_id,
         }
@@ -196,31 +187,24 @@ def _build_generated_artifact(
 ) -> dict[str, Any]:
     return _register_generated_artifact(
         conn,
-        path,
+        _stored_object_from_path(path),
         source_job_type=source_job_type,
         source_job_id=source_job_id,
     )
 
 
-def _resolve_generated_artifact_path(artifact_id: str) -> Path:
-    relative_text = _decode_generated_artifact_id(artifact_id)
-    for root in _generated_artifact_roots():
-        try:
-            workspace_root = root.parents[2]
-        except IndexError:
-            workspace_root = root.parent
-        candidate = (workspace_root / relative_text).resolve()
-        try:
-            candidate.relative_to(root)
-        except ValueError:
-            continue
-        if candidate.exists() and candidate.is_file():
-            return candidate
-        break
-    raise AppError(
-        code="ARTIFACT_NOT_FOUND",
-        message=f"Generated artifact '{artifact_id}' not found",
-        status_code=404,
+def _build_generated_artifact_from_stored_object(
+    conn: sqlite3.Connection,
+    stored: StoredObject,
+    *,
+    source_job_type: str | None = None,
+    source_job_id: str | None = None,
+) -> dict[str, Any]:
+    return _register_generated_artifact(
+        conn,
+        stored,
+        source_job_type=source_job_type,
+        source_job_id=source_job_id,
     )
 
 
@@ -245,11 +229,23 @@ def _get_generated_artifact_row(conn: sqlite3.Connection, artifact_id: str) -> s
 
 def get_generated_artifact(conn: sqlite3.Connection, artifact_id: str) -> dict[str, Any]:
     row = _get_generated_artifact_row(conn, artifact_id)
-    if row is not None:
-        path = Path(str(row["storage_path"]))
-        if path.exists() and path.is_file():
-            return _artifact_payload_from_row(row)
-    return _register_generated_artifact(conn, _resolve_generated_artifact_path(artifact_id))
+    if row is None:
+        raise AppError(
+            code="ARTIFACT_NOT_FOUND",
+            message=f"Generated artifact '{artifact_id}' not found",
+            status_code=404,
+        )
+    storage_ref = str(row["storage_path"])
+    if stat_storage_ref(storage_ref) is not None:
+        return _artifact_payload_from_row(row)
+    legacy_path = Path(storage_ref)
+    if legacy_path.exists() and legacy_path.is_file():
+        return _register_generated_artifact(conn, _stored_object_from_path(legacy_path))
+    raise AppError(
+        code="ARTIFACT_NOT_FOUND",
+        message=f"Generated artifact '{artifact_id}' not found",
+        status_code=404,
+    )
 
 
 def list_generated_artifacts(conn: sqlite3.Connection, *, artifact_type: str | None = None) -> list[dict[str, Any]]:
@@ -272,21 +268,36 @@ def list_generated_artifacts(conn: sqlite3.Connection, *, artifact_type: str | N
         params = (artifact_type,)
     sql += " ORDER BY created_at DESC, artifact_id DESC"
     for row in conn.execute(sql, params).fetchall():
-        path = Path(str(row["storage_path"]))
-        if not path.exists() or not path.is_file():
-            continue
+        storage_ref = str(row["storage_path"])
+        stored = stat_storage_ref(storage_ref)
+        if stored is None:
+            legacy_path = Path(storage_ref)
+            if not legacy_path.exists() or not legacy_path.is_file():
+                continue
         rows.append(_artifact_payload_from_row(row))
     return rows
 
 
 def get_generated_artifact_download(conn: sqlite3.Connection, artifact_id: str) -> tuple[str, bytes]:
     row = _get_generated_artifact_row(conn, artifact_id)
-    if row is not None:
-        path = Path(str(row["storage_path"]))
-        if path.exists() and path.is_file():
-            return str(row["filename"]), path.read_bytes()
-    path = _resolve_generated_artifact_path(artifact_id)
-    return path.name, path.read_bytes()
+    if row is None:
+        raise AppError(
+            code="ARTIFACT_NOT_FOUND",
+            message=f"Generated artifact '{artifact_id}' not found",
+            status_code=404,
+        )
+    storage_ref = str(row["storage_path"])
+    stored = stat_storage_ref(storage_ref)
+    if stored is not None:
+        return read_storage_bytes(storage_ref)
+    legacy_path = Path(storage_ref)
+    if legacy_path.exists() and legacy_path.is_file():
+        return str(row["filename"]), legacy_path.read_bytes()
+    raise AppError(
+        code="ARTIFACT_NOT_FOUND",
+        message=f"Generated artifact '{artifact_id}' not found",
+        status_code=404,
+    )
 
 
 def _safe_staging_component(value: str, default: str) -> str:
@@ -1784,60 +1795,82 @@ def _write_missing_items_csv(
     rows: list[dict[str, Any]],
     source_name: str,
     output_dir: str | Path | None = None,
-) -> str:
-    target_dir = Path(output_dir) if output_dir is not None else DEFAULT_EXPORTS_DIR
-    target_dir.mkdir(parents=True, exist_ok=True)
+) -> StoredObject:
+    output = StringIO()
+    writer = csv.DictWriter(output, fieldnames=MISSING_ITEMS_FIELDNAMES)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({k: row.get(k, "") for k in MISSING_ITEMS_FIELDNAMES})
+
     stem = Path(source_name).stem or "order_import"
-    file_path = target_dir / f"{stem}_missing_items_registration.csv"
+    filename = f"{stem}_missing_items_registration.csv"
+    if output_dir is None:
+        return write_storage_bytes(
+            bucket=GENERATED_ARTIFACTS_BUCKET,
+            subdir="missing_items",
+            filename=filename,
+            content=output.getvalue().encode("utf-8"),
+        )
+
+    target_dir = Path(output_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    file_path = target_dir / filename
     with file_path.open("w", encoding="utf-8", newline="") as fp:
-        writer = csv.DictWriter(fp, fieldnames=MISSING_ITEMS_FIELDNAMES)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({k: row.get(k, "") for k in MISSING_ITEMS_FIELDNAMES})
-    return str(file_path)
+        fp.write(output.getvalue())
+    return _stored_object_from_path(file_path)
 
 
 def _write_batch_missing_items_register(
     missing_reports: list[dict[str, Any]],
     *,
     output_dir: Path,
-) -> str:
-    output_dir.mkdir(parents=True, exist_ok=True)
+) -> StoredObject:
     batch_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    target_path = output_dir / f"batch_missing_items_registration_{batch_timestamp}.csv"
+    output = StringIO()
+    fieldnames = [
+        "source_csv",
+        "source_supplier",
+        *MISSING_ITEMS_FIELDNAMES,
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    seen_missing_keys: set[tuple[str, str, str]] = set()
+    for report in missing_reports:
+        source_csv = str(report.get("file", ""))
+        source_supplier = str(report.get("supplier", ""))
+        for row in report.get("missing_rows", []):
+            item_number = str(row.get("item_number", "")).strip()
+            manufacturer_name = str(row.get("manufacturer_name", "")).strip()
+            supplier_name = str(row.get("supplier", source_supplier)).strip()
+            dedupe_key = (
+                supplier_name.casefold(),
+                manufacturer_name.casefold(),
+                item_number.casefold(),
+            )
+            if dedupe_key in seen_missing_keys:
+                continue
+            seen_missing_keys.add(dedupe_key)
+            out_row = {
+                "source_csv": source_csv,
+                "source_supplier": source_supplier,
+            }
+            for key in MISSING_ITEMS_FIELDNAMES:
+                out_row[key] = row.get(key, "")
+            writer.writerow(out_row)
 
+    filename = f"batch_missing_items_registration_{batch_timestamp}.csv"
+    if output_dir.resolve() == ITEMS_IMPORT_UNREGISTERED_ROOT.resolve():
+        return write_storage_bytes(
+            bucket=ITEMS_UNREGISTERED_BUCKET,
+            filename=filename,
+            content=output.getvalue().encode("utf-8"),
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    target_path = output_dir / filename
     with target_path.open("w", encoding="utf-8", newline="") as fp:
-        fieldnames = [
-            "source_csv",
-            "source_supplier",
-            *MISSING_ITEMS_FIELDNAMES,
-        ]
-        writer = csv.DictWriter(fp, fieldnames=fieldnames)
-        writer.writeheader()
-        seen_missing_keys: set[tuple[str, str, str]] = set()
-        for report in missing_reports:
-            source_csv = str(report.get("file", ""))
-            source_supplier = str(report.get("supplier", ""))
-            for row in report.get("missing_rows", []):
-                item_number = str(row.get("item_number", "")).strip()
-                manufacturer_name = str(row.get("manufacturer_name", "")).strip()
-                supplier_name = str(row.get("supplier", source_supplier)).strip()
-                dedupe_key = (
-                    supplier_name.casefold(),
-                    manufacturer_name.casefold(),
-                    item_number.casefold(),
-                )
-                if dedupe_key in seen_missing_keys:
-                    continue
-                seen_missing_keys.add(dedupe_key)
-                out_row = {
-                    "source_csv": source_csv,
-                    "source_supplier": source_supplier,
-                }
-                for key in MISSING_ITEMS_FIELDNAMES:
-                    out_row[key] = row.get(key, "")
-                writer.writerow(out_row)
-    return str(target_path)
+        fp.write(output.getvalue())
+    return _stored_object_from_path(target_path)
 
 
 def _safe_workspace_relative(path: Path) -> str:
@@ -1894,8 +1927,18 @@ def _archive_imported_items_csv(
     root = Path(registered_root) if registered_root else ITEMS_IMPORT_REGISTERED_ROOT
     unreg_root = Path(unregistered_root) if unregistered_root else ITEMS_IMPORT_UNREGISTERED_ROOT
 
-    month_dir = root / today_jst()[:7]
-    archived_path = _write_bytes_preserve_name(content, month_dir, source_name)
+    month_subdir = today_jst()[:7]
+    if root.resolve() == ITEMS_IMPORT_REGISTERED_ROOT.resolve():
+        archived = write_storage_bytes(
+            bucket=ITEMS_REGISTERED_ARCHIVES_BUCKET,
+            subdir=month_subdir,
+            filename=source_name,
+            content=content,
+        )
+    else:
+        month_dir = root / month_subdir
+        archived_path = _write_bytes_preserve_name(content, month_dir, source_name)
+        archived = _stored_object_from_path(archived_path)
     consolidation = consolidate_registered_item_csvs(root)
 
     cleanup_file = None
@@ -1906,8 +1949,8 @@ def _archive_imported_items_csv(
             cleanup_file = str(potential_unreg_file)
 
     return {
-        "registered_root": str(root),
-        "archived_path": str(archived_path),
+        "archive_storage_ref": archived.storage_ref,
+        "archived_filename": archived.filename,
         "consolidation": consolidation,
         "cleanup_unreg_file": cleanup_file,
     }
@@ -6473,7 +6516,7 @@ def import_orders_from_rows(
         row_overrides=normalized_overrides,
     )
     if missing:
-        missing_csv_path = _write_missing_items_csv(
+        missing_csv = _write_missing_items_csv(
             missing,
             source_name=source_name,
             output_dir=missing_output_dir,
@@ -6494,10 +6537,11 @@ def import_orders_from_rows(
         return {
             "status": "missing_items",
             "missing_count": len(missing),
-            "missing_csv_path": missing_csv_path,
-            "missing_artifact": _build_generated_artifact(
+            "missing_csv_path": str(missing_csv.path),
+            "missing_storage_ref": missing_csv.storage_ref,
+            "missing_artifact": _build_generated_artifact_from_stored_object(
                 conn,
-                Path(missing_csv_path),
+                missing_csv,
                 source_job_type="orders" if import_job_id is not None else None,
                 source_job_id=str(import_job_id) if import_job_id is not None else None,
             ),
@@ -6909,6 +6953,7 @@ def register_unregistered_item_csvs(
         supplier_name = "UNKNOWN"
         file_warnings: list[str] = []
         moved_to: Path | None = None
+        moved_to_storage: StoredObject | None = None
         try:
             savepoint = f"sp_register_missing_{uuid4().hex}"
             conn.execute(f"SAVEPOINT {savepoint}")
@@ -6921,12 +6966,21 @@ def register_unregistered_item_csvs(
                     status_text = "skipped_unresolved_batch_file"
                     moved_to = None
                 else:
-                    month_dir = registered_root / today_jst()[:7]
-                    month_dir.mkdir(parents=True, exist_ok=True)
-                    moved_to = _move_file_preserve_name(
-                        csv_path,
-                        month_dir,
-                    )
+                    month_subdir = today_jst()[:7]
+                    if registered_root.resolve() == ITEMS_IMPORT_REGISTERED_ROOT.resolve():
+                        moved_to_storage = move_file_to_storage(
+                            bucket=ITEMS_REGISTERED_ARCHIVES_BUCKET,
+                            source_path=csv_path,
+                            subdir=month_subdir,
+                        )
+                        moved_to = moved_to_storage.path
+                    else:
+                        month_dir = registered_root / month_subdir
+                        month_dir.mkdir(parents=True, exist_ok=True)
+                        moved_to = _move_file_preserve_name(
+                            csv_path,
+                            month_dir,
+                        )
                     status_text = "ok"
 
                 report.append(
@@ -6935,6 +6989,7 @@ def register_unregistered_item_csvs(
                         "supplier": supplier_name,
                         "status": status_text,
                         "moved_to": str(moved_to) if moved_to else None,
+                        "storage_ref": moved_to_storage.storage_ref if moved_to_storage else None,
                         "result": result,
                         "warnings": file_warnings,
                         "normalizations": [],
@@ -6946,6 +7001,7 @@ def register_unregistered_item_csvs(
                 if moved_to is not None and moved_to.exists() and not csv_path.exists():
                     _move_file_to_target(moved_to, csv_path)
                     moved_to = None
+                    moved_to_storage = None
                 conn.execute(f"ROLLBACK TO {savepoint}")
                 conn.execute(f"RELEASE {savepoint}")
                 raise
@@ -7161,6 +7217,10 @@ def _import_unregistered_order_csv_file(
     reserved_pdf_targets: set[str] = set()
     moved_pdf_files: list[dict[str, str]] = []
     registered_pdf_dir = registered_pdf_supplier_dir(roots, supplier_name).resolve()
+    use_storage_registered_roots = (
+        roots.registered_csv_root.resolve() == get_storage_root(ORDERS_REGISTERED_CSV_BUCKET).resolve()
+        and roots.registered_pdf_root.resolve() == get_storage_root(ORDERS_REGISTERED_PDF_BUCKET).resolve()
+    )
 
     for row in rows:
         quotation_number = (row.get("quotation_number") or "").strip()
@@ -7209,12 +7269,42 @@ def _import_unregistered_order_csv_file(
                 )
 
     csv_source = csv_path.resolve()
-    csv_dest, _ = _predict_move_target(
-        csv_source,
-        registered_csv_supplier_dir(roots, supplier_name).resolve(),
-        set(),
-    )
-    _execute_planned_file_moves([*planned_pdf_moves, (csv_source, csv_dest.resolve())])
+    if use_storage_registered_roots:
+        rollback_moves: list[tuple[Path, Path]] = []
+        actual_moved_pdf_files: list[dict[str, str]] = []
+        try:
+            for source_pdf, _predicted_target in planned_pdf_moves:
+                stored_pdf = move_file_to_storage(
+                    bucket=ORDERS_REGISTERED_PDF_BUCKET,
+                    source_path=source_pdf,
+                    subdir=supplier_name,
+                )
+                rollback_moves.append((stored_pdf.path, source_pdf))
+                actual_moved_pdf_files.append(
+                    {
+                        "source_path": str(source_pdf),
+                        "registered_path": str(stored_pdf.path),
+                    }
+                )
+            stored_csv = move_file_to_storage(
+                bucket=ORDERS_REGISTERED_CSV_BUCKET,
+                source_path=csv_source,
+                subdir=supplier_name,
+            )
+            csv_dest = stored_csv.path
+            moved_pdf_files = actual_moved_pdf_files
+        except Exception:
+            for moved_path, original_src in reversed(rollback_moves):
+                if moved_path.exists() and not original_src.exists():
+                    _move_file_to_target(moved_path, original_src)
+            raise
+    else:
+        csv_dest, _ = _predict_move_target(
+            csv_source,
+            registered_csv_supplier_dir(roots, supplier_name).resolve(),
+            set(),
+        )
+        _execute_planned_file_moves([*planned_pdf_moves, (csv_source, csv_dest.resolve())])
     return {
         "file": str(csv_path),
         "supplier": supplier_name,

@@ -1,3 +1,33 @@
+## 2026-03-28
+
+### Changed
+
+- Continued the GCP Cloud Run rollout implementation on the runtime contract surfaces.
+  - Cloud Run runtime now defaults `AUTO_MIGRATE_ON_STARTUP` to off while local runtime still defaults to startup migration unless explicitly disabled.
+  - SQLAlchemy pool behavior is now environment-driven via `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT`, and `DB_POOL_RECYCLE_SECONDS`.
+  - Backend health output now reports migration strategy, configured CORS origins, and effective DB pool settings for deployment validation.
+  - Backend CORS defaults are no longer wildcard-based: local runtime allows the common localhost origins, while Cloud Run defaults to no browser origins until `CORS_ALLOWED_ORIGINS` is set explicitly.
+  - Frontend API base handling now normalizes `VITE_API_BASE` so split Cloud Run deployments can use an absolute backend `/api` URL cleanly.
+- Continued the GCP Cloud Run rollout implementation on the storage boundary.
+  - added `backend/app/storage.py` as the first persistent-storage abstraction surface
+  - generated artifacts now persist through storage refs (`local://generated_artifacts/...`) instead of relying only on raw filesystem paths in `generated_artifacts.storage_path`
+  - manual order-import missing-item responses now expose only `missing_artifact` publicly, not raw storage-location fields
+  - manual item-import archive metadata now also goes through the storage boundary internally while the public API omits cleanup/storage-ref details
+  - item batch-upload and batch-register responses now expose file names only, not staging/archive filesystem paths
+  - default registered-item archive moves and default registered-order CSV/PDF moves now execute through the storage layer, with rollback preserved for the item batch-registration path
+- Updated deployment/runtime documentation to match the new Cloud Run contract.
+  - `.env.example`, `README.md`, `backend/README.md`, `documents/technical_documentation.md`, `documents/source_current_state.md`
+  - `documents/gcp_cloud_run_rollout/environment_and_runtime_matrix.md`
+  - `documents/gcp_cloud_run_rollout/migration_checklist.md`
+
+### Tests
+
+- Added backend runtime-config regression coverage for:
+  - Cloud Run default migration/CORS/pool behavior
+  - local default migration/CORS behavior
+  - explicit DB pool and CORS override parsing
+- Extended backend API health coverage to assert the new runtime contract fields.
+
 ## 2026-03-27
 
 ### Documentation

@@ -15,9 +15,18 @@ from sqlalchemy.engine import Connection, Engine, Result
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.pool import QueuePool
 
-from .config import BACKEND_ROOT, DATABASE_URL, ensure_workspace_layout
+from .config import (
+    BACKEND_ROOT,
+    DATABASE_URL,
+    DB_MAX_OVERFLOW,
+    DB_POOL_RECYCLE_SECONDS,
+    DB_POOL_SIZE,
+    DB_POOL_TIMEOUT,
+    ensure_workspace_layout,
+)
 
 _ENGINE: Engine | None = None
+_ENGINE_CONFIG_KEY: tuple[str, int, int, int, int] | None = None
 
 _PRIMARY_KEY_BY_TABLE = {
     "manufacturers": "manufacturer_id",
@@ -53,27 +62,42 @@ def _normalize_db_url(db_url: str | None = None) -> str:
 
 
 def get_engine(database_url: str | None = None) -> Engine:
-    global _ENGINE
+    global _ENGINE, _ENGINE_CONFIG_KEY
     normalized = _normalize_db_url(database_url)
-    if _ENGINE is None or str(_ENGINE.url) != normalized:
+    engine_config_key = (
+        normalized,
+        DB_POOL_SIZE,
+        DB_MAX_OVERFLOW,
+        DB_POOL_TIMEOUT,
+        DB_POOL_RECYCLE_SECONDS,
+    )
+    if _ENGINE is None or _ENGINE_CONFIG_KEY != engine_config_key:
         if _ENGINE is not None:
             _ENGINE.dispose()
+        engine_kwargs: dict[str, Any] = {
+            "poolclass": QueuePool,
+            "pool_size": DB_POOL_SIZE,
+            "max_overflow": DB_MAX_OVERFLOW,
+            "pool_timeout": DB_POOL_TIMEOUT,
+            "pool_pre_ping": True,
+            "future": True,
+        }
+        if DB_POOL_RECYCLE_SECONDS > 0:
+            engine_kwargs["pool_recycle"] = DB_POOL_RECYCLE_SECONDS
         _ENGINE = create_engine(
             normalized,
-            poolclass=QueuePool,
-            pool_size=5,
-            max_overflow=10,
-            pool_pre_ping=True,
-            future=True,
+            **engine_kwargs,
         )
+        _ENGINE_CONFIG_KEY = engine_config_key
     return _ENGINE
 
 
 def dispose_engine() -> None:
-    global _ENGINE
+    global _ENGINE, _ENGINE_CONFIG_KEY
     if _ENGINE is not None:
         _ENGINE.dispose()
         _ENGINE = None
+        _ENGINE_CONFIG_KEY = None
 
 
 def _build_alembic_config(database_url: str) -> Config:

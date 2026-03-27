@@ -12,6 +12,11 @@ This document explains the implemented architecture of the Materials Management 
   - local/shared-server Docker mode: `APP_RUNTIME_TARGET=local`
   - Cloud Run mode: `APP_RUNTIME_TARGET=cloud_run` or implicit Cloud Run `K_SERVICE`
   - Cloud Run mode defaults runtime file roots under the OS temp directory and skips legacy workspace folder migration
+  - Cloud Run mode defaults `AUTO_MIGRATE_ON_STARTUP` to off, so Alembic can run as a deployment step instead of on autoscaled request-serving startup
+  - DB engine tuning is environment-driven through `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT`, and `DB_POOL_RECYCLE_SECONDS`
+- CORS posture is now explicit by runtime.
+  - local defaults allow the common localhost frontend origins
+  - Cloud Run defaults to no allowed browser origins until `CORS_ALLOWED_ORIGINS` is set explicitly
 - Docker deployment stack:
   - `docker-compose.yml` (production), `docker-compose.override.yml` (local dev), `docker-compose.test.yml` (test DB)
   - `backend/Dockerfile`, `frontend/Dockerfile`, `frontend/nginx.conf`
@@ -34,8 +39,11 @@ This document explains the implemented architecture of the Materials Management 
   - the Orders UI renders those values as openable document links instead of filesystem-style path text
 - Generated artifact delivery for batch-produced missing-item register CSVs:
   - `GET /api/artifacts`, `GET /api/artifacts/{artifact_id}`, `GET /api/artifacts/{artifact_id}/download`
-  - lightweight filesystem-backed registry over generated CSVs under `imports/items/unregistered/`
+  - storage-backed registry now goes through `backend/app/storage.py`
+  - current implementation persists generated artifacts under a local storage reference (`local://generated_artifacts/...`) so the API no longer depends on browser-visible workspace paths
   - the Orders UI now treats artifact entries as download-only records and no longer displays workspace-relative paths
+- Manual Items CSV import archives now use the same storage boundary for their archive reference metadata, while still writing into the current registered-month folder so consolidation behavior stays unchanged during the rollout.
+- Default durable move targets for registered item CSVs and registered order CSV/PDF files now also route through the storage layer, while request-scoped staging remains local-path based.
 - Retired order-batch compatibility internals have been removed.
   - no `orders_legacy_batch` import-job mode remains in the schema
   - no `legacy_batch_staged_files` table remains in the runtime model
@@ -141,6 +149,7 @@ flowchart LR
    Legacy CSV `pdf_link` text is now treated as compatibility-import input only, not as persisted quotation metadata.
    The order-layout migration no longer rewrites archived CSVs or quotation DB rows just to keep path text aligned.
    Shared-server upload adapters now stage browser uploads under `imports/staging/...` first, then materialize them into the same folder shape that the existing domain import logic already understands.
+   Generated artifact retrieval is now routed through a storage boundary so the public API can use opaque artifact IDs instead of raw file locations.
 4. Reversible and inspectable bulk imports.
    Item imports store job and row-level effects (`import_jobs`, `import_job_effects`) so undo/redo can be state-checked and safe.
    Manual order CSV imports now also write `import_jobs` / `import_job_effects` records (`import_type='orders'`) so missing-item outcomes and created-order rows are inspectable without relying on folder state.
@@ -542,7 +551,8 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 
 ### 8) Schema and migration discipline
 
-- Keep migrations idempotent (`migrate_db` runs at startup).
+- Keep migrations idempotent.
+- Local/test bootstrap may still run migrations through `init_db(...)`, but Cloud Run request-serving startup should not be the production migration path.
 - New columns/tables must be backward-safe for existing DB files.
 - Preserve date normalization (`YYYY-MM-DD`) and trigger constraints around orders.
 
