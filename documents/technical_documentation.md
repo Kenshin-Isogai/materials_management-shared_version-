@@ -27,6 +27,7 @@ This document explains the implemented architecture of the Materials Management 
   - API/browser calls use `Authorization: Bearer <JWT>`
   - verified claims are normalized into `request.state.identity` (`subject`, `email`, `provider`, `claims`, optional `hosted_domain`)
   - app users are resolved into `request.state.user` through active `users` rows using `email` or `identity_provider` + `external_subject`, with optional hosted-domain matching
+  - configured OIDC hosted-domain allow-lists only reject tokens that actually carry an `hd` claim; per-user hosted-domain mappings remain enforced when configured
   - browser login now supports Google Identity Services when `VITE_GOOGLE_CLIENT_ID` is configured, while manual token entry remains as a local/test fallback
   - database-side audit triggers continue to populate `created_by` / `updated_by` / `performed_by` where supported
   - application-level domain audit events are now emitted through structured logs for successful high-impact mutations and export/download flows
@@ -34,6 +35,7 @@ This document explains the implemented architecture of the Materials Management 
   - `RBAC_MODE` controls authorization posture: `none`, `rbac_dry_run`, `rbac_enforced`
   - `JWT_VERIFIER` supports `shared_secret` and `jwks`; deployed OIDC verification uses `OIDC_JWKS_URL`
   - `/api/users*` is admin-only, normal mutations/exports/imports are operator scope, and authenticated reads default to viewer scope
+  - supported persisted user roles are constrained to `admin`, `operator`, and `viewer` on both create and update flows
   - bootstrap exception: `POST /api/users` is allowed without Bearer auth only while the system has zero active users
 - Frontend user administration at `/users` page.
   - admins manage `username`, display name, role, active state, and OIDC mapping fields

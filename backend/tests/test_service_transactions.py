@@ -142,6 +142,27 @@ def test_order_import_job_rolls_back_partial_changes_on_unexpected_error(conn, m
     ).fetchone()
     assert rolled_back is None
 
+
+def test_update_user_rejects_invalid_role(conn):
+    user = service.create_user(
+        conn,
+        {
+            "username": "role-check-user",
+            "display_name": "Role Check User",
+            "email": "role-check-user@example.test",
+            "external_subject": "sub-role-check-user",
+            "identity_provider": "test-oidc",
+            "hosted_domain": "example.test",
+            "role": "operator",
+            "is_active": True,
+        },
+    )
+
+    with pytest.raises(AppError) as exc_info:
+        service.update_user(conn, user["user_id"], {"role": "superadmin"})
+
+    assert exc_info.value.code == "INVALID_ROLE"
+
 def test_reservation_release_roundtrip(conn):
     item = _create_basic_item(conn, item_number="ITEM-RES-001")
     service.adjust_inventory(

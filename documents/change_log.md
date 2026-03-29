@@ -2,6 +2,11 @@
 
 ### Changed
 
+- Fixed follow-up auth and user-management validation gaps from branch review.
+  - `update_user` now enforces the same `admin` / `operator` / `viewer` role validation already used on user creation
+  - OIDC hosted-domain allow-lists no longer reject otherwise valid tokens that omit the optional `hd` claim in either shared-secret or JWKS verifier mode
+  - partial user updates can now change one identity-mapping field at a time when the merged stored result remains valid, with final pair validation still enforced in the service layer
+
 - Addressed review follow-ups on the OIDC auth slice.
   - renamed the OIDC user-identity Alembic file to `009_oidc_user_identity.py` so the filename sequence matches the revision id
   - `/api/auth/capabilities` now reports the resolved/configured identity provider and keeps diagnostics paths listed under the role that actually grants access

@@ -395,6 +395,4 @@ class UserUpdate(BaseModel):
             & set(self.__pydantic_fields_set__)
         ):
             raise ValueError("at least one user field is required")
-        if bool(self.external_subject) != bool(self.identity_provider):
-            raise ValueError("identity_provider and external_subject must be set together")
         return self

@@ -862,6 +862,21 @@ def test_users_me_endpoint_resolves_request_user_from_bearer_token(client):
     assert payload["data"]["display_name"] == "Pytest User"
 
 
+def test_user_update_allows_partial_identity_update_when_existing_pair_remains_valid(client):
+    current_user = client.get("/api/users/me").json()["data"]
+
+    response = client.put(
+        f"/api/users/{current_user['user_id']}",
+        json={"external_subject": "sub-pytest-updated"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["data"]["external_subject"] == "sub-pytest-updated"
+    assert payload["data"]["identity_provider"] == "test-oidc"
+
+
 def test_read_request_with_unmapped_identity_is_rejected(client):
     response = client.get(
         "/api/users",
@@ -1019,6 +1034,157 @@ def test_shared_secret_verifier_rejects_email_without_true_verified_claim(databa
     assert payload["status"] == "error"
     assert payload["error"]["code"] == "INVALID_TOKEN"
     assert payload["error"]["message"] == "Verified email claim is required when email is present"
+
+
+def test_shared_secret_verifier_allows_missing_hosted_domain_claim_when_allow_list_is_configured(
+    database_url: str,
+):
+    original_env = os.environ.copy()
+    try:
+        os.environ["OIDC_ALLOWED_HOSTED_DOMAINS"] = "example.test"
+        import app.auth as auth_module
+        import app.api as api_module
+        import app.config as config_module
+
+        importlib.reload(config_module)
+        importlib.reload(auth_module)
+        importlib.reload(api_module)
+
+        _reset_database(database_url)
+        init_db(database_url)
+        seed_conn = get_connection(database_url)
+        try:
+            service.create_user(
+                seed_conn,
+                {
+                    "username": "no-hd-user",
+                    "display_name": "No HD User",
+                    "email": "no-hd-user@example.test",
+                    "external_subject": "sub-no-hd-user",
+                    "identity_provider": "test-oidc",
+                    "hosted_domain": None,
+                    "role": "admin",
+                    "is_active": True,
+                },
+            )
+            seed_conn.commit()
+        finally:
+            seed_conn.close()
+
+        token = jwt.encode(
+            {
+                "sub": "sub-no-hd-user",
+                "email": "no-hd-user@example.test",
+                "email_verified": True,
+                "iss": os.environ["OIDC_EXPECTED_ISSUER"],
+                "aud": os.environ["OIDC_EXPECTED_AUDIENCE"],
+            },
+            os.environ["JWT_SHARED_SECRET"],
+            algorithm="HS256",
+        )
+        app = api_module.create_app(database_url=database_url)
+        with TestClient(app) as test_client:
+            response = test_client.get("/api/users/me", headers={"Authorization": f"Bearer {token}"})
+
+        assert response.status_code == 200
+        assert response.json()["data"]["username"] == "no-hd-user"
+    finally:
+        os.environ.clear()
+        os.environ.update(original_env)
+        import app.auth as auth_module
+        import app.api as api_module
+        import app.config as config_module
+
+        importlib.reload(config_module)
+        importlib.reload(auth_module)
+        importlib.reload(api_module)
+
+
+def test_jwks_verifier_allows_missing_hosted_domain_claim_when_allow_list_is_configured(
+    database_url: str,
+    monkeypatch,
+):
+    class _FakeSigningKey:
+        def __init__(self, key: str):
+            self.key = key
+
+    class _FakePyJwkClient:
+        def __init__(self, url: str):
+            self.url = url
+
+        def get_signing_key_from_jwt(self, _token: str):
+            return _FakeSigningKey("jwks-test-shared-secret-for-backend-auth")
+
+    original_env = os.environ.copy()
+    try:
+        os.environ["AUTH_MODE"] = "oidc_enforced"
+        os.environ["RBAC_MODE"] = "rbac_enforced"
+        os.environ["JWT_VERIFIER"] = "jwks"
+        os.environ["JWT_SIGNING_ALGORITHMS"] = "HS256"
+        os.environ["JWT_SHARED_SECRET"] = "jwks-test-shared-secret-for-backend-auth"
+        os.environ["OIDC_JWKS_URL"] = "https://issuer.example.test/.well-known/jwks.json"
+        os.environ["OIDC_PROVIDER"] = "google"
+        os.environ["OIDC_EXPECTED_ISSUER"] = "https://issuer.example.test"
+        os.environ["OIDC_EXPECTED_AUDIENCE"] = "materials-management-tests"
+        os.environ["OIDC_ALLOWED_HOSTED_DOMAINS"] = "example.test"
+
+        import app.auth as auth_module
+        import app.api as api_module
+        import app.config as config_module
+
+        importlib.reload(config_module)
+        auth_module = importlib.reload(auth_module)
+        monkeypatch.setattr(auth_module.jwt, "PyJWKClient", _FakePyJwkClient)
+        api_module = importlib.reload(api_module)
+
+        _reset_database(database_url)
+        init_db(database_url)
+        seed_conn = get_connection(database_url)
+        try:
+            service.create_user(
+                seed_conn,
+                {
+                    "username": "jwks-no-hd-user",
+                    "display_name": "JWKS No HD User",
+                    "email": "jwks-no-hd-user@example.test",
+                    "external_subject": "sub-jwks-no-hd-user",
+                    "identity_provider": "google",
+                    "hosted_domain": None,
+                    "role": "admin",
+                    "is_active": True,
+                },
+            )
+            seed_conn.commit()
+        finally:
+            seed_conn.close()
+
+        token = jwt.encode(
+            {
+                "sub": "sub-jwks-no-hd-user",
+                "email": "jwks-no-hd-user@example.test",
+                "email_verified": True,
+                "iss": "https://issuer.example.test",
+                "aud": "materials-management-tests",
+            },
+            os.environ["JWT_SHARED_SECRET"],
+            algorithm="HS256",
+        )
+        app = api_module.create_app(database_url=database_url)
+        with TestClient(app) as test_client:
+            response = test_client.get("/api/users/me", headers={"Authorization": f"Bearer {token}"})
+
+        assert response.status_code == 200
+        assert response.json()["data"]["username"] == "jwks-no-hd-user"
+    finally:
+        os.environ.clear()
+        os.environ.update(original_env)
+        import app.auth as auth_module
+        import app.api as api_module
+        import app.config as config_module
+
+        importlib.reload(config_module)
+        importlib.reload(auth_module)
+        importlib.reload(api_module)
 
 
 def test_cloud_run_diagnostics_default_to_admin_access(database_url: str):

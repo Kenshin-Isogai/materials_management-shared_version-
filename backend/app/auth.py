@@ -210,7 +210,11 @@ class SharedSecretJwtVerifier:
             raise AppError(code="INVALID_TOKEN", message="JWT subject claim is required", status_code=401)
         email = _validated_email_claim(payload)
         hosted_domain = _normalized_optional_text(payload.get("hd"), lower=True)
-        if OIDC_ALLOWED_HOSTED_DOMAINS and hosted_domain not in OIDC_ALLOWED_HOSTED_DOMAINS:
+        if (
+            OIDC_ALLOWED_HOSTED_DOMAINS
+            and hosted_domain is not None
+            and hosted_domain not in OIDC_ALLOWED_HOSTED_DOMAINS
+        ):
             raise AppError(
                 code="INVALID_TOKEN",
                 message="JWT hosted domain is not allowed",
@@ -280,7 +284,11 @@ class JwksJwtVerifier:
             raise AppError(code="INVALID_TOKEN", message="JWT subject claim is required", status_code=401)
         email = _validated_email_claim(payload)
         hosted_domain = _normalized_optional_text(payload.get("hd"), lower=True)
-        if OIDC_ALLOWED_HOSTED_DOMAINS and hosted_domain not in OIDC_ALLOWED_HOSTED_DOMAINS:
+        if (
+            OIDC_ALLOWED_HOSTED_DOMAINS
+            and hosted_domain is not None
+            and hosted_domain not in OIDC_ALLOWED_HOSTED_DOMAINS
+        ):
             raise AppError(
                 code="INVALID_TOKEN",
                 message="JWT hosted domain is not allowed",

@@ -535,7 +535,7 @@ def update_user(conn: sqlite3.Connection, user_id: int, data: dict[str, Any]) ->
     username = require_non_empty(str(data.get("username", existing["username"])), "username")
     display_name = require_non_empty(str(data.get("display_name", existing["display_name"])), "display_name")
     email, external_subject, identity_provider, hosted_domain = _normalize_user_identity_fields(data, existing=existing)
-    role = require_non_empty(str(data.get("role", existing["role"])), "role")
+    role = _require_valid_role(str(data.get("role", existing["role"])))
     is_active = bool(data.get("is_active", existing["is_active"]))
     conn.execute(
         """

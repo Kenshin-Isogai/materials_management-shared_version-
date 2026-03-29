@@ -66,8 +66,10 @@ Last updated: 2026-03-29 (JST)
   - `JWT_VERIFIER=shared_secret` remains the local/test fixture path, while `JWT_VERIFIER=jwks` now supports deployed OIDC/JWKS verification
   - verified claims flow into `request.state.identity`
   - active app users are resolved into `request.state.user` from `email` or `identity_provider` + `external_subject`, with optional `hosted_domain` matching
+  - configured OIDC hosted-domain allow-lists only reject tokens that include an `hd` claim; users without that claim can still authenticate when their app-user mapping does not require one
   - bootstrap exception: when there are zero active users, `POST /api/users` is still allowed without a bearer token so the first admin can be created
   - `/api/users*` is admin scope, normal mutations/imports/exports are operator scope, and authenticated reads are viewer scope
+  - persisted user roles remain limited to `admin`, `operator`, and `viewer` across both create and update operations
   - `AUTH_MODE` now uses `none`, `oidc_dry_run`, `oidc_enforced`
   - `RBAC_MODE` now uses `none`, `rbac_dry_run`, `rbac_enforced`
   - `/api/auth/capabilities` now reports current identity, auth mode, rbac mode, and endpoint-policy summaries
