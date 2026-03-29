@@ -1,0 +1,11 @@
+
+Running 2 tests using 1 worker
+
+  笨・ 1 [chromium] 窶ｺ e2e\07-items-orders-csv-crud.spec.ts:40:3 窶ｺ Items Stateful CRUD (CSV import 竊・edit 竊・delete) 窶ｺ Import item via CSV, edit it, then delete it (3.4s)
+Using username: bootstrap-admin
+Seed item import result: {"status":"ok","data":{"status":"ok","processed":1,"created_count":1,"duplicate_count":0,"failed_count":0,"rows":[{"row":2,"status":"created","item_id":10,"item_number":"E2E-ORD-ITEM-1774777331544","entry_type":"item"}],"import_job_id":11,"archive":{"archived_filename":"seed_item_2.csv","consolidation":{"consolidated":0,"folders":[],"disabled":true,"reason":"storage_backed_archives_are_not_rescanned"}}}}
+Seeded item E2E-ORD-ITEM-1774777331544 with id=10
+afterAll cleanup: deleted item id=10
+  笨・ 2 [chromium] 窶ｺ e2e\07-items-orders-csv-crud.spec.ts:243:3 窶ｺ Orders Stateful CRUD (CSV import 竊・delete quotation) 窶ｺ Import orders via CSV, then delete the quotation (691ms)
+
+  2 passed (5.9s)

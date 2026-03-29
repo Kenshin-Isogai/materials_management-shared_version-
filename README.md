@@ -106,6 +106,7 @@ cd frontend
 npm install
 $env:VITE_API_BASE = "http://127.0.0.1:8000/api"
 npm run dev
+npx playwright test (to run automated UI tests)
 ```
 
 ## Cloud Run Runtime Notes
@@ -158,6 +159,7 @@ $env:PYTHONPATH = "backend"
 uv run --project backend python -m pytest --import-mode=importlib
 cd ..\frontend
 npm run test
+npx playwright test
 npm run build
 ```
 

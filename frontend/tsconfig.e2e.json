@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "types": ["node", "@playwright/test"],
+    "module": "CommonJS",
+    "moduleResolution": "node",
+    "isolatedModules": false
+  },
+  "include": ["e2e/**/*.ts"]
+}

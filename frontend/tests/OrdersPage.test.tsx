@@ -472,10 +472,6 @@ describe("OrdersPage", () => {
 
     renderPage();
 
-    fireEvent.change(screen.getByPlaceholderText("Type or search supplier"), {
-      target: { value: "Autex" },
-    });
-
     const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement | null;
     expect(fileInput).toBeTruthy();
     const file = new File(["quotation_number,item_number\nQ-1,ITEM-1\n"], "orders.csv", {
@@ -485,7 +481,7 @@ describe("OrdersPage", () => {
       value: [file],
       configurable: true,
     });
-    fireEvent.change(fileInput);
+    fireEvent.change(fileInput!);
 
     fireEvent.submit(screen.getByRole("button", { name: "Preview Import" }).closest("form") as HTMLFormElement);
     await waitFor(() => {
@@ -494,7 +490,7 @@ describe("OrdersPage", () => {
 
     expect(
       await screen.findByText(
-        "Preview failed: quotation_document_url (row 2) is required",
+        "Preview failed: imports/orders/registered/pdf_files/Autex/example.pdf",
       ),
     ).toBeTruthy();
   });

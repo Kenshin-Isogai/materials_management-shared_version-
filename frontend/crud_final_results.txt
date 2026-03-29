@@ -1,0 +1,33 @@
+
+Running 4 tests using 1 worker
+
+  笨・ 1 [chromium] 窶ｺ e2e\05-users-crud.spec.ts:21:3 窶ｺ Users Stateful CRUD 窶ｺ Create, Edit, and Deactivate User (3.6s)
+  笨・ 2 [chromium] 窶ｺ e2e\06-projects-crud.spec.ts:23:3 窶ｺ Projects Stateful CRUD 窶ｺ Create, Edit, and Manage Project (820ms)
+  笨・ 3 [chromium] 窶ｺ e2e\07-items-orders-csv-crud.spec.ts:34:3 窶ｺ Items Stateful CRUD (CSV import 竊・edit 竊・delete) 窶ｺ Import item via CSV, edit it, then delete it (30.0s)
+  -  4 [chromium] 窶ｺ e2e\07-items-orders-csv-crud.spec.ts:155:3 窶ｺ Orders Stateful CRUD (CSV import 竊・delete quotation) 窶ｺ Import orders via CSV, then delete the quotation
+
+
+  1) [chromium] 窶ｺ e2e\07-items-orders-csv-crud.spec.ts:34:3 窶ｺ Items Stateful CRUD (CSV import 竊・edit 竊・delete) 窶ｺ Import item via CSV, edit it, then delete it 
+
+    [31mTest timeout of 30000ms exceeded.[39m
+
+    Error: locator.fill: Test timeout of 30000ms exceeded.
+    Call log:
+    [2m  - waiting for locator('tr').filter({ hasText: 'E2E-ITEM-1774776963834' }).first().locator('input').first()[22m
+
+
+      80 |     // First input in the row during edit mode (position after item_number) is manufacturer_name
+      81 |     const manufacturerInput = itemRow.locator('input').first();
+    > 82 |     await manufacturerInput.fill('MockManufacturer Edited');
+         |                             ^
+      83 |     await itemRow.locator('button', { hasText: 'Save' }).first().click();
+      84 |
+      85 |     // 笏笏 5. Delete Item 笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏笏
+        at C:\Users\IsogaiKenshin\Documents\Yaqumo\applications\materials_menagement(shared_version)\frontend\e2e\07-items-orders-csv-crud.spec.ts:82:29
+
+    Error Context: test-results\07-items-orders-csv-crud-I-39ee0--CSV-edit-it-then-delete-it-chromium\error-context.md
+
+  1 failed
+    [chromium] 窶ｺ e2e\07-items-orders-csv-crud.spec.ts:34:3 窶ｺ Items Stateful CRUD (CSV import 竊・edit 竊・delete) 窶ｺ Import item via CSV, edit it, then delete it 
+  1 skipped
+  2 passed (39.5s)

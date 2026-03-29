@@ -79,6 +79,7 @@ When updating this application, follow this order:
 5. Run automated tests with `uv run` as available:
    - Full backend tests: `uv run python -m pytest`
    - Or targeted tests for touched behavior (for faster iteration), then run full suite before completion when the environment supports it
+    - Frontend E2E tests (Playwright): `cd frontend`, `npx playwright test` (requires a running app stack)
    - For this repository, backend pytest may need the backend project selected explicitly from the repo root:
      - `uv run --project backend python -m pytest ...`
    - When running backend tests from the repo root in this repository, set `PYTHONPATH=backend` and prefer `--import-mode=importlib` if package-style collection fails

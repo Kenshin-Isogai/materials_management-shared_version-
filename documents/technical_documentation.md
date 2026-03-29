@@ -574,14 +574,27 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
   - error: `{ "status": "error", "error": { "code", "message", "details" } }`
 - Keep frontend in sync when adding/changing payload shapes.
 
-### 10) QA gate and release hygiene
-
 - Minimum gate:
   - run backend full tests (`uv run python -m pytest`)
   - run frontend build check when frontend changed (`npm run build`)
+  - run frontend E2E tests via Playwright (`npx playwright test`)
   - run manual smoke checks for touched flows
 - Keep docs in the same change set as behavior updates.
 - For release history, maintain changelog/migration notes once GitHub repository workflow is established.
+
+### 11) E2E Testing with Playwright
+
+End-to-End tests are implemented using Playwright to verify the full-stack behavior of the application.
+
+- **Storage**: `frontend/e2e/`
+- **Configuration**: `frontend/playwright.config.ts` and `frontend/tsconfig.e2e.json`
+- **Execution**:
+  ```powershell
+  cd frontend
+  npx playwright test
+  ```
+- **Stateful Tests**: Tests in `05-users-crud.spec.ts`, `06-projects-crud.spec.ts`, and `07-items-orders-csv-crud.spec.ts` perform real database mutations. They include `afterAll` hooks to attempt API-level cleanup, but should ideally be run against a dedicated test environment or with the understanding that they modify the current database state.
+- **Reporting**: Playwright HTML reports can be viewed after a failure using `npx playwright show-report`.
 
 ## Recommended update workflow
 

@@ -18,6 +18,11 @@
 - Removed the last runtime support for historical workspace and raw-path artifact migration behavior.
   - `backend/app/config.py` no longer migrates `quotations/`, `pending/`, or `processed/` legacy folders during startup
   - `backend/app/service.py` now expects generated artifacts to resolve through storage-backed refs only
+- Implemented comprehensive End-to-End (E2E) test suite using Playwright.
+  - Added read-only smoke tests for Layout, Users, Items, Orders, and Projects.
+  - Added stateful CRUD tests verifying full lifecycles for Users, Projects, Items (CSV import), and Orders (CSV import).
+  - Configured `afterAll` cleanup hooks for stateful tests to maintain database cleanliness.
+  - Added `@types/node` and `tsconfig.e2e.json` to support Node.js APIs (e.g., `Buffer`) in tests.
 
 ### Tests
 
@@ -27,6 +32,7 @@
   - `docker compose -f docker-compose.test.yml up -d db-test`
 - Frontend:
   - `npm run build`
+  - `npx playwright test`
  - Docker:
    - `docker compose -f docker-compose.yml up -d --build`
    - validated `http://127.0.0.1/` and `http://127.0.0.1/api/health`

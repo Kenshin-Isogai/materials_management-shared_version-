@@ -1,0 +1,40 @@
+
+Running 7 tests using 1 worker
+
+  笨・ 1 [chromium] 窶ｺ e2e\01-layout-and-users.spec.ts:4:3 窶ｺ Layout and Users Flow 窶ｺ App loads and user selection is available (5.4s)
+  笨・ 2 [chromium] 窶ｺ e2e\01-layout-and-users.spec.ts:25:3 窶ｺ Layout and Users Flow 窶ｺ Navigate to Users page and view layout (505ms)
+  笨・ 3 [chromium] 窶ｺ e2e\02-items-flow.spec.ts:4:3 窶ｺ Items Flow 窶ｺ Items page loads and CRUD elements are visible (385ms)
+  笨・ 4 [chromium] 窶ｺ e2e\03-orders-flow.spec.ts:4:3 窶ｺ Orders Flow 窶ｺ Orders Page loads and lists are functional (328ms)
+  笨・ 5 [chromium] 窶ｺ e2e\03-orders-flow.spec.ts:18:3 窶ｺ Orders Flow 窶ｺ Shows validation error on invalid CSV upload (316ms)
+  笨・ 6 [chromium] 窶ｺ e2e\04-projects-flow.spec.ts:4:3 窶ｺ Projects Flow 窶ｺ Project List loads and can open Project Creation Form (357ms)
+  笨・ 7 [chromium] 窶ｺ e2e\04-projects-flow.spec.ts:45:3 窶ｺ Projects Flow 窶ｺ Workspace view loads pipeline and summary panels (268ms)
+
+
+  1) [chromium] 窶ｺ e2e\01-layout-and-users.spec.ts:4:3 窶ｺ Layout and Users Flow 窶ｺ App loads and user selection is available 
+
+    Error: [2mexpect([22m[31mlocator[39m[2m).[22mtoBeVisible[2m([22m[2m)[22m failed
+
+    Locator: locator('nav').locator('text=Workspace')
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+    [2m  - Expect "toBeVisible" with timeout 5000ms[22m
+    [2m  - waiting for locator('nav').locator('text=Workspace')[22m
+
+
+      14 |
+      15 |     // Verify nav links
+    > 16 |     await expect(page.locator('nav >> text=Workspace')).toBeVisible();
+         |                                                         ^
+      17 |     await expect(page.locator('nav >> text=BOM / Locations')).toBeVisible();
+      18 |     await expect(page.locator('nav >> text=Purchasing')).toBeVisible();
+      19 |     await expect(page.locator('nav >> text=Projects')).toBeVisible();
+        at C:\Users\IsogaiKenshin\Documents\Yaqumo\applications\materials_menagement(shared_version)\frontend\e2e\01-layout-and-users.spec.ts:16:57
+
+    Error Context: test-results\01-layout-and-users-Layout-5ea78-user-selection-is-available-chromium\error-context.md
+
+  1 failed
+    [chromium] 窶ｺ e2e\01-layout-and-users.spec.ts:4:3 窶ｺ Layout and Users Flow 窶ｺ App loads and user selection is available 
+  6 passed (11.1s)

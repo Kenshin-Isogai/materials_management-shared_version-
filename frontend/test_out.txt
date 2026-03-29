@@ -1,0 +1,1005 @@
+
+[1m[46m RUN [49m[22m [36mv4.0.18 [39m[90mC:/Users/IsogaiKenshin/Documents/Yaqumo/applications/materials_menagement(shared_version)/frontend[39m
+
+ [32m笨・[39m tests/previewState.test.ts[2m > [22mpreviewState helpers[2m > [22mkeeps an explicit null selection instead of falling back to stale preview data[32m 1[2mms[22m[39m
+ [32m笨・[39m tests/previewState.test.ts[2m > [22mpreviewState helpers[2m > [22mformats action errors for consistent in-page messaging[32m 0[2mms[22m[39m
+ [32m笨・[39m tests/workspaceState.test.ts[2m > [22mworkspaceState[2m > [22msyncs the board date to the refreshed effective analysis date when local preview is clean[32m 1[2mms[22m[39m
+ [32m笨・[39m tests/workspaceState.test.ts[2m > [22mworkspaceState[2m > [22mpreserves local preview edits when the date input is dirty[32m 0[2mms[22m[39m
+ [32m笨・[39m tests/workspaceState.test.ts[2m > [22mworkspaceState[2m > [22mreports discarded drawer keys when reopening an earlier stack entry[32m 1[2mms[22m[39m
+ [32m笨・[39m tests/editorDrafts.test.ts[2m > [22meditorDrafts helpers[2m > [22mtrims trailing blank requirement rows but keeps unresolved input[32m 1[2mms[22m[39m
+ [32m笨・[39m tests/editorDrafts.test.ts[2m > [22meditorDrafts helpers[2m > [22mcreates comparable RFQ line drafts from API rows[32m 0[2mms[22m[39m
+ [32m笨・[39m tests/movementEntry.test.ts[2m > [22mmovementEntry helpers[2m > [22minherits locations from the latest completed row[32m 2[2mms[22m[39m
+ [32m笨・[39m tests/movementEntry.test.ts[2m > [22mmovementEntry helpers[2m > [22mfalls back to the default movement locations when no completed row exists[32m 0[2mms[22m[39m
+ [32m笨・[39m tests/rfqEditorState.test.ts[2m > [22mrfqEditorState[2m > [22mkeeps the full batch visible while surfacing the highlighted item first[32m 1[2mms[22m[39m
+ [32m笨・[39m tests/rfqEditorState.test.ts[2m > [22mrfqEditorState[2m > [22mrehydrates saved lines from refreshed server detail without changing the batch id[32m 0[2mms[22m[39m
+ [32m笨・[39m tests/rfqEditorState.test.ts[2m > [22mrfqEditorState[2m > [22mkeeps the current linked order visible even before matching options are loaded[32m 0[2mms[22m[39m
+ [32m笨・[39m tests/rfqEditorState.test.ts[2m > [22mrfqEditorState[2m > [22mshows the selected order once and appends other loaded choices only for the active row[32m 0[2mms[22m[39m
+ [32m笨・[39m tests/rfqEditorState.test.ts[2m > [22mrfqEditorState[2m > [22msurfaces a loading placeholder while the active row fetches matching open orders[32m 0[2mms[22m[39m
+ [32m笨・[39m tests/rfqEditorState.test.ts[2m > [22mrfqEditorState[2m > [22mreturns only the requested RFQ page slice[32m 0[2mms[22m[39m
+ [32m笨・[39m tests/rfqEditorState.test.ts[2m > [22mrfqEditorState[2m > [22mnormalizes invalid paging inputs to a safe first page[32m 0[2mms[22m[39m
+ [32m笨・[39m tests/WorkspaceDrawer.test.tsx[2m > [22mWorkspaceDrawer[2m > [22mfocuses the active panel and supports back navigation[32m 212[2mms[22m[39m
+ [32m笨・[39m tests/ProjectEditor.test.tsx[2m > [22mProjectEditor[2m > [22mdownloads exportable review preview rows as an Items import CSV[32m 210[2mms[22m[39m
+ [32m笨・[39m tests/AppRouter.test.tsx[2m > [22mapp router[2m > [22mrenders the workspace route through a data router without crashing[32m 106[2mms[22m[39m
+ [32m笨・[39m tests/AppRouter.test.tsx[2m > [22mapp router[2m > [22mredirects the removed /rfq route back to the dashboard[32m 24[2mms[22m[39m
+ [32m笨・[39m tests/CatalogPicker.test.tsx[2m > [22mCatalogPicker[2m > [22msyncs external single-value updates while the picker is open[32m 280[2mms[22m[39m
+ [32m笨・[39m tests/OrdersPage.test.tsx[2m > [22mOrdersPage[2m > [22mshows quotation order counts using all fetched order pages[32m 205[2mms[22m[39m
+ [32m笨・[39m tests/CatalogPicker.test.tsx[2m > [22mCatalogPicker[2m > [22mkeeps Escape on picker controls from bubbling to parent handlers[32m 232[2mms[22m[39m
+ [32m笨・[39m tests/OrdersPage.test.tsx[2m > [22mOrdersPage[2m > [22mopens quotation details with every linked order[32m 231[2mms[22m[39m
+ [32m笨・[39m tests/OrdersPage.test.tsx[2m > [22mOrdersPage[2m > [22mkeeps order details separate from quotation details[32m 165[2mms[22m[39m
+ [32m笨・[39m tests/OrdersPage.test.tsx[2m > [22mOrdersPage[2m > [22mfilters the expanded order list with search inputs[32m 185[2mms[22m[39m
+ [32m笨・[39m tests/OrdersPage.test.tsx[2m > [22mOrdersPage[2m > [22msupports collapsing imported quotations[32m 159[2mms[22m[39m
+ [32m笨・[39m tests/OrdersPage.test.tsx[2m > [22mOrdersPage[2m > [22msplits first and assigns only the created child order when a project is selected[33m 381[2mms[22m[39m
+ [32m笨・[39m tests/OrdersPage.test.tsx[2m > [22mOrdersPage[2m > [22mpreserves explicit project clearing when splitting an assigned order[33m 420[2mms[22m[39m
+ [31mﾃ・[39m tests/OrdersPage.test.tsx[2m > [22mOrdersPage[2m > [22mpoints preview pdf-link failures to the upload-first recovery path[33m 1045[2mms[22m[39m
+[31m   竊・Unable to find an element with the text: Preview failed: quotation_document_url (row 2) is required. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<body>[31m
+  [36m<div>[31m
+    [36m<div[31m
+      [33mclass[31m=[32m"space-y-6"[31m
+    [36m>[31m
+      [36m<section>[31m
+        [36m<h1[31m
+          [33mclass[31m=[32m"font-display text-3xl font-bold"[31m
+        [36m>[31m
+          [0mOrders[0m
+        [36m</h1>[31m
+        [36m<p[31m
+          [33mclass[31m=[32m"mt-1 text-sm text-slate-600"[31m
+        [36m>[31m
+          [0mCSV order import, missing-item workflow, and arrival processing.[0m
+        [36m</p>[31m
+      [36m</section>[31m
+      [36m<section[31m
+        [33mclass[31m=[32m"panel p-4"[31m
+      [36m>[31m
+        [36m<h2[31m
+          [33mclass[31m=[32m"mb-3 font-display text-lg font-semibold"[31m
+        [36m>[31m
+          [0mImport Orders CSV[0m
+        [36m</h2>[31m
+        [36m<div[31m
+          [33mclass[31m=[32m"mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700"[31m
+        [36m>[31m
+          [36m<p[31m
+            [33mclass[31m=[32m"font-semibold text-slate-900"[31m
+          [36m>[31m
+            [0mCSV Format[0m
+          [36m</p>[31m
+          [36m<p[31m
+            [33mclass[31m=[32m"mt-1"[31m
+          [36m>[31m
+            [0mRequired columns: [0m
+            [36m<code>[31m
+              [0msupplier[0m
+            [36m</code>[31m
+            [0m, [0m
+            [36m<code>[31m
+              [0mitem_number[0m
+            [36m</code>[31m
+            [0m, [0m
+            [36m<code>[31m
+              [0mquantity[0m
+            [36m</code>[31m
+            [0m,[0m
+            [0m [0m
+            [36m<code>[31m
+              [0mquotation_number[0m
+            [36m</code>[31m
+            [0m, [0m
+            [36m<code>[31m
+              [0missue_date[0m
+            [36m</code>[31m
+          [36m</p>[31m
+          [36m<p>[31m
+            [0mRequired document column: [0m
+            [36m<code>[31m
+              [0mquotation_document_url[0m
+            [36m</code>[31m
+          [36m</p>[31m
+          [36m<p>[31m
+            [0mOptional columns: [0m
+            [36m<code>[31m
+              [0morder_date[0m
+            [36m</code>[31m
+            [0m, [0m
+            [36m<code>[31m
+              [0mexpected_arrival[0m
+            [36m</code>[31m
+            [0m,[0m
+            [0m [0m
+            [36m<code>[31m
+              [0mpurchase_order_document_url[0m
+            [36m</code>[31m
+          [36m</p>[31m
+          [36m<p[31m
+            [33mclass[31m=[32m"mt-1"[31m
+          [36m>[31m
+            [0mUse full HTTPS document URLs, such as a SharePoint link, for quotation and purchase-order references.[0m
+          [36m</p>[31m
+          [36m<p>[31m
+            [0mThis import path is metadata-only. Documents remain in the external document system and are not uploaded into this application.[0m
+          [36m</p>[31m
+          [36m<div[31m
+            [33mclass[31m=[32m"mt-2 flex flex-wrap gap-2"[31m
+          [36m>[31m
+            [36m<button[31m
+              [33mclass[31m=[32m"button-subtle"[31m
+              [33mtype[31m=[32m"button"[31m
+            [36m>[31m
+              [0mDownload Template CSV[0m
+            [36m</button>[31m
+            [36m<button[31m
+              [33mclass[31m=[32m"button-subtle"[31m
+              [33mtype[31m=[32m"button"[31m
+            [36m>[31m
+              [0mDownload Reference CSV[0m
+            [36m</button>[31m
+          [36m</div>[31m
+        [36m</div>[31m
+        [36m<form[31m
+          [33mclass[31m=[32m"grid gap-3 md:grid-cols-3"[31m
+        [36m>[31m
+          [36m<input[31m
+            [33mclass[31m=[32m"input"[31m
+            [33mtype[31m=[32m"date"[31m
+            [33mvalue[31m=[32m""[31m
+          [36m/>[31m
+          [36m<input[31m
+            [33maccept[31m=[32m".csv,text/csv"[31m
+            [33mclass[31m=[32m"input"[31m
+            [33mmultiple[31m=[32m""[31m
+            [33mrequired[31m=[32m""[31m
+            [33mtype[31m=[32m"file"[31m
+          [36m/>[31m
+          [36m<button[31m
+            [33mclass[31m=[32m"button"[31m
+            [33mtype[31m=[32m"submit"[31m
+          [36m>[31m
+            [0mPreview Import[0m
+          [36m</button>[31m
+        [36m</form>[31m
+        [36m<p[31m
+          [33mclass[31m=[32m"mt-2 text-xs text-slate-500"[31m
+        [36m>[31m
+          [0m1 file(s) selected[0m
+        [36m</p>[31m
+        [36m<div[31m
+          [33mclass[31m=[32m"mt-3 space-y-2"[31m
+        [36m>[31m
+          [36m<p[31m
+            [33mclass[31m=[32m"text-sm text-signal"[31m
+          [36m>[31m
+            [0mPreview failed: imports/orders/registered/pdf_files/Autex/example.pdf[0m
+          [36m</p>[31m
+        [36m</div>[31m
+      [36m</section>[31m
+      [36m<section[31m
+        [33mclass[31m=[32m"panel p-4"[31m
+      [36m/>[31m
+      [36m<section[31m
+        [33mclass[31m=[32m"panel p-4"[31m
+      [36m>[31m
+        [36m<div[31m
+          [33mclass[31m=[32m"mb-3 flex items-center justify-between gap-3"[31m
+        [36m>[31m
+          [36m<h2[31m
+            [33mclass[31m=[32m"font-display text-lg font-semibold"[31m
+          [36m>[31m
+            [0mOrder List[0m
+          [36m</h2>[31m
+          [36m<button[31m
+            [33maria-expanded[31m=[32m"false"[31m
+            [33mclass[31m=[32m"button-subtle"[31m
+            [33mtype[31m=[32m"button"[31m
+          [36m>[31m
+            [0mExpand[0m
+          [36m</button>[31m
+        [36m</div>[31m
+      [36m</section>[31m
+      [36m<section[31m
+        [33mclass[31m=[32m"panel p-4"[31m
+      [36m>[31m
+        [36m<div[31m
+          [33mclass[31m=[32m"mb-3 flex items-center justify-between gap-3"[31m
+        [36m>[31m
+          [36m<h2[31m
+            [33mclass[31m=[32m"font-display text-lg font-semibold"[31m
+          [36m>[31m
+            [0mOrder Details[0m
+          [36m</h2>[31m
+        [36m</div>[31m
+        [36m<p[31m
+          [33mclass[31m=[32m"text-sm text-slate-500"[31m
+        [36m>[31m
+          [0mSelect [0m
+          [36m<strong>[31m
+            [0mOrder Details[0m
+          [36m</strong>[31m
+          [0m from any order row to review the selected order, item metadata, and same-item purchasing history. Use [0m
+          [36m<strong>[31m
+            [0mEdit Order[0m
+          [36m</strong>[31m
+          [0m to change ETA, split an open order, or set a manual project assignment.[0m
+        [36m</p>[31m
+      [36m</section>[31m
+      [36m<section[31m
+        [33mclass[31m=[32m"panel p-4"[31m
+      [36m>[31m
+        [36m<div[31m
+          [33mclass[31m=[32m"mb-3 flex items-center justify-between gap-3"[31m
+        [36m>[31m
+          [36m<h2[31m
+            [33mclass[31m=[32m"font-display text-lg font-semibold"[31m
+          [36m>[31m
+            [0mImported Quotations[0m
+          [36m</h2>[31m
+          [36m<button[31m
+            [33maria-expanded[31m=[32m"false"[31m
+            [33mclass[31m=[32m"button-subtle"[31m
+            [33mtype[31m=[32m"button"[31m
+          [36m>[31m
+            [0mExpand[0m
+          [36m</button>[31m
+        [36m</div>[31m
+      [36m</section>[31m
+      [36m<section[31m
+        [33mclass[31m=[32m"panel p-4"[31m
+      [36m>[31m
+        [36m<div[31m
+          [33mclass[31m=[32m"mb-3 flex items-center justify-between gap-3"[31m
+        [36m>[31m
+          [36m<h2[31m
+            [33mclass[31m=[32m"font-display text-lg font-semibold"[31m
+          [36m>[31m
+            [0mQuotation Details[0m
+          [36m</h2>[31m
+        [36m</div>[31m
+        [36m<p[31m
+          [33mclass[31m=[32m"text-sm text-slate-500"[31m
+        [36m>[31m
+          [0mSelect [0m
+          [36m<strong>[31m
+            [0mView Orders[0m
+          [36m</strong>[31m
+          [0m from any quotation row to review the quotation metadata and every order linked to that quotation.[0m
+        [36m</p>[31m
+      [36m</section>[31m
+    [36m</div>[31m
+  [36m</div>[31m
+[36m</body>[31m
+
+Ignored nodes: comments, script, style
+[36m<body>[31m
+  [36m<div>[31m
+    [36m<div[31m
+      [33mclass[31m=[32m"space-y-6"[31m
+    [36m>[31m
+      [36m<section>[31m
+        [36m<h1[31m
+          [33mclass[31m=[32m"font-display text-3xl font-bold"[31m
+        [36m>[31m
+          [0mOrders[0m
+        [36m</h1>[31m
+        [36m<p[31m
+          [33mclass[31m=[32m"mt-1 text-sm text-slate-600"[31m
+        [36m>[31m
+          [0mCSV order import, missing-item workflow, and arrival processing.[0m
+        [36m</p>[31m
+      [36m</section>[31m
+      [36m<section[31m
+        [33mclass[31m=[32m"panel p-4"[31m
+      [36m>[31m
+        [36m<h2[31m
+          [33mclass[31m=[32m"mb-3 font-display text-lg font-semibold"[31m
+        [36m>[31m
+          [0mImport Orders CSV[0m
+        [36m</h2>[31m
+        [36m<div[31m
+          [33mclass[31m=[32m"mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700"[31m
+        [36m>[31m
+          [36m<p[31m
+            [33mclass[31m=[32m"font-semibold text-slate-900"[31m
+          [36m>[31m
+            [0mCSV Format[0m
+          [36m</p>[31m
+          [36m<p[31m
+            [33mclass[31m=[32m"mt-1"[31m
+          [36m>[31m
+            [0mRequired columns: [0m
+            [36m<code>[31m
+              [0msupplier[0m
+            [36m</code>[31m
+            [0m, [0m
+            [36m<code>[31m
+              [0mitem_number[0m
+            [36m</code>[31m
+            [0m, [0m
+            [36m<code>[31m
+              [0mquantity[0m
+            [36m</code>[31m
+            [0m,[0m
+            [0m [0m
+            [36m<code>[31m
+              [0mquotation_number[0m
+            [36m</code>[31m
+            [0m, [0m
+            [36m<code>[31m
+              [0missue_date[0m
+            [36m</code>[31m
+          [36m</p>[31m
+          [36m<p>[31m
+            [0mRequired document column: [0m
+            [36m<code>[31m
+              [0mquotation_document_url[0m
+            [36m</code>[31m
+          [36m</p>[31m
+          [36m<p>[31m
+            [0mOptional columns: [0m
+            [36m<code>[31m
+              [0morder_date[0m
+            [36m</code>[31m
+            [0m, [0m
+            [36m<code>[31m
+              [0mexpected_arrival[0m
+            [36m</code>[31m
+            [0m,[0m
+            [0m [0m
+            [36m<code>[31m
+              [0mpurchase_order_document_url[0m
+            [36m</code>[31m
+          [36m</p>[31m
+          [36m<p[31m
+            [33mclass[31m=[32m"mt-1"[31m
+          [36m>[31m
+            [0mUse full HTTPS document URLs, such as a SharePoint link, for quotation and purchase-order references.[0m
+          [36m</p>[31m
+          [36m<p>[31m
+            [0mThis import path is metadata-only. Documents remain in the external document system and are not uploaded into this application.[0m
+          [36m</p>[31m
+          [36m<div[31m
+            [33mclass[31m=[32m"mt-2 flex flex-wrap gap-2"[31m
+          [36m>[31m
+            [36m<button[31m
+              [33mclass[31m=[32m"button-subtle"[31m
+              [33mtype[31m=[32m"button"[31m
+            [36m>[31m
+              [0mDownload Template CSV[0m
+            [36m</button>[31m
+            [36m<button[31m
+              [33mclass[31m=[32m"button-subtle"[31m
+              [33mtype[31m=[32m"button"[31m
+            [36m>[31m
+              [0mDownload Reference CSV[0m
+            [36m</button>[31m
+          [36m</div>[31m
+        [36m</div>[31m
+        [36m<form[31m
+          [33mclass[31m=[32m"grid gap-3 md:grid-cols-3"[31m
+        [36m>[31m
+          [36m<input[31m
+            [33mclass[31m=[32m"input"[31m
+            [33mtype[31m=[32m"date"[31m
+            [33mvalue[31m=[32m""[31m
+          [36m/>[31m
+          [36m<input[31m
+            [33maccept[31m=[32m".csv,text/csv"[31m
+            [33mclass[31m=[32m"input"[31m
+            [33mmultiple[31m=[32m""[31m
+            [33mrequired[31m=[32m""[31m
+            [33mtype[31m=[32m"file"[31m
+          [36m/>[31m
+          [36m<button[31m
+            [33mclass[31m=[32m"button"[31m
+            [33mtype[31m=[32m"submit"[31m
+          [36m>[31m
+            [0mPreview Import[0m
+          [36m</button>[31m
+        [36m</form>[31m
+        [36m<p[31m
+          [33mclass[31m=[32m"mt-2 text-xs text-slate-500"[31m
+        [36m>[31m
+          [0m1 file(s) selected[0m
+        [36m</p>[31m
+        [36m<div[31m
+          [33mclass[31m=[32m"mt-3 space-y-2"[31m
+        [36m>[31m
+          [36m<p[31m
+            [33mclass[31m=[32m"text-sm text-signal"[31m
+          [36m>[31m
+            [0mPreview failed: imports/orders/registered/pdf_files/Autex/example.pdf[0m
+          [36m</p>[31m
+        [36m</div>[31m
+      [36m</section>[31m
+      [36m<section[31m
+        [33mclass[31m=[32m"panel p-4"[31m
+      [36m/>[31m
+      [36m<section[31m
+        [33mclass[31m=[32m"panel p-4"[31m
+      [36m>[31m
+        [36m<div[31m
+          [33mclass[31m=[32m"mb-3 flex items-center justify-between gap-3"[31m
+        [36m>[31m
+          [36m<h2[31m
+            [33mclass[31m=[32m"font-display text-lg font-semibold"[31m
+          [36m>[31m
+            [0mOrder List[0m
+          [36m</h2>[31m
+          [36m<button[31m
+            [33maria-expanded[31m=[32m"false"[31m
+            [33mclass[31m=[32m"button-subtle"[31m
+            [33mtype[31m=[32m"button"[31m
+          [36m>[31m
+            [0mExpand[0m
+          [36m</button>[31m
+        [36m</div>[31m
+      [36m</section>[31m
+      [36m<section[31m
+        [33mclass[31m=[32m"panel p-4"[31m
+      [36m>[31m
+        [36m<div[31m
+          [33mclass[31m=[32m"mb-3 flex items-center justify-between gap-3"[31m
+        [36m>[31m
+          [36m<h2[31m
+            [33mclass[31m=[32m"font-display text-lg font-semibold"[31m
+          [36m>[31m
+            [0mOrder Details[0m
+          [36m</h2>[31m
+        [36m</div>[31m
+        [36m<p[31m
+          [33mclass[31m=[32m"text-sm text-slate-500"[31m
+        [36m>[31m
+          [0mSelect [0m
+          [36m<strong>[31m
+            [0mOrder Details[0m
+          [36m</strong>[31m
+          [0m from any order row to review the selected order, item metadata, and same-item purchasing history. Use [0m
+          [36m<strong>[31m
+            [0mEdit Order[0m
+          [36m</strong>[31m
+          [0m to change ETA, split an open order, or set a manual project assignment.[0m
+        [36m</p>[31m
+      [36m</section>[31m
+      [36m<section[31m
+        [33mclass[31m=[32m"panel p-4"[31m
+      [36m>[31m
+        [36m<div[31m
+          [33mclass[31m=[32m"mb-3 flex items-center justify-between gap-3"[31m
+        [36m>[31m
+          [36m<h2[31m
+            [33mclass[31m=[32m"font-display text-lg font-semibold"[31m
+          [36m>[31m
+            [0mImported Quotations[0m
+          [36m</h2>[31m
+          [36m<button[31m
+            [33maria-expanded[31m=[32m"false"[31m
+            [33mclass[31m=[32m"button-subtle"[31m
+            [33mtype[31m=[32m"button"[31m
+          [36m>[31m
+            [0mExpand[0m
+          [36m</button>[31m
+        [36m</div>[31m
+      [36m</section>[31m
+      [36m<section[31m
+        [33mclass[31m=[32m"panel p-4"[31m
+      [36m>[31m
+        [36m<div[31m
+          [33mclass[31m=[32m"mb-3 flex items-center justify-between gap-3"[31m
+        [36m>[31m
+          [36m<h2[31m
+            [33mclass[31m=[32m"font-display text-lg font-semibold"[31m
+          [36m>[31m
+            [0mQuotation Details[0m
+          [36m</h2>[31m
+        [36m</div>[31m
+        [36m<p[31m
+          [33mclass[31m=[32m"text-sm text-slate-500"[31m
+        [36m>[31m
+          [0mSelect [0m
+          [36m<strong>[31m
+            [0mView Orders[0m
+          [36m</strong>[31m
+          [0m from any quotation row to review the quotation metadata and every order linked to that quotation.[0m
+        [36m</p>[31m
+      [36m</section>[31m
+    [36m</div>[31m
+  [36m</div>[31m
+[36m</body>[31m[39m
+
+竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ Failed Tests 1 竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ
+
+ FAIL  tests/OrdersPage.test.tsx > OrdersPage > points preview pdf-link failures to the upload-first recovery path
+TestingLibraryElementError: Unable to find an element with the text: Preview failed: quotation_document_url (row 2) is required. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+<body>
+  <div>
+    <div
+      class="space-y-6"
+    >
+      <section>
+        <h1
+          class="font-display text-3xl font-bold"
+        >
+          Orders
+        </h1>
+        <p
+          class="mt-1 text-sm text-slate-600"
+        >
+          CSV order import, missing-item workflow, and arrival processing.
+        </p>
+      </section>
+      <section
+        class="panel p-4"
+      >
+        <h2
+          class="mb-3 font-display text-lg font-semibold"
+        >
+          Import Orders CSV
+        </h2>
+        <div
+          class="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700"
+        >
+          <p
+            class="font-semibold text-slate-900"
+          >
+            CSV Format
+          </p>
+          <p
+            class="mt-1"
+          >
+            Required columns: 
+            <code>
+              supplier
+            </code>
+            , 
+            <code>
+              item_number
+            </code>
+            , 
+            <code>
+              quantity
+            </code>
+            ,
+             
+            <code>
+              quotation_number
+            </code>
+            , 
+            <code>
+              issue_date
+            </code>
+          </p>
+          <p>
+            Required document column: 
+            <code>
+              quotation_document_url
+            </code>
+          </p>
+          <p>
+            Optional columns: 
+            <code>
+              order_date
+            </code>
+            , 
+            <code>
+              expected_arrival
+            </code>
+            ,
+             
+            <code>
+              purchase_order_document_url
+            </code>
+          </p>
+          <p
+            class="mt-1"
+          >
+            Use full HTTPS document URLs, such as a SharePoint link, for quotation and purchase-order references.
+          </p>
+          <p>
+            This import path is metadata-only. Documents remain in the external document system and are not uploaded into this application.
+          </p>
+          <div
+            class="mt-2 flex flex-wrap gap-2"
+          >
+            <button
+              class="button-subtle"
+              type="button"
+            >
+              Download Template CSV
+            </button>
+            <button
+              class="button-subtle"
+              type="button"
+            >
+              Download Reference CSV
+            </button>
+          </div>
+        </div>
+        <form
+          class="grid gap-3 md:grid-cols-3"
+        >
+          <input
+            class="input"
+            type="date"
+            value=""
+          />
+          <input
+            accept=".csv,text/csv"
+            class="input"
+            multiple=""
+            required=""
+            type="file"
+          />
+          <button
+            class="button"
+            type="submit"
+          >
+            Preview Import
+          </button>
+        </form>
+        <p
+          class="mt-2 text-xs text-slate-500"
+        >
+          1 file(s) selected
+        </p>
+        <div
+          class="mt-3 space-y-2"
+        >
+          <p
+            class="text-sm text-signal"
+          >
+            Preview failed: imports/orders/registered/pdf_files/Autex/example.pdf
+          </p>
+        </div>
+      </section>
+      <section
+        class="panel p-4"
+      />
+      <section
+        class="panel p-4"
+      >
+        <div
+          class="mb-3 flex items-center justify-between gap-3"
+        >
+          <h2
+            class="font-display text-lg font-semibold"
+          >
+            Order List
+          </h2>
+          <button
+            aria-expanded="false"
+            class="button-subtle"
+            type="button"
+          >
+            Expand
+          </button>
+        </div>
+      </section>
+      <section
+        class="panel p-4"
+      >
+        <div
+          class="mb-3 flex items-center justify-between gap-3"
+        >
+          <h2
+            class="font-display text-lg font-semibold"
+          >
+            Order Details
+          </h2>
+        </div>
+        <p
+          class="text-sm text-slate-500"
+        >
+          Select 
+          <strong>
+            Order Details
+          </strong>
+           from any order row to review the selected order, item metadata, and same-item purchasing history. Use 
+          <strong>
+            Edit Order
+          </strong>
+           to change ETA, split an open order, or set a manual project assignment.
+        </p>
+      </section>
+      <section
+        class="panel p-4"
+      >
+        <div
+          class="mb-3 flex items-center justify-between gap-3"
+        >
+          <h2
+            class="font-display text-lg font-semibold"
+          >
+            Imported Quotations
+          </h2>
+          <button
+            aria-expanded="false"
+            class="button-subtle"
+            type="button"
+          >
+            Expand
+          </button>
+        </div>
+      </section>
+      <section
+        class="panel p-4"
+      >
+        <div
+          class="mb-3 flex items-center justify-between gap-3"
+        >
+          <h2
+            class="font-display text-lg font-semibold"
+          >
+            Quotation Details
+          </h2>
+        </div>
+        <p
+          class="text-sm text-slate-500"
+        >
+          Select 
+          <strong>
+            View Orders
+          </strong>
+           from any quotation row to review the quotation metadata and every order linked to that quotation.
+        </p>
+      </section>
+    </div>
+  </div>
+</body>
+
+Ignored nodes: comments, script, style
+<body>
+  <div>
+    <div
+      class="space-y-6"
+    >
+      <section>
+        <h1
+          class="font-display text-3xl font-bold"
+        >
+          Orders
+        </h1>
+        <p
+          class="mt-1 text-sm text-slate-600"
+        >
+          CSV order import, missing-item workflow, and arrival processing.
+        </p>
+      </section>
+      <section
+        class="panel p-4"
+      >
+        <h2
+          class="mb-3 font-display text-lg font-semibold"
+        >
+          Import Orders CSV
+        </h2>
+        <div
+          class="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700"
+        >
+          <p
+            class="font-semibold text-slate-900"
+          >
+            CSV Format
+          </p>
+          <p
+            class="mt-1"
+          >
+            Required columns: 
+            <code>
+              supplier
+            </code>
+            , 
+            <code>
+              item_number
+            </code>
+            , 
+            <code>
+              quantity
+            </code>
+            ,
+             
+            <code>
+              quotation_number
+            </code>
+            , 
+            <code>
+              issue_date
+            </code>
+          </p>
+          <p>
+            Required document column: 
+            <code>
+              quotation_document_url
+            </code>
+          </p>
+          <p>
+            Optional columns: 
+            <code>
+              order_date
+            </code>
+            , 
+            <code>
+              expected_arrival
+            </code>
+            ,
+             
+            <code>
+              purchase_order_document_url
+            </code>
+          </p>
+          <p
+            class="mt-1"
+          >
+            Use full HTTPS document URLs, such as a SharePoint link, for quotation and purchase-order references.
+          </p>
+          <p>
+            This import path is metadata-only. Documents remain in the external document system and are not uploaded into this application.
+          </p>
+          <div
+            class="mt-2 flex flex-wrap gap-2"
+          >
+            <button
+              class="button-subtle"
+              type="button"
+            >
+              Download Template CSV
+            </button>
+            <button
+              class="button-subtle"
+              type="button"
+            >
+              Download Reference CSV
+            </button>
+          </div>
+        </div>
+        <form
+          class="grid gap-3 md:grid-cols-3"
+        >
+          <input
+            class="input"
+            type="date"
+            value=""
+          />
+          <input
+            accept=".csv,text/csv"
+            class="input"
+            multiple=""
+            required=""
+            type="file"
+          />
+          <button
+            class="button"
+            type="submit"
+          >
+            Preview Import
+          </button>
+        </form>
+        <p
+          class="mt-2 text-xs text-slate-500"
+        >
+          1 file(s) selected
+        </p>
+        <div
+          class="mt-3 space-y-2"
+        >
+          <p
+            class="text-sm text-signal"
+          >
+            Preview failed: imports/orders/registered/pdf_files/Autex/example.pdf
+          </p>
+        </div>
+      </section>
+      <section
+        class="panel p-4"
+      />
+      <section
+        class="panel p-4"
+      >
+        <div
+          class="mb-3 flex items-center justify-between gap-3"
+        >
+          <h2
+            class="font-display text-lg font-semibold"
+          >
+            Order List
+          </h2>
+          <button
+            aria-expanded="false"
+            class="button-subtle"
+            type="button"
+          >
+            Expand
+          </button>
+        </div>
+      </section>
+      <section
+        class="panel p-4"
+      >
+        <div
+          class="mb-3 flex items-center justify-between gap-3"
+        >
+          <h2
+            class="font-display text-lg font-semibold"
+          >
+            Order Details
+          </h2>
+        </div>
+        <p
+          class="text-sm text-slate-500"
+        >
+          Select 
+          <strong>
+            Order Details
+          </strong>
+           from any order row to review the selected order, item metadata, and same-item purchasing history. Use 
+          <strong>
+            Edit Order
+          </strong>
+           to change ETA, split an open order, or set a manual project assignment.
+        </p>
+      </section>
+      <section
+        class="panel p-4"
+      >
+        <div
+          class="mb-3 flex items-center justify-between gap-3"
+        >
+          <h2
+            class="font-display text-lg font-semibold"
+          >
+            Imported Quotations
+          </h2>
+          <button
+            aria-expanded="false"
+            class="button-subtle"
+            type="button"
+          >
+            Expand
+          </button>
+        </div>
+      </section>
+      <section
+        class="panel p-4"
+      >
+        <div
+          class="mb-3 flex items-center justify-between gap-3"
+        >
+          <h2
+            class="font-display text-lg font-semibold"
+          >
+            Quotation Details
+          </h2>
+        </div>
+        <p
+          class="text-sm text-slate-500"
+        >
+          Select 
+          <strong>
+            View Orders
+          </strong>
+           from any quotation row to review the quotation metadata and every order linked to that quotation.
+        </p>
+      </section>
+    </div>
+  </div>
+</body>
+ 笶ｯ waitForWrapper node_modules/@testing-library/dom/dist/wait-for.js:163:27
+ 笶ｯ node_modules/@testing-library/dom/dist/query-helpers.js:86:33
+ 笶ｯ tests/OrdersPage.test.tsx:492:20
+    490| 
+    491|     expect(
+    492|       await screen.findByText(
+       |                    ^
+    493|         "Preview failed: quotation_document_url (row 2) is required",
+    494|       ),
+
+竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ竡ｯ[1/1]竡ｯ
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m9 passed[39m[22m[90m (10)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m29 passed[39m[22m[90m (30)[39m
+[2m   Start at [22m 17:50:18
+[2m   Duration [22m 4.17s[2m (transform 766ms, setup 0ms, import 1.87s, tests 3.87s, environment 7.24s)[22m
+
