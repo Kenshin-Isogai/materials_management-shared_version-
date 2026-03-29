@@ -2,75 +2,68 @@
 
 ## Purpose
 
-This folder is the working document set for running this application on:
+This folder now documents the target GCP operating model, the remaining production-readiness gaps, and the deployment/operations workflow.
 
-- Frontend on Cloud Run
-- Backend on Cloud Run
+It is no longer intended to be a step-by-step migration scratchpad.
+
+## Current position
+
+The repository already contains most of the code-level changes needed for:
+
+- frontend on Cloud Run
+- backend on Cloud Run
 - PostgreSQL on Cloud SQL
-- Persistent application-managed files on GCS
+- durable application-managed objects on GCS
 
-The file set is intentionally kept in place, but each file now has one primary role so the folder is easier to use.
+The main remaining work is operational rather than structural:
 
-## Locked decisions
+- stronger production authentication
+- real GCP resource wiring and live validation
+- backup/restore and rollback procedure ownership
+- production monitoring, alerting, and routine change management
 
-These decisions are now treated as fixed unless the rollout direction changes:
+## What is already treated as settled
 
 - frontend and backend remain separate Cloud Run services
 - the frontend calls the backend through an absolute HTTPS base URL ending in `/api`
-- `VITE_API_BASE` is build-time configuration, not runtime-injected configuration
-- Alembic runs as an external deployment step, not as normal Cloud Run service startup
-- the first rollout keeps nginx in the frontend container
+- `VITE_API_BASE` stays build-time configuration
+- Alembic runs outside normal request-serving startup
 - persistent application-managed files use GCS
-- mutation requests temporarily continue using `X-User-Name`
-- cloud-unfriendly local compatibility code may be removed when it conflicts with the target model
-
-## Current repository status
-
-Already present in the repository:
-
-- backend runtime posture supports `APP_RUNTIME_TARGET=cloud_run`
-- backend config already supports Cloud SQL Unix-socket style `DATABASE_URL`
-- backend durable storage already supports `STORAGE_BACKEND=gcs`
-- health/runtime metadata already exposes cloud-oriented settings
-- frontend already resolves API traffic from `VITE_API_BASE`
-
-Still needing repository work before a real GCP deployment:
-
-- tighten the rollout docs so each file has one clear responsibility
-- stronger end-user authentication is still outside this cleanup track
-
-Still blocked on having an actual GCP project:
-
-- real service URLs
-- real `INSTANCE_CONNECTION_NAME`
-- real bucket names and prefixes
-- Secret Manager wiring
-- actual Cloud Run, Cloud SQL, and GCS deployment validation
+- Cloud SQL uses the connector / Unix socket model
+- the first rollout keeps nginx in the frontend container
+- `X-User-Name` remains temporary and must not be mistaken for the final auth boundary
 
 ## Reading order
 
 1. `target_architecture.md`
-2. `implementation_plan.md`
-3. `task_breakdown_by_file.md`
-4. `environment_and_runtime_matrix.md`
-5. `migration_checklist.md`
-6. `cloud_run_deployment_runbook.md`
+2. `migration_checklist.md`
+3. `environment_and_runtime_matrix.md`
+4. `cloud_run_deployment_runbook.md`
+5. `security_and_cost_considerations.md`
 
-Use `security_and_cost_considerations.md` alongside the above when deciding defaults, limits, and rollout guardrails.
+Use these only as supporting references:
+
+- `implementation_plan.md`
+- `implementation_slices.md`
+- `task_breakdown_by_file.md`
 
 ## File roles
 
-- `target_architecture.md`: canonical architecture decisions and operating boundaries
-- `implementation_plan.md`: current workstreams, especially what can be done before a GCP project exists
-- `task_breakdown_by_file.md`: repository files to change and why
-- `environment_and_runtime_matrix.md`: variable contract and which values are placeholders until GCP exists
-- `implementation_slices.md`: practical execution grouping
-- `migration_checklist.md`: status tracker for repository readiness and project-dependent rollout steps
-- `cloud_run_deployment_runbook.md`: concrete deployment steps to use once a GCP project exists
-- `security_and_cost_considerations.md`: cloud guardrails, risk areas, and operating assumptions
+- `target_architecture.md`: canonical target topology and operating boundaries
+- `migration_checklist.md`: production-readiness checklist focused on what is still missing
+- `environment_and_runtime_matrix.md`: runtime/deployment variable contract
+- `cloud_run_deployment_runbook.md`: deployment, update, rollback, and recovery workflow
+- `security_and_cost_considerations.md`: security, robustness, and cost guardrails
+- `implementation_plan.md`: remaining hardening workstreams
+- `implementation_slices.md`: compressed execution order for the remaining work
+- `task_breakdown_by_file.md`: repository surfaces that still matter if further hardening code changes are needed
 
 ## Scope rule
 
-Backward compatibility is not the priority for this rollout.
+Completed migration cleanup should be referenced only briefly.
 
-If a compatibility-only path conflicts with Cloud Run, Cloud SQL, or GCS operation, prefer replacing or removing it.
+If a document drifts back into historical implementation detail, simplify it and keep the focus on:
+
+- what the production target is
+- what remains incomplete
+- how the system will be operated safely

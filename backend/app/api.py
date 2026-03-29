@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 import json
+import logging
+from time import perf_counter
 from typing import Any
+from uuid import uuid4
 
 from pathlib import Path
 
@@ -15,6 +19,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from .config import (
     APP_PORT,
     APP_DATA_ROOT,
+    AUTH_MODE_DRY_RUN,
+    AUTH_MODE_ENFORCED,
+    AUTH_MODE_NONE,
     AUTO_MIGRATE_ON_STARTUP,
     BACKEND_PUBLIC_BASE_URL,
     CLOUD_RUN_CONCURRENCY_TARGET,
@@ -26,8 +33,11 @@ from .config import (
     HEAVY_REQUEST_TARGET_SECONDS,
     INSTANCE_CONNECTION_NAME,
     MAX_UPLOAD_BYTES,
+    LOG_LEVEL,
+    STRUCTURED_LOGGING,
     get_auth_mode,
     get_cors_allowed_origins,
+    get_recovery_policy_summary,
     get_runtime_target,
     is_cloud_run_runtime,
     uses_cloud_sql_unix_socket,
@@ -75,6 +85,94 @@ from .schemas import (
 )
 
 
+LOGGER = logging.getLogger("materials.api")
+_VALID_ROLES = {"admin", "operator", "viewer"}
+_ROLE_PRIORITY = {"viewer": 1, "operator": 2, "admin": 3}
+
+
+class _StructuredLogFormatter(logging.Formatter):
+    def format(self, record: logging.LogRecord) -> str:
+        payload: dict[str, Any] = {
+            "severity": record.levelname,
+            "message": record.getMessage(),
+            "logger": record.name,
+            "timestamp": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
+        }
+        structured_fields = getattr(record, "structured_fields", None)
+        if isinstance(structured_fields, dict):
+            payload.update(structured_fields)
+        return json.dumps(payload, ensure_ascii=True, default=str)
+
+
+def _configure_logging() -> None:
+    target_config = (STRUCTURED_LOGGING, LOG_LEVEL.lower())
+    if getattr(LOGGER, "_materials_config", None) == target_config:
+        return
+    handler = logging.StreamHandler()
+    if STRUCTURED_LOGGING:
+        handler.setFormatter(_StructuredLogFormatter())
+    else:
+        handler.setFormatter(logging.Formatter("%(levelname)s %(message)s"))
+    LOGGER.handlers.clear()
+    LOGGER.addHandler(handler)
+    LOGGER.setLevel(getattr(logging, LOG_LEVEL.upper(), logging.INFO))
+    LOGGER.propagate = False
+    setattr(LOGGER, "_materials_config", target_config)
+
+
+def _log_event(level: int, message: str, **structured_fields: Any) -> None:
+    LOGGER.log(level, message, extra={"structured_fields": structured_fields})
+
+
+def _normalize_role(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = value.strip().lower()
+    if not normalized:
+        return None
+    if normalized not in _VALID_ROLES:
+        raise AppError(
+            code="INVALID_ROLE_HEADER",
+            message="X-User-Role must be one of admin, operator, or viewer",
+            status_code=422,
+        )
+    return normalized
+
+
+def _request_user_role(request: Request) -> str | None:
+    user = getattr(request.state, "user", None)
+    if not isinstance(user, dict):
+        return None
+    role = user.get("role")
+    return str(role).strip().lower() if role else None
+
+
+def _role_satisfies(actual_role: str | None, required_role: str) -> bool:
+    if actual_role is None:
+        return False
+    return _ROLE_PRIORITY.get(actual_role, 0) >= _ROLE_PRIORITY[required_role]
+
+
+def _db_ready(database_url: str | None) -> tuple[bool, str | None]:
+    conn = None
+    try:
+        conn = get_connection(database_url)
+        row = conn.execute("SELECT 1 AS ready").fetchone()
+        return bool(row and int(row["ready"]) == 1), None
+    except Exception as exc:
+        _log_event(
+            logging.WARNING,
+            "Readiness database check failed",
+            probe_path="/readyz",
+            error_type=exc.__class__.__name__,
+            error_message=str(exc),
+        )
+        return False, "DATABASE_UNAVAILABLE"
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def ok(data: Any, pagination: dict[str, Any] | None = None) -> dict[str, Any]:
     payload: dict[str, Any] = {"status": "ok", "data": data}
     if pagination is not None:
@@ -99,6 +197,13 @@ def file_attachment(filename: str, content: bytes) -> Response:
     )
 
 
+def _without_missing_item_locations(data: dict[str, Any]) -> dict[str, Any]:
+    sanitized = dict(data)
+    sanitized.pop("missing_csv_path", None)
+    sanitized.pop("missing_storage_ref", None)
+    return sanitized
+
+
 def _parse_optional_json_form(value: str | None, field_name: str) -> Any | None:
     if value is None or not str(value).strip():
         return None
@@ -113,9 +218,10 @@ def _parse_optional_json_form(value: str | None, field_name: str) -> Any | None:
 
 
 def _public_order_import_result(result: dict[str, Any]) -> dict[str, Any]:
-    payload = dict(result)
-    payload.pop("missing_csv_path", None)
-    payload.pop("missing_storage_ref", None)
+    payload = _without_missing_item_locations(result)
+    import_result = payload.get("import_result")
+    if isinstance(import_result, dict):
+        payload["import_result"] = _without_missing_item_locations(import_result)
     return payload
 
 
@@ -154,12 +260,41 @@ def _db_dep(app: FastAPI):
 
 def _optional_role_dep():
     def _get_role(x_user_role: str | None = Header(default=None, alias="X-User-Role")) -> str | None:
-        if x_user_role is None:
-            return None
-        normalized = x_user_role.strip().lower()
-        return normalized or None
+        return _normalize_role(x_user_role)
 
     return _get_role
+
+
+def _admin_role_dep():
+    def _require_admin(request: Request):
+        auth_mode = get_auth_mode()
+        if auth_mode == AUTH_MODE_NONE or getattr(request.state, "bootstrap_allowed", False):
+            return
+        actual_role = _request_user_role(request)
+        if _role_satisfies(actual_role, "admin"):
+            return
+        details = {
+            "required_role": "admin",
+            "actual_role": actual_role,
+            "auth_mode": auth_mode,
+            "path": request.url.path,
+        }
+        if auth_mode == AUTH_MODE_DRY_RUN:
+            _log_event(
+                logging.WARNING,
+                "RBAC dry-run would deny request",
+                event="authorization.dry_run_denied",
+                **details,
+            )
+            return
+        raise AppError(
+            code="FORBIDDEN",
+            message="Admin role is required for this endpoint",
+            status_code=403,
+            details=details,
+        )
+
+    return Depends(_require_admin)
 
 
 def cleanup_unreg_file_with_retry(path_str: str) -> None:
@@ -187,6 +322,7 @@ def _allows_first_user_bootstrap(request: Request) -> bool:
 class UserIdentityMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         request.state.user = None
+        request.state.bootstrap_allowed = False
         username = (request.headers.get("X-User-Name") or "").strip()
         if _is_read_only_request(request) and not username:
             return await call_next(request)
@@ -196,6 +332,7 @@ class UserIdentityMiddleware(BaseHTTPMiddleware):
                 conn = get_connection(request.app.state.database_url)
                 try:
                     if not service.has_active_users(conn):
+                        request.state.bootstrap_allowed = True
                         return await call_next(request)
                 finally:
                     conn.close()
@@ -234,6 +371,56 @@ class UserIdentityMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        request_id = (request.headers.get("X-Request-Id") or "").strip() or uuid4().hex
+        request.state.request_id = request_id
+        start = perf_counter()
+        response: Response | None = None
+        try:
+            response = await call_next(request)
+        except Exception as exc:
+            duration_ms = round((perf_counter() - start) * 1000, 2)
+            _log_event(
+                logging.ERROR,
+                "Unhandled request exception",
+                event="request.unhandled_exception",
+                request_id=request_id,
+                method=request.method,
+                path=request.url.path,
+                query=str(request.url.query),
+                duration_ms=duration_ms,
+                user=getattr(getattr(request.state, "user", None), "get", lambda *_: None)("username"),
+                role=_request_user_role(request),
+                exception_type=exc.__class__.__name__,
+            )
+            raise
+        duration_ms = round((perf_counter() - start) * 1000, 2)
+        response.headers["X-Request-Id"] = request_id
+        status_code = response.status_code
+        severity = logging.INFO
+        if status_code >= 500:
+            severity = logging.ERROR
+        elif status_code >= 400:
+            severity = logging.WARNING
+        user = getattr(request.state, "user", None)
+        _log_event(
+            severity,
+            "Request completed",
+            event="request.completed",
+            request_id=request_id,
+            method=request.method,
+            path=request.url.path,
+            query=str(request.url.query),
+            status_code=status_code,
+            duration_ms=duration_ms,
+            user=None if not isinstance(user, dict) else user.get("username"),
+            role=_request_user_role(request),
+            auth_mode=get_auth_mode(),
+        )
+        return response
+
+
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         try:
@@ -267,13 +454,32 @@ class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
 
 
 def create_app(database_url: str | None = None, db_path: str | None = None) -> FastAPI:
+    _configure_logging()
     cors_allowed_origins = get_cors_allowed_origins()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        _log_event(
+            logging.INFO,
+            "Application startup",
+            event="application.startup",
+            runtime_target=get_runtime_target(),
+            cloud_run_mode=is_cloud_run_runtime(),
+            migration_strategy="startup" if AUTO_MIGRATE_ON_STARTUP else "external",
+            structured_logging=STRUCTURED_LOGGING,
+        )
         if AUTO_MIGRATE_ON_STARTUP:
             init_db(database_url=app.state.database_url)
-        yield
+        try:
+            yield
+        finally:
+            _log_event(
+                logging.INFO,
+                "Application shutdown",
+                event="application.shutdown",
+                runtime_target=get_runtime_target(),
+                cloud_run_mode=is_cloud_run_runtime(),
+            )
 
     app = FastAPI(
         title="Optical Component Inventory Management API",
@@ -291,6 +497,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
     )
     app.add_middleware(RequestSizeLimitMiddleware)
     app.add_middleware(UserIdentityMiddleware)
+    app.add_middleware(RequestLoggingMiddleware)
 
     @app.exception_handler(AppError)
     async def app_error_handler(_, exc: AppError):
@@ -322,10 +529,41 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
 
     db = Depends(_db_dep(app))
     role = Depends(_optional_role_dep())
+    admin_only = _admin_role_dep()
+
+    @app.get("/healthz")
+    def liveness_probe():
+        return ok({"alive": True, "runtime_target": get_runtime_target()})
+
+    @app.get("/readyz")
+    def readiness_probe():
+        ready, error_code = _db_ready(app.state.database_url)
+        database_check: dict[str, Any] = {"ready": ready}
+        if error_code:
+            database_check["error_code"] = error_code
+        payload = {
+            "ready": ready,
+            "runtime_target": get_runtime_target(),
+            "checks": {"database": database_check},
+        }
+        if ready:
+            return ok(payload)
+        return JSONResponse(
+            status_code=503,
+            content={
+                "status": "error",
+                "error": {
+                    "code": "NOT_READY",
+                    "message": "Application is not ready to serve traffic",
+                    "details": payload,
+                },
+            },
+        )
 
     @app.get("/api/health")
     def healthcheck():
         storage_summary = storage.get_storage_backend_summary()
+        recovery_policy = get_recovery_policy_summary()
         return ok(
             {
                 "healthy": True,
@@ -355,7 +593,12 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
                     "instance_connection_name_configured": bool(INSTANCE_CONNECTION_NAME),
                     "database_url_uses_unix_socket": uses_cloud_sql_unix_socket(app.state.database_url),
                 },
+                "readiness": {
+                    "probe_path": "/readyz",
+                    "liveness_path": "/healthz",
+                },
                 "storage": storage_summary,
+                "recovery_policy": recovery_policy,
                 "public_urls": {
                     "backend_public_base_url": BACKEND_PUBLIC_BASE_URL or None,
                     "frontend_public_base_url": FRONTEND_PUBLIC_BASE_URL or None,
@@ -369,14 +612,15 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         )
 
     @app.get("/api/auth/capabilities")
-    def get_auth_capabilities(current_role: str | None = role):
+    def get_auth_capabilities(request: Request, current_role: str | None = role):
         auth_mode = get_auth_mode()
         planned_roles = ["admin", "operator", "viewer"]
-        effective_role = current_role or "operator"
+        effective_role = _request_user_role(request) or current_role or "operator"
         return ok(
             {
                 "auth_mode": auth_mode,
-                "auth_enforced": auth_mode != "none",
+                "auth_enforced": auth_mode == AUTH_MODE_ENFORCED,
+                "auth_dry_run": auth_mode == AUTH_MODE_DRY_RUN,
                 "planned_roles": planned_roles,
                 "effective_role": effective_role,
                 "mutation_identity": {
@@ -388,6 +632,11 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
                         "future role/setting management",
                     ],
                     "operator_scope": "normal business mutations, imports, exports, and planning workflows",
+                },
+                "endpoint_policy": {
+                    "health": "anonymous",
+                    "auth_capabilities": "anonymous",
+                    "users": "admin_when_rbac_enabled",
                 },
             }
         )
@@ -406,7 +655,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         return file_attachment(filename, content)
 
     @app.get("/api/users")
-    def get_users(include_inactive: bool = False, conn= db):
+    def get_users(include_inactive: bool = False, _=admin_only, conn= db):
         return ok(service.list_users(conn, include_inactive=include_inactive))
 
     @app.get("/api/users/me")
@@ -417,23 +666,23 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         return ok(user)
 
     @app.get("/api/users/{user_id}")
-    def get_user(user_id: int, conn= db):
+    def get_user(user_id: int, _=admin_only, conn= db):
         return ok(service.get_user(conn, user_id))
 
     @app.post("/api/users")
-    def post_user(body: UserCreate, conn= db):
+    def post_user(body: UserCreate, _=admin_only, conn= db):
         result = service.create_user(conn, body.model_dump())
         conn.commit()
         return ok(result)
 
     @app.put("/api/users/{user_id}")
-    def put_user(user_id: int, body: UserUpdate, conn= db):
+    def put_user(user_id: int, body: UserUpdate, _=admin_only, conn= db):
         result = service.update_user(conn, user_id, body.model_dump(exclude_unset=True))
         conn.commit()
         return ok(result)
 
     @app.delete("/api/users/{user_id}")
-    def delete_user(user_id: int, conn= db):
+    def delete_user(user_id: int, _=admin_only, conn= db):
         result = service.deactivate_user(conn, user_id)
         conn.commit()
         return ok(result)
@@ -805,6 +1054,18 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
     @app.get("/api/orders/import-jobs/{import_job_id}")
     def get_order_import_job(import_job_id: int, conn= db):
         return ok(service.get_order_import_job(conn, import_job_id))
+
+    @app.post("/api/orders/import-jobs/{import_job_id}/undo")
+    def post_undo_order_import_job(import_job_id: int, conn= db):
+        result = service.undo_orders_import_job(conn, import_job_id)
+        conn.commit()
+        return ok(result)
+
+    @app.post("/api/orders/import-jobs/{import_job_id}/redo")
+    def post_redo_order_import_job(import_job_id: int, conn= db):
+        result = service.redo_orders_import_job(conn, import_job_id)
+        conn.commit()
+        return ok(_public_order_import_result(result))
 
     @app.get("/api/orders/{order_id}")
     def get_order(order_id: int, conn= db):

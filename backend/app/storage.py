@@ -163,11 +163,20 @@ def get_storage_backend_summary() -> dict[str, object]:
         "archives": config.get_storage_prefix("archives"),
         "exports": config.get_storage_prefix("exports"),
     }
+    retention_days = {
+        "staging": config.GCS_RETENTION_STAGING_DAYS,
+        "exports": config.GCS_RETENTION_EXPORTS_DAYS,
+        "artifacts": config.GCS_RETENTION_ARTIFACTS_DAYS,
+        "archives": None,
+    }
     return {
         "backend": backend,
         "bucket": config.GCS_BUCKET or None,
         "object_prefix": config.GCS_OBJECT_PREFIX or None,
         "object_prefixes": object_prefixes,
+        "retention_days": retention_days,
+        "versioning_policy_required": True,
+        "restore_strategy": "restore_to_recovery_prefix_then_validate",
         "cloud_run_ready": backend == config.STORAGE_BACKEND_GCS and bool(config.GCS_BUCKET),
         "implementation_status": "ready",
     }

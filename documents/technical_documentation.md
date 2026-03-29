@@ -29,6 +29,7 @@ This document explains the implemented architecture of the Materials Management 
   - resolved users are stored in `request.state.user`
   - database-side audit triggers populate `created_by` / `updated_by` / `performed_by` where supported
   - bootstrap exception: `POST /api/users` is allowed without `X-User-Name` only while the system has zero active users, so the first user can be created from `/users`
+  - when `INVENTORY_AUTH_MODE=rbac_enforced`, `/api/users*` is restricted to `admin`; `rbac_dry_run` logs would-be denials without blocking
   - this remains an explicit temporary Cloud Run rollout compromise, not the intended long-term public-cloud trust boundary
 - Frontend user administration at `/users` page.
   - `GET /api/users` provides the active-user feed for the global picker
@@ -44,6 +45,8 @@ This document explains the implemented architecture of the Materials Management 
   - `quotation_document_url` is required and validated as `https://...`
   - `purchase_order_document_url` is optional and also validated as `https://...`
   - the Orders UI renders those values as openable document links instead of filesystem-style path text
+  - order import jobs now persist `request_metadata` so `supplier_id`, `supplier_name`, `default_order_date`, `row_overrides`, and `alias_saves` remain available for inspection and redo
+  - `POST /api/orders/import-jobs/{import_job_id}/undo` and `POST /api/orders/import-jobs/{import_job_id}/redo` now provide the same safety-first operator pattern already used by item imports
 - Generated artifact delivery for batch-produced missing-item register CSVs:
   - `GET /api/artifacts`, `GET /api/artifacts/{artifact_id}`, `GET /api/artifacts/{artifact_id}/download`
   - storage-backed registry now goes through `backend/app/storage.py`
@@ -66,7 +69,12 @@ This document explains the implemented architecture of the Materials Management 
   - upload/concurrency guardrails
   - Cloud SQL strategy/configuration presence
   - storage backend summary and public-url metadata
+  - repo-visible recovery policy metadata for Cloud SQL PITR, GCS retention/versioning, and post-restore validation expectations
   - temporary mutation-identity posture
+- dedicated probe endpoints now separate lightweight liveness from dependency readiness:
+  - `GET /healthz` for fast process liveness
+  - `GET /readyz` for DB-backed readiness checks suitable for Cloud Run
+- backend request/application logging now supports structured JSON output via `STRUCTURED_LOGGING`, including request IDs, latency, status, auth mode, and startup/shutdown events.
 
 ## Operating Profile (Confirmed)
 
@@ -167,6 +175,7 @@ flowchart LR
 4. Reversible and inspectable bulk imports.
    Item imports store job and row-level effects (`import_jobs`, `import_job_effects`) so undo/redo can be state-checked and safe.
    Manual order CSV imports now also write `import_jobs` / `import_job_effects` records (`import_type='orders'`) so missing-item outcomes and created-order rows are inspectable without relying on folder state.
+   Order undo/redo now also snapshots quotation and supplier-alias side effects, and it refuses to undo when imported orders, quotations, or aliases no longer match the recorded post-import state.
    Backend pytest fixtures remap workspace import/export roots into per-test temporary directories so import-related tests cannot leak CSV artifacts into the real repository workspace.
 5. Migration-safe manual project assignment retention.
    DB migration backfills `orders.project_id_manual` for legacy rows that have `project_id` but no ORDERED RFQ ownership, preventing RFQ unlink synchronization from clearing historical manual assignments.

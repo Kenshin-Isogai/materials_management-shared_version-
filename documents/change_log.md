@@ -2,6 +2,26 @@
 
 ### Changed
 
+- Added the next repository-only Cloud Run hardening slice on the backend.
+  - `backend/app/api.py` now exposes `GET /healthz` and `GET /readyz` so Cloud Run can separate fast liveness from DB-backed readiness
+  - backend startup/shutdown and per-request events now emit structured log payloads when `STRUCTURED_LOGGING=1`, including request IDs, latency, status code, and auth mode
+  - `/api/health` remains a posture/contract endpoint and now points operators to the dedicated probe paths instead of attempting DB readiness inline
+- Tightened the first-pass RBAC boundary for admin surfaces.
+  - `/api/users*` is now admin-only when `INVENTORY_AUTH_MODE=rbac_enforced`
+  - `rbac_dry_run` logs would-be denials without blocking traffic
+  - bootstrap creation of the first active user remains available when no active users exist
+- Synced rollout/current-state documentation with the new probe, logging, and partial-RBAC behavior.
+- Hardened manual order import recoverability around the shared import-job model.
+  - `backend/app/service.py` now stores order-import `request_metadata` so redo can replay `supplier_id`, `supplier_name`, `default_order_date`, `row_overrides`, and `alias_saves`
+  - order import jobs now support `undo` and `redo`, including quotation and supplier-alias recovery plus conflict detection when imported rows were modified later
+  - added Alembic revision `008_import_job_request_metadata` for the new `import_jobs.request_metadata` column
+- Organized the repo-side GCS lifecycle and Cloud SQL backup/restore operating contract in the rollout docs.
+  - `documents/gcp_cloud_run_rollout/cloud_run_deployment_runbook.md` now records the expected prefix/retention contract plus DB/object restore decision rules
+  - `documents/gcp_cloud_run_rollout/migration_checklist.md` and `security_and_cost_considerations.md` now distinguish documented recovery policy from still-pending live cloud enablement
+- Extended the repo-side PITR preparation into backend diagnostics.
+  - `/api/health` now includes a `recovery_policy` summary covering required Cloud SQL backup/PITR posture, GCS retention/versioning expectations, and post-restore validation targets
+  - storage backend diagnostics now expose the retention/versioning and recovery-prefix contract directly
+
 - Continued the Cloud Run cleanup on the frontend/backend runtime contract.
   - `frontend/nginx.conf` is now cloud-first and no longer proxies `/api` to `backend:8000`
   - added `frontend/nginx.local-proxy.conf` so local Docker Compose can keep same-origin `/api` behavior without preserving that proxy assumption in the built image
@@ -27,8 +47,13 @@
 ### Tests
 
 - Backend:
+  - `uv run --project backend python -m pytest backend/tests/test_runtime_config.py --import-mode=importlib -q`
+  - `uv run --project backend python -m pytest backend/tests/test_runtime_config.py backend/tests/test_api_integration.py -k "test_liveness_and_readiness_endpoints or test_readiness_endpoint_reports_unavailable_database or test_auth_capabilities_endpoint_defaults_and_header or test_users_endpoint_requires_admin_role_when_rbac_is_enforced or test_users_endpoint_allows_anonymous_read or test_health_endpoint" --import-mode=importlib -x -vv`
   - `uv run python -m pytest tests/test_runtime_config.py tests/test_order_import_paths.py`
   - `uv run --project backend python -m pytest --import-mode=importlib backend/tests/test_document_url_migration.py`
+  - `uv run --project backend python -m pytest backend/tests/test_document_url_migration.py -q --import-mode=importlib -k "undo or manual_order_import or generated_artifact_metadata_hides_workspace_paths or preview_rejects_non_https_document_url"`
+  - `uv run --project backend python -m pytest backend/tests/test_service_transactions.py -q --import-mode=importlib -k "test_order_import_job_tracks_undecodable_csv_failures or test_order_import_job_rolls_back_partial_changes_on_unexpected_error"`
+  - `uv run --project backend python -m pytest backend/tests/test_runtime_config.py backend/tests/test_api_integration.py -k "test_health_endpoint or test_cloud_run_runtime_defaults_to_tmp_app_data_root_and_port or test_runtime_config_honors_explicit_pool_and_cors_settings" --import-mode=importlib -q`
   - `docker compose -f docker-compose.test.yml up -d db-test`
 - Frontend:
   - `npm run build`

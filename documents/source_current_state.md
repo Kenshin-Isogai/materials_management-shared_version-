@@ -1,6 +1,6 @@
 # Source Current State
 
-Last updated: 2026-03-28 (JST)
+Last updated: 2026-03-29 (JST)
 
 ## 1. System Snapshot
 
@@ -65,8 +65,14 @@ Last updated: 2026-03-28 (JST)
   - write methods require `X-User-Name`
   - bootstrap exception: when there are zero active users, `POST /api/users` is allowed without a selected header user so the first browser user can be created
   - basic user endpoints now exist under `/api/users`
-  - `GET /api/users` returns active picker rows; `GET /api/users?include_inactive=true` returns the full management list
+  - `GET /api/users` returns active picker rows; `GET /api/users?include_inactive=true` returns the full management list while auth mode is `none`
+  - when `INVENTORY_AUTH_MODE=rbac_enforced`, `/api/users*` becomes admin-only; `rbac_dry_run` keeps traffic flowing but logs would-be denials
   - `/api/auth/capabilities` and `/api/health` now both describe this as a temporary rollout identity model
+- Probe/observability posture:
+  - `GET /healthz` is the lightweight liveness endpoint
+  - `GET /readyz` performs DB-backed readiness checks
+  - request logs now emit request IDs, latency, status code, auth mode, and startup/shutdown events; JSON output is enabled by `STRUCTURED_LOGGING`
+  - `GET /api/health` now also exposes a repo-side `recovery_policy` summary describing the expected Cloud SQL backup/PITR contract, GCS retention/versioning contract, and post-restore validation checklist
 - Planning snapshot hot paths now batch project/requirement loads, assembly component expansion (including legacy assembly-only project requirements), and per-item inventory totals; item planning context further narrows expansion to the requested item.
 - Current auth posture:
   - no enforced auth for PoC
@@ -82,7 +88,7 @@ Last updated: 2026-03-28 (JST)
   - primary procurement persistence via `procurement_batches` / `procurement_lines`
   - temporary legacy `rfq_batches` / `rfq_lines` and `purchase_candidates` compatibility remains during migration
   - supplier item aliases and category aliases
-  - import jobs/effects for reversible item imports
+  - import jobs/effects for reversible item imports and recoverable manual order imports
   - transaction log with undo chain
 - Referential integrity and checks are enforced with foreign keys, constraints, indexes, and order validation triggers.
 - DB migration now backfills legacy `orders.project_id_manual` for rows with `project_id` and no ORDERED RFQ ownership, preserving historical manual project linkage during RFQ unlink sync.
@@ -120,6 +126,9 @@ Last updated: 2026-03-28 (JST)
   - `POST /api/orders/import` returns `import_job_id`
   - `GET /api/orders/import-jobs` lists `import_type='orders'` jobs
   - `GET /api/orders/import-jobs/{import_job_id}` returns row-level effects such as `order_created`, `order_missing_item`, and `order_duplicate_quotation`
+  - `POST /api/orders/import-jobs/{import_job_id}/undo` safely removes imported orders and restores/deletes related quotations and supplier aliases when current state still matches the recorded snapshots
+  - `POST /api/orders/import-jobs/{import_job_id}/redo` replays the original CSV plus stored request metadata such as `supplier_id`, `supplier_name`, `default_order_date`, `row_overrides`, and `alias_saves`
+  - order import jobs now persist `request_metadata` in `import_jobs`, so preview-confirm decisions remain replayable and operator-auditable
   - job status uses `ok` / `partial` / `error`, while the immediate import response can still return `status="missing_items"`
 - Generated missing-item register CSVs are now browser-downloadable managed artifacts.
   - backend exposes `/api/artifacts`, `/api/artifacts/{artifact_id}`, and `/api/artifacts/{artifact_id}/download`

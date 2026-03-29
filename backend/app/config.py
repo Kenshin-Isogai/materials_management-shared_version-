@@ -11,6 +11,10 @@ RUNTIME_TARGET_LOCAL = "local"
 RUNTIME_TARGET_CLOUD_RUN = "cloud_run"
 STORAGE_BACKEND_LOCAL = "local"
 STORAGE_BACKEND_GCS = "gcs"
+RECOVERY_POLICY_STATUS = "documented_not_verified"
+GCS_RETENTION_STAGING_DAYS = 7
+GCS_RETENTION_EXPORTS_DAYS = 30
+GCS_RETENTION_ARTIFACTS_DAYS = 90
 
 
 def get_runtime_target() -> str:
@@ -84,6 +88,7 @@ DATABASE_URL = os.getenv(
 APP_HOST = os.getenv("APP_HOST", "0.0.0.0")
 APP_PORT = int(os.getenv("PORT") or os.getenv("APP_PORT", "8000"))
 LOG_LEVEL = os.getenv("LOG_LEVEL", "info")
+STRUCTURED_LOGGING = _env_flag("STRUCTURED_LOGGING", default=is_cloud_run_runtime())
 WEB_CONCURRENCY = int(os.getenv("WEB_CONCURRENCY", "4"))
 AUTO_MIGRATE_ON_STARTUP = _env_flag("AUTO_MIGRATE_ON_STARTUP", default=not is_cloud_run_runtime())
 DB_POOL_SIZE = _env_int("DB_POOL_SIZE", 5)
@@ -126,6 +131,43 @@ def get_storage_prefix(*parts: str) -> str:
 def uses_cloud_sql_unix_socket(database_url: str | None = None) -> bool:
     normalized = (database_url or DATABASE_URL).lower()
     return "/cloudsql/" in normalized or "@/" in normalized
+
+
+def get_recovery_policy_summary() -> dict[str, object]:
+    return {
+        "status": RECOVERY_POLICY_STATUS,
+        "cloud_sql": {
+            "backup_policy_required": True,
+            "pitr_required_environments": ["staging", "prod"],
+            "restore_strategy": "restore_to_new_instance_then_cut_over",
+            "instance_connection_name_configured": bool(INSTANCE_CONNECTION_NAME),
+            "unix_socket_contract": True,
+            "acceptance_criteria": [
+                "automated_backups_enabled",
+                "pitr_enabled_for_staging_and_prod",
+                "restore_rehearsed_before_production_cutover",
+            ],
+        },
+        "object_storage": {
+            "bucket_per_environment": True,
+            "versioning_policy_required": True,
+            "restore_strategy": "restore_to_recovery_prefix_then_validate",
+            "retention_days": {
+                "staging": GCS_RETENTION_STAGING_DAYS,
+                "exports": GCS_RETENTION_EXPORTS_DAYS,
+                "artifacts": GCS_RETENTION_ARTIFACTS_DAYS,
+                "archives": None,
+            },
+        },
+        "post_restore_validation": [
+            "/healthz",
+            "/readyz",
+            "/api/health",
+            "import_job_listing_and_detail",
+            "artifact_download_flow",
+            "mutation_with_active_user",
+        ],
+    }
 
 
 def get_cors_allowed_origins() -> list[str]:

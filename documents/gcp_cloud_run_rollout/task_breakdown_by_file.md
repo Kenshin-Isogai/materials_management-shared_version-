@@ -1,65 +1,46 @@
-# GCP Rollout Task Breakdown by File
+# Remaining Repository Surfaces
 
 ## Purpose
 
-This file maps the remaining rollout work to concrete repository surfaces.
+This file lists the repository surfaces that still matter if additional hardening work is needed.
 
-Use this file for "what changes where".
+Most migration-oriented file-by-file cleanup has already been completed and is intentionally not repeated here.
 
-Use `implementation_plan.md` for sequencing and `migration_checklist.md` for status.
+## Runtime and deployment surfaces
 
-## 1. High-priority files that can be changed now
+| File | Why it still matters |
+|---|---|
+| `backend\app\api.py` | Health/auth signaling, middleware posture, and request guardrails |
+| `backend\app\config.py` | Runtime target, DB pool, CORS, upload, and storage settings |
+| `backend\app\storage.py` | Durable object boundary for GCS-backed operation |
+| `backend\app\db.py` | engine configuration and migration/bootstrap behavior |
+| `backend\Dockerfile` | backend process model and Cloud Run image behavior |
+| `frontend\Dockerfile` | build-time API base handling |
+| `frontend\nginx.conf` | static delivery contract for the Cloud Run frontend image |
+| `docker-compose.yml` | local convenience stack; must remain clearly distinct from cloud production assumptions |
 
-| File | Why it matters | Remaining action |
-|---|---|---|
-| `frontend\nginx.conf` | Defines the built frontend image contract | Keep the cloud-first no-proxy contract in place and avoid reintroducing backend-container assumptions |
-| `frontend\Dockerfile` | Bakes `VITE_API_BASE` at build time | Keep the build-time contract explicit and document that production expects an absolute backend URL |
-| `frontend\src\lib\api.ts` | Defines the browser API base behavior and mutation header injection | Keep the absolute `/api` contract explicit and keep the temporary `X-User-Name` behavior centralized |
-| `docker-compose.yml` | Encodes the local/shared-server stack contract | Keep local convenience startup separate from the Cloud Run migration contract |
-| `backend\app\service.py` | Still contains a local-only artifact compatibility fallback | Decide whether to keep or fully remove the remaining local raw-path compatibility behavior |
-| `backend\app\order_import_paths.py` | Now holds only the order path helpers still used by active import flows | Keep the module limited to active path rules and avoid reviving unused scan helpers |
-| `backend\app\config.py` | Defines runtime posture and path roots | Keep local path variables explicitly local-only in cloud documentation and avoid implying durable cloud use |
+## Recovery and operator-flow surfaces
 
-## 2. Files that mainly need documentation alignment
+| File | Why it still matters |
+|---|---|
+| `backend\app\service.py` | import-job recovery behavior, artifact/archive handling, and business-rule rollback limits |
+| `backend\tests\test_runtime_config.py` | runtime contract regression coverage |
+| `backend\tests\test_storage.py` | GCS/local storage boundary regression coverage |
 
-| File | Why it matters | Remaining action |
-|---|---|---|
-| `documents\gcp_cloud_run_rollout\README.md` | Entry point for the whole doc set | Keep reading order and file responsibilities clear |
-| `documents\gcp_cloud_run_rollout\implementation_plan.md` | Tracks what can be done now vs later | Keep repository work and project-dependent work separated |
-| `documents\gcp_cloud_run_rollout\migration_checklist.md` | Readiness tracker | Keep statuses aligned with actual code and packaging state |
-| `documents\gcp_cloud_run_rollout\environment_and_runtime_matrix.md` | Env-var contract | Keep placeholders separate from resource-specific values not yet known |
-| `documents\gcp_cloud_run_rollout\cloud_run_deployment_runbook.md` | Deployment instructions | Keep it explicitly framed as post-project work |
+## Documentation surfaces
 
-## 3. Files that mostly wait on a real GCP project
+| File | Why it still matters |
+|---|---|
+| `documents\gcp_cloud_run_rollout\migration_checklist.md` | production-readiness status |
+| `documents\gcp_cloud_run_rollout\cloud_run_deployment_runbook.md` | deployment/update/rollback/recovery procedure |
+| `documents\gcp_cloud_run_rollout\environment_and_runtime_matrix.md` | environment contract |
+| `documents\gcp_cloud_run_rollout\security_and_cost_considerations.md` | risk and operating guardrails |
 
-| File | Why it matters | Project-dependent work |
-|---|---|---|
-| `documents\gcp_cloud_run_rollout\cloud_run_deployment_runbook.md` | Uses real resource names | Fill in actual service names, URLs, Cloud SQL instance, bucket, and secrets |
-| `.env.example` | Example values | Add final real example patterns once resource naming is decided |
-| `README.md` | Repository-level deployment guidance | Update with finalized real deployment commands after the first real GCP environment exists |
+## If more code hardening is needed
 
-## 4. Concrete refactor targets
+The most likely remaining code work would be in these areas:
 
-### Frontend delivery contract
-
-- keep backend proxying assumptions out of `frontend\nginx.conf`
-- keep `VITE_API_BASE` absolute in production
-- ensure docs consistently say the frontend is built per environment
-
-### Backend migration contract
-
-- keep `AUTO_MIGRATE_ON_STARTUP=0` as the Cloud Run norm
-- keep Alembic execution in a separate deployment step
-- avoid treating compose startup as the production model
-
-### Backend filesystem cleanup
-
-- review `backend\app\service.py` for `legacy_path` fallback
-- keep `backend\app\order_import_paths.py` limited to active path-validation helpers only
-- keep temporary local disk only for request-scoped work
-
-## 5. Out of scope for this first documentation pass
-
-- implementing stronger production authentication
-- choosing final GCP resource names before a project exists
-- validating against real Cloud Run, Cloud SQL, and GCS resources
+- stronger production authentication
+- restricting diagnostic/admin endpoint exposure
+- improving order-import recoverability
+- extending operational telemetry
