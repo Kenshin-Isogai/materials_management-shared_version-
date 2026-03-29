@@ -153,14 +153,21 @@ def _role_satisfies(actual_role: str | None, required_role: str) -> bool:
     return _ROLE_PRIORITY.get(actual_role, 0) >= _ROLE_PRIORITY[required_role]
 
 
-def _db_ready(database_url: str | None) -> tuple[bool, dict[str, Any] | None]:
+def _db_ready(database_url: str | None) -> tuple[bool, str | None]:
     conn = None
     try:
         conn = get_connection(database_url)
         row = conn.execute("SELECT 1 AS ready").fetchone()
         return bool(row and int(row["ready"]) == 1), None
     except Exception as exc:
-        return False, {"type": exc.__class__.__name__, "message": str(exc)}
+        _log_event(
+            logging.WARNING,
+            "Readiness database check failed",
+            probe_path="/readyz",
+            error_type=exc.__class__.__name__,
+            error_message=str(exc),
+        )
+        return False, "DATABASE_UNAVAILABLE"
     finally:
         if conn is not None:
             conn.close()
@@ -207,6 +214,12 @@ def _public_order_import_result(result: dict[str, Any]) -> dict[str, Any]:
     payload = dict(result)
     payload.pop("missing_csv_path", None)
     payload.pop("missing_storage_ref", None)
+    import_result = payload.get("import_result")
+    if isinstance(import_result, dict):
+        nested_payload = dict(import_result)
+        nested_payload.pop("missing_csv_path", None)
+        nested_payload.pop("missing_storage_ref", None)
+        payload["import_result"] = nested_payload
     return payload
 
 
@@ -522,11 +535,14 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
 
     @app.get("/readyz")
     def readiness_probe():
-        ready, error = _db_ready(app.state.database_url)
+        ready, error_code = _db_ready(app.state.database_url)
+        database_check: dict[str, Any] = {"ready": ready}
+        if error_code:
+            database_check["error_code"] = error_code
         payload = {
             "ready": ready,
             "runtime_target": get_runtime_target(),
-            "checks": {"database": {"ready": ready, "error": error}},
+            "checks": {"database": database_check},
         }
         if ready:
             return ok(payload)

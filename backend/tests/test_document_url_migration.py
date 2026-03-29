@@ -4,6 +4,8 @@ import csv
 import json
 from io import StringIO
 
+from app import service
+
 def _make_orders_csv(rows: list[dict[str, str]]) -> bytes:
     output = StringIO()
     writer = csv.DictWriter(
@@ -349,6 +351,37 @@ def test_order_import_job_undo_and_redo_flow(client):
     aliases_after_redo = client.get(f"/api/suppliers/{supplier['supplier_id']}/aliases")
     assert aliases_after_redo.status_code == 200
     assert len(aliases_after_redo.json()["data"]) == 1
+
+
+def test_order_import_job_redo_hides_nested_missing_item_paths(client, monkeypatch):
+    def _fake_redo_orders_import_job(_conn, import_job_id: int):
+        return {
+            "source_job_id": import_job_id,
+            "redo_job_id": import_job_id + 1,
+            "import_result": {
+                "status": "missing_items",
+                "missing_csv_path": "/tmp/private-missing-items.csv",
+                "missing_storage_ref": "local://generated_artifacts/private.csv",
+                "missing_artifact": {
+                    "artifact_id": "artifact-123",
+                    "detail_path": "/api/artifacts/artifact-123",
+                    "download_path": "/api/artifacts/artifact-123/download",
+                },
+            },
+        }
+
+    monkeypatch.setattr(service, "redo_orders_import_job", _fake_redo_orders_import_job)
+
+    response = client.post("/api/orders/import-jobs/41/redo")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["source_job_id"] == 41
+    assert payload["redo_job_id"] == 42
+    assert payload["import_result"]["status"] == "missing_items"
+    assert "missing_csv_path" not in payload["import_result"]
+    assert "missing_storage_ref" not in payload["import_result"]
+    assert payload["import_result"]["missing_artifact"]["artifact_id"] == "artifact-123"
 
 
 def test_order_import_job_undo_blocks_when_order_changed_after_import(client):
