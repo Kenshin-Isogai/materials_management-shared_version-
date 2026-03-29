@@ -48,6 +48,10 @@ frontend/node_modules/
 frontend/dist/
 frontend/.vite/
 frontend/tsconfig.tsbuildinfo
+frontend/test-results/
+frontend/*results*.txt
+frontend/crud_*.txt
+frontend/test_out.txt
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
