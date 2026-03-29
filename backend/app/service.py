@@ -1156,6 +1156,25 @@ def _get_or_create_quotation(
     return int(cur.lastrowid)
 
 
+def _get_quotation_row_by_id(conn: sqlite3.Connection, quotation_id: int) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT
+            q.quotation_id,
+            q.supplier_id,
+            s.name AS supplier_name,
+            q.quotation_number,
+            q.issue_date,
+            q.quotation_document_url
+        FROM quotations q
+        JOIN suppliers s ON s.supplier_id = q.supplier_id
+        WHERE q.quotation_id = ?
+        """,
+        (quotation_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
 def _decode_csv_bytes(content: bytes) -> str:
     """Decode CSV bytes, falling back to cp932 when the content is not valid UTF-8.
 
@@ -1546,6 +1565,12 @@ def _to_json_text(value: dict[str, Any] | None) -> str | None:
     return json.dumps(value, ensure_ascii=True, sort_keys=True)
 
 
+def _to_json_value_text(value: Any | None) -> str | None:
+    if value is None:
+        return None
+    return json.dumps(value, ensure_ascii=True, sort_keys=True)
+
+
 def _from_json_text(value: str | None) -> dict[str, Any] | None:
     if value is None:
         return None
@@ -1556,6 +1581,15 @@ def _from_json_text(value: str | None) -> dict[str, Any] | None:
     if not isinstance(loaded, dict):
         return None
     return loaded
+
+
+def _from_json_value_text(value: str | None) -> Any | None:
+    if value is None:
+        return None
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return None
 
 
 def _alias_row_by_supplier_and_ordered(
@@ -1593,6 +1627,7 @@ def _record_import_job(
     source_content: str,
     continue_on_error: bool,
     redo_of_job_id: int | None = None,
+    request_metadata: dict[str, Any] | None = None,
 ) -> int:
     cur = conn.execute(
         """
@@ -1600,15 +1635,17 @@ def _record_import_job(
             import_type,
             source_name,
             source_content,
+            request_metadata,
             continue_on_error,
             created_at,
             redo_of_job_id
-        ) VALUES (?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
         """,
         (
             import_type,
             source_name,
             source_content,
+            _to_json_value_text(request_metadata),
             1 if continue_on_error else 0,
             now_jst_iso(),
             redo_of_job_id,
@@ -1714,6 +1751,8 @@ def _finalize_import_job(conn: sqlite3.Connection, *, import_job_id: int, result
 def _normalize_import_job_row(row: sqlite3.Row) -> dict[str, Any]:
     data = dict(row)
     data["continue_on_error"] = bool(data.get("continue_on_error"))
+    request_metadata = _from_json_value_text(data.get("request_metadata"))
+    data["request_metadata"] = request_metadata if isinstance(request_metadata, dict) else None
     return data
 
 
@@ -3045,6 +3084,7 @@ def import_items_from_content_with_job(
         source_content=source_text,
         continue_on_error=continue_on_error,
         redo_of_job_id=redo_of_job_id,
+        request_metadata={"row_overrides": row_overrides or None},
     )
     rows = _load_csv_rows_from_content(content)
     result = import_items_from_rows(
@@ -3086,6 +3126,7 @@ def _get_items_import_job_row(conn: sqlite3.Connection, import_job_id: int) -> s
             import_type,
             source_name,
             source_content,
+            request_metadata,
             continue_on_error,
             status,
             processed,
@@ -3122,6 +3163,7 @@ def list_items_import_jobs(
             import_job_id,
             import_type,
             source_name,
+            request_metadata,
             continue_on_error,
             status,
             processed,
@@ -3381,12 +3423,14 @@ def redo_items_import_job(conn: sqlite3.Connection, import_job_id: int) -> dict[
             status_code=422,
         )
 
+    request_metadata = job.get("request_metadata") or {}
     result = import_items_from_content_with_job(
         conn,
         content=source_text.encode("utf-8"),
         source_name=str(job_row["source_name"]),
         continue_on_error=bool(job["continue_on_error"]),
         redo_of_job_id=import_job_id,
+        row_overrides=request_metadata.get("row_overrides"),
         archive_registered_csv=False,
     )
     redo_job_id = int(result["import_job_id"])
@@ -5552,6 +5596,8 @@ def _apply_order_import_alias_saves(
     conn: sqlite3.Connection,
     *,
     alias_saves: list[dict[str, Any]],
+    import_job_id: int | None = None,
+    row_number_by_alias_key: dict[tuple[str, str], int] | None = None,
 ) -> int:
     deduped: dict[tuple[str, str], dict[str, Any]] = {}
     for alias in alias_saves:
@@ -5568,6 +5614,11 @@ def _apply_order_import_alias_saves(
         ordered_item_number = str(alias["ordered_item_number"])
         if _resolve_item_by_number(conn, ordered_item_number) is not None:
             continue
+        before_alias = _alias_row_by_supplier_and_ordered(
+            conn,
+            supplier_id=supplier_id,
+            ordered_item_number=ordered_item_number,
+        )
         upsert_supplier_item_alias(
             conn,
             supplier_id=supplier_id,
@@ -5575,6 +5626,30 @@ def _apply_order_import_alias_saves(
             canonical_item_id=int(alias["item_id"]),
             units_per_order=int(alias["units_per_order"]),
         )
+        after_alias = _alias_row_by_supplier_and_ordered(
+            conn,
+            supplier_id=supplier_id,
+            ordered_item_number=ordered_item_number,
+        )
+        if import_job_id is not None and after_alias is not None and before_alias != after_alias:
+            alias_key = (str(alias["supplier_name"]).casefold(), ordered_item_number.casefold())
+            _record_import_job_effect(
+                conn,
+                import_job_id=import_job_id,
+                row_number=(row_number_by_alias_key or {}).get(alias_key, 1),
+                status="created",
+                entry_type="alias",
+                effect_type="alias_updated" if before_alias is not None else "alias_created",
+                alias_id=int(after_alias["alias_id"]),
+                item_id=int(after_alias["canonical_item_id"]),
+                supplier_id=int(after_alias["supplier_id"]),
+                supplier_name=str(after_alias["supplier_name"]),
+                item_number=str(after_alias["ordered_item_number"]),
+                canonical_item_number=str(after_alias["canonical_item_number"]),
+                units_per_order=int(after_alias["units_per_order"]),
+                before_state=before_alias,
+                after_state=after_alias,
+            )
         saved_count += 1
     return saved_count
 
@@ -6443,17 +6518,56 @@ def import_orders_from_rows(
     saved_alias_count = _apply_order_import_alias_saves(
         conn,
         alias_saves=normalized_alias_saves,
+        import_job_id=import_job_id,
+        row_number_by_alias_key={
+            (str(row["supplier_name"]).casefold(), str(row["ordered_item_number"]).casefold()): int(row["row_number"])
+            for row in resolved
+        },
     )
 
     order_ids: list[int] = []
+    quotation_ids_by_key: dict[tuple[int, str], int] = {}
+    recorded_quotation_keys: set[tuple[int, str]] = set()
     for row in resolved:
-        quotation_id = _get_or_create_quotation(
-            conn,
-            int(row["supplier_id"]),
-            row["quotation_number"],
-            row["issue_date"],
-            row["quotation_document_url"],
-        )
+        quotation_key = (int(row["supplier_id"]), str(row["quotation_number"]))
+        quotation_id = quotation_ids_by_key.get(quotation_key)
+        if quotation_id is None:
+            existing_before = conn.execute(
+                """
+                SELECT quotation_id
+                FROM quotations
+                WHERE supplier_id = ? AND quotation_number = ?
+                """,
+                (int(row["supplier_id"]), row["quotation_number"]),
+            ).fetchone()
+            before_state = (
+                _get_quotation_row_by_id(conn, int(existing_before["quotation_id"]))
+                if existing_before is not None
+                else None
+            )
+            quotation_id = _get_or_create_quotation(
+                conn,
+                int(row["supplier_id"]),
+                row["quotation_number"],
+                row["issue_date"],
+                row["quotation_document_url"],
+            )
+            quotation_ids_by_key[quotation_key] = quotation_id
+            if import_job_id is not None and quotation_key not in recorded_quotation_keys:
+                after_state = _get_quotation_row_by_id(conn, quotation_id)
+                if after_state is not None and before_state != after_state:
+                    _record_import_job_effect(
+                        conn,
+                        import_job_id=import_job_id,
+                        row_number=int(row["row_number"]),
+                        status="created",
+                        effect_type="quotation_updated" if before_state is not None else "quotation_created",
+                        supplier_id=int(after_state["supplier_id"]),
+                        supplier_name=str(after_state["supplier_name"]),
+                        before_state=before_state,
+                        after_state=after_state,
+                    )
+                recorded_quotation_keys.add(quotation_key)
         cur = conn.execute(
             """
             INSERT INTO orders (
@@ -6482,23 +6596,33 @@ def import_orders_from_rows(
         order_id = int(cur.lastrowid)
         order_ids.append(order_id)
         if import_job_id is not None:
+            order_snapshot = get_order(conn, order_id)
             _record_import_job_effect(
                 conn,
                 import_job_id=import_job_id,
                 row_number=int(row["row_number"]),
                 status="created",
-                    effect_type="order_created",
-                    item_id=int(row["item_id"]),
-                    item_number=str(row.get("ordered_item_number") or ""),
-                    supplier_id=int(row["supplier_id"]),
-                    supplier_name=str(row["supplier_name"]),
-                    after_state={
-                        "order_id": order_id,
-                        "item_id": int(row["item_id"]),
-                    "quotation_id": quotation_id,
-                    "quotation_number": row["quotation_number"],
-                    "quotation_document_url": row["quotation_document_url"],
-                    "purchase_order_document_url": row["purchase_order_document_url"],
+                effect_type="order_created",
+                item_id=int(row["item_id"]),
+                item_number=str(row.get("ordered_item_number") or ""),
+                supplier_id=int(row["supplier_id"]),
+                supplier_name=str(row["supplier_name"]),
+                after_state={
+                    "order_id": int(order_snapshot["order_id"]),
+                    "item_id": int(order_snapshot["item_id"]),
+                    "quotation_id": int(order_snapshot["quotation_id"]),
+                    "order_amount": int(order_snapshot["order_amount"]),
+                    "ordered_quantity": int(order_snapshot["ordered_quantity"]),
+                    "ordered_item_number": str(order_snapshot["ordered_item_number"]),
+                    "order_date": order_snapshot["order_date"],
+                    "expected_arrival": order_snapshot["expected_arrival"],
+                    "purchase_order_document_url": order_snapshot["purchase_order_document_url"],
+                    "status": str(order_snapshot["status"]),
+                    "project_id": order_snapshot.get("project_id"),
+                    "quotation_number": str(order_snapshot["quotation_number"]),
+                    "quotation_document_url": order_snapshot["quotation_document_url"],
+                    "supplier_id": int(order_snapshot["supplier_id"]),
+                    "supplier_name": str(order_snapshot["supplier_name"]),
                 },
             )
     suggested_procurement_links: list[dict[str, Any]] = []
@@ -6599,7 +6723,7 @@ def import_orders_from_content_with_job(
     missing_output_dir: str | Path | None = None,
     row_overrides: dict[str | int, Any] | None = None,
     alias_saves: list[dict[str, Any]] | None = None,
-    import_job_id: int | None = None,
+    redo_of_job_id: int | None = None,
 ) -> dict[str, Any]:
     source_text = _read_import_job_source_text(content)
     import_job_id = _record_import_job(
@@ -6608,6 +6732,14 @@ def import_orders_from_content_with_job(
         source_name=source_name,
         source_content=source_text,
         continue_on_error=False,
+        redo_of_job_id=redo_of_job_id,
+        request_metadata={
+            "supplier_id": supplier_id,
+            "supplier_name": supplier_name,
+            "default_order_date": default_order_date,
+            "row_overrides": row_overrides or None,
+            "alias_saves": alias_saves or None,
+        },
     )
     conn.execute("SAVEPOINT order_import_job")
     try:
@@ -6655,6 +6787,7 @@ def _get_order_import_job_row(conn: sqlite3.Connection, import_job_id: int) -> s
             import_type,
             source_name,
             source_content,
+            request_metadata,
             continue_on_error,
             status,
             processed,
@@ -6691,6 +6824,7 @@ def list_order_import_jobs(
             import_job_id,
             import_type,
             source_name,
+            request_metadata,
             continue_on_error,
             status,
             processed,
@@ -6742,6 +6876,347 @@ def get_order_import_job(conn: sqlite3.Connection, import_job_id: int) -> dict[s
     return {
         "job": job,
         "effects": [_normalize_import_job_effect_row(row) for row in effects],
+    }
+
+
+def undo_orders_import_job(conn: sqlite3.Connection, import_job_id: int) -> dict[str, Any]:
+    job_row = _get_order_import_job_row(conn, import_job_id)
+    job = _normalize_import_job_row(job_row)
+    if job["lifecycle_state"] == "undone":
+        raise AppError(
+            code="IMPORT_JOB_ALREADY_UNDONE",
+            message=f"Order import job {import_job_id} has already been undone",
+            status_code=409,
+        )
+
+    effects = conn.execute(
+        """
+        SELECT
+            effect_id,
+            row_number,
+            status,
+            entry_type,
+            effect_type,
+            item_id,
+            alias_id,
+            supplier_id,
+            item_number,
+            supplier_name,
+            canonical_item_number,
+            units_per_order,
+            message,
+            code,
+            before_state,
+            after_state
+        FROM import_job_effects
+        WHERE import_job_id = ? AND status = 'created'
+        ORDER BY effect_id DESC
+        """,
+        (import_job_id,),
+    ).fetchall()
+    effect_rows = [_normalize_import_job_effect_row(row) for row in effects]
+    order_effects = [row for row in effect_rows if row["effect_type"] == "order_created"]
+    quotation_effects = [row for row in effect_rows if row["effect_type"] in {"quotation_created", "quotation_updated"}]
+    alias_effects = [row for row in effect_rows if row["effect_type"] in {"alias_created", "alias_updated"}]
+
+    savepoint = f"sp_undo_orders_import_{uuid4().hex}"
+    conn.execute(f"SAVEPOINT {savepoint}")
+    removed_orders = 0
+    removed_quotations = 0
+    restored_quotations = 0
+    removed_aliases = 0
+    restored_aliases = 0
+    try:
+        for effect in order_effects:
+            effect_id = int(effect["effect_id"])
+            row_number = int(effect["row_number"])
+            after_state = effect.get("after_state")
+            if not isinstance(after_state, dict):
+                _raise_import_undo_conflict(
+                    "Missing order after_state snapshot for undo",
+                    effect_id=effect_id,
+                    row_number=row_number,
+                )
+            order_id = int(after_state["order_id"])
+            current_row = conn.execute(
+                """
+                SELECT
+                    order_id,
+                    item_id,
+                    quotation_id,
+                    order_amount,
+                    ordered_quantity,
+                    ordered_item_number,
+                    order_date,
+                    expected_arrival,
+                    purchase_order_document_url,
+                    status,
+                    project_id
+                FROM orders
+                WHERE order_id = ?
+                """,
+                (order_id,),
+            ).fetchone()
+            current_order = dict(current_row) if current_row is not None else None
+            if not _import_job_matches_state(
+                current_order,
+                after_state,
+                (
+                    "order_id",
+                    "item_id",
+                    "quotation_id",
+                    "order_amount",
+                    "ordered_quantity",
+                    "ordered_item_number",
+                    "order_date",
+                    "expected_arrival",
+                    "purchase_order_document_url",
+                    "status",
+                    "project_id",
+                ),
+            ):
+                _raise_import_undo_conflict(
+                    f"Order was modified after import; cannot safely undo row {row_number}",
+                    effect_id=effect_id,
+                    row_number=row_number,
+                )
+
+            lineage_row = conn.execute(
+                """
+                SELECT COUNT(*) AS c
+                FROM order_lineage_events
+                WHERE source_order_id = ? OR target_order_id = ?
+                """,
+                (order_id, order_id),
+            ).fetchone()
+            if int(lineage_row["c"] or 0) > 0:
+                _raise_import_undo_conflict(
+                    f"Order has lineage history and cannot be safely undone (row {row_number})",
+                    effect_id=effect_id,
+                    row_number=row_number,
+                )
+
+            procurement_row = conn.execute(
+                "SELECT COUNT(*) AS c FROM procurement_lines WHERE linked_order_id = ?",
+                (order_id,),
+            ).fetchone()
+            if int(procurement_row["c"] or 0) > 0:
+                _raise_import_undo_conflict(
+                    f"Order is linked to procurement workflow and cannot be safely undone (row {row_number})",
+                    effect_id=effect_id,
+                    row_number=row_number,
+                )
+
+            rfq_row = conn.execute(
+                "SELECT COUNT(*) AS c FROM rfq_lines WHERE linked_order_id = ?",
+                (order_id,),
+            ).fetchone()
+            if int(rfq_row["c"] or 0) > 0:
+                _raise_import_undo_conflict(
+                    f"Order is linked to RFQ workflow and cannot be safely undone (row {row_number})",
+                    effect_id=effect_id,
+                    row_number=row_number,
+                )
+
+            conn.execute("DELETE FROM orders WHERE order_id = ?", (order_id,))
+            removed_orders += 1
+
+        for effect in quotation_effects:
+            effect_id = int(effect["effect_id"])
+            row_number = int(effect["row_number"])
+            effect_type = str(effect["effect_type"])
+            after_state = effect.get("after_state")
+            if not isinstance(after_state, dict):
+                _raise_import_undo_conflict(
+                    "Missing quotation after_state snapshot for undo",
+                    effect_id=effect_id,
+                    row_number=row_number,
+                )
+            quotation_id = int(after_state["quotation_id"])
+            current_quotation = _get_quotation_row_by_id(conn, quotation_id)
+            if not _import_job_matches_state(
+                current_quotation,
+                after_state,
+                ("quotation_id", "supplier_id", "quotation_number", "issue_date", "quotation_document_url"),
+            ):
+                _raise_import_undo_conflict(
+                    f"Quotation was modified after import; cannot safely undo row {row_number}",
+                    effect_id=effect_id,
+                    row_number=row_number,
+                )
+
+            remaining_orders = conn.execute(
+                "SELECT COUNT(*) AS c FROM orders WHERE quotation_id = ?",
+                (quotation_id,),
+            ).fetchone()
+            if int(remaining_orders["c"] or 0) > 0:
+                _raise_import_undo_conflict(
+                    f"Quotation is now referenced by orders outside the import job and cannot be safely undone (row {row_number})",
+                    effect_id=effect_id,
+                    row_number=row_number,
+                )
+
+            if effect_type == "quotation_created":
+                conn.execute("DELETE FROM quotations WHERE quotation_id = ?", (quotation_id,))
+                removed_quotations += 1
+                continue
+
+            before_state = effect.get("before_state")
+            if not isinstance(before_state, dict):
+                _raise_import_undo_conflict(
+                    "Missing quotation before_state snapshot for undo",
+                    effect_id=effect_id,
+                    row_number=row_number,
+                )
+            conn.execute(
+                """
+                UPDATE quotations
+                SET issue_date = ?, quotation_document_url = ?
+                WHERE quotation_id = ?
+                """,
+                (
+                    before_state.get("issue_date"),
+                    before_state.get("quotation_document_url"),
+                    quotation_id,
+                ),
+            )
+            restored_quotations += 1
+
+        for effect in alias_effects:
+            effect_id = int(effect["effect_id"])
+            row_number = int(effect["row_number"])
+            effect_type = str(effect["effect_type"])
+            after_state = effect.get("after_state")
+            if not isinstance(after_state, dict):
+                _raise_import_undo_conflict(
+                    "Missing alias after_state snapshot for undo",
+                    effect_id=effect_id,
+                    row_number=row_number,
+                )
+            supplier_id = int(after_state["supplier_id"])
+            ordered_item_number = str(after_state["ordered_item_number"])
+            current_alias = _alias_row_by_supplier_and_ordered(
+                conn,
+                supplier_id=supplier_id,
+                ordered_item_number=ordered_item_number,
+            )
+            if effect_type == "alias_created":
+                if not _import_job_matches_state(
+                    current_alias,
+                    after_state,
+                    (
+                        "alias_id",
+                        "supplier_id",
+                        "ordered_item_number",
+                        "canonical_item_id",
+                        "units_per_order",
+                    ),
+                ):
+                    _raise_import_undo_conflict(
+                        f"Alias no longer matches imported state; cannot safely undo row {row_number}",
+                        effect_id=effect_id,
+                        row_number=row_number,
+                    )
+                delete_supplier_item_alias(conn, int(current_alias["alias_id"]))
+                removed_aliases += 1
+                continue
+
+            before_state = effect.get("before_state")
+            if not isinstance(before_state, dict):
+                _raise_import_undo_conflict(
+                    "Missing alias before_state snapshot for undo",
+                    effect_id=effect_id,
+                    row_number=row_number,
+                )
+            if not _import_job_matches_state(
+                current_alias,
+                after_state,
+                (
+                    "alias_id",
+                    "supplier_id",
+                    "ordered_item_number",
+                    "canonical_item_id",
+                    "units_per_order",
+                ),
+            ):
+                _raise_import_undo_conflict(
+                    f"Alias was modified after import; cannot safely undo row {row_number}",
+                    effect_id=effect_id,
+                    row_number=row_number,
+                )
+            upsert_supplier_item_alias(
+                conn,
+                supplier_id=int(before_state["supplier_id"]),
+                ordered_item_number=str(before_state["ordered_item_number"]),
+                canonical_item_id=int(before_state["canonical_item_id"]),
+                units_per_order=int(before_state["units_per_order"]),
+            )
+            restored_aliases += 1
+
+        undone_at = now_jst_iso()
+        conn.execute(
+            """
+            UPDATE import_jobs
+            SET lifecycle_state = 'undone', undone_at = ?
+            WHERE import_job_id = ?
+            """,
+            (undone_at, import_job_id),
+        )
+        conn.execute(f"RELEASE {savepoint}")
+        return {
+            "import_job_id": import_job_id,
+            "status": "undone",
+            "undone_at": undone_at,
+            "removed_orders": removed_orders,
+            "removed_quotations": removed_quotations,
+            "restored_quotations": restored_quotations,
+            "removed_aliases": removed_aliases,
+            "restored_aliases": restored_aliases,
+        }
+    except Exception:
+        conn.execute(f"ROLLBACK TO {savepoint}")
+        conn.execute(f"RELEASE {savepoint}")
+        raise
+
+
+def redo_orders_import_job(conn: sqlite3.Connection, import_job_id: int) -> dict[str, Any]:
+    job_row = _get_order_import_job_row(conn, import_job_id)
+    job = _normalize_import_job_row(job_row)
+    if job["lifecycle_state"] != "undone":
+        raise AppError(
+            code="IMPORT_JOB_REDO_REQUIRES_UNDONE",
+            message=f"Order import job {import_job_id} must be undone before redo",
+            status_code=409,
+        )
+    source_text = str(job_row["source_content"] or "")
+    if not source_text:
+        raise AppError(
+            code="IMPORT_JOB_SOURCE_MISSING",
+            message=f"Order import job {import_job_id} does not have source content to redo",
+            status_code=422,
+        )
+    request_metadata = job.get("request_metadata") or {}
+    result = import_orders_from_content_with_job(
+        conn,
+        supplier_id=request_metadata.get("supplier_id"),
+        supplier_name=request_metadata.get("supplier_name"),
+        content=source_text.encode("utf-8"),
+        default_order_date=request_metadata.get("default_order_date"),
+        source_name=str(job_row["source_name"]),
+        missing_output_dir=None,
+        row_overrides=request_metadata.get("row_overrides"),
+        alias_saves=request_metadata.get("alias_saves"),
+        redo_of_job_id=import_job_id,
+    )
+    redo_job_id = int(result["import_job_id"])
+    conn.execute(
+        "UPDATE import_jobs SET last_redo_job_id = ? WHERE import_job_id = ?",
+        (redo_job_id, import_job_id),
+    )
+    return {
+        "source_job_id": import_job_id,
+        "redo_job_id": redo_job_id,
+        "import_result": result,
     }
 
 

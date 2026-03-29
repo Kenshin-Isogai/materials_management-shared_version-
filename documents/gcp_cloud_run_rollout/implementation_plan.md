@@ -1,155 +1,118 @@
-# GCP Rollout Implementation Plan
+# Remaining Production Hardening Plan
 
 ## Objective
 
-Prepare this repository for deployment on GCP using:
+Most Cloud Run migration-oriented code changes are already in place.
 
-- Cloud Run for the frontend
-- Cloud Run for the backend
-- Cloud SQL for PostgreSQL
-- GCS for persistent application-managed files and generated artifacts
+The remaining plan is to close the gap between "deployable" and "operationally safe".
 
-This plan is intentionally split into:
+## Main conclusion
 
-- work that can be completed now without a GCP project
-- work that is blocked until a real GCP project and resources exist
+The current repository is close to infrastructure-ready, but not yet production-ready.
 
-## Confirmed rollout decisions
+The largest remaining risks are:
 
-- frontend and backend are separate Cloud Run services
-- frontend uses an absolute backend HTTPS URL ending in `/api`
-- `VITE_API_BASE` stays build-time
-- frontend keeps nginx for the first rollout
-- backend migrations run outside normal Cloud Run service startup
-- persistent files use GCS, not durable local disk
-- temporary mutation identity remains `X-User-Name` for the first rollout
-- local compatibility behavior may be removed where it conflicts with the target cloud model
+- public-cloud trust boundary is still weak
+- live cloud validation has not yet happened
+- rollback and restore procedures are not yet institutionalized
+- monitoring and alert ownership are not yet spelled out
 
-See `target_architecture.md` for the canonical architecture statement.
+## Workstream 1: Identity and trust boundary
 
-## What is already in place
+Goal:
 
-- backend runtime has a `cloud_run` posture
-- backend storage abstraction already supports `local` and `gcs`
-- backend config already surfaces Cloud SQL, CORS, upload, and concurrency settings
-- frontend already resolves API traffic from `VITE_API_BASE`
-- a first-pass Cloud Run runbook and environment matrix already exist
+- remove dependence on `X-User-Name` as the effective production mutation gate
 
-## Remaining repository work before a GCP project exists
+Needed outcome:
 
-### Workstream 1: Finalize the frontend-to-backend contract
+- a real user identity mechanism exists for browser mutations
+- admin/operator/viewer boundaries are explicit and enforced
+- production does not rely on anonymous reads plus header-only writes as its long-term model
 
-Goals:
+Notes:
 
-- remove Docker-network assumptions from the frontend runtime
-- make the absolute backend URL contract unambiguous
-- keep nginx only for static asset delivery, not backend proxying
+- this is the highest-priority functional hardening item
+- until this lands, production exposure should be treated as temporary and risk-accepted
 
-Primary files:
+## Workstream 2: Real-environment deployment validation
 
-- `frontend\nginx.conf`
-- `frontend\Dockerfile`
-- `frontend\src\lib\api.ts`
-- `docker-compose.yml`
+Goal:
 
-Expected outcome:
+- prove the runtime contract against actual Cloud Run, Cloud SQL, and GCS resources
 
-- frontend production behavior no longer depends on `backend:8000`
+Needed outcome:
 
-### Workstream 2: Finalize the production migration contract
+- backend health confirms the expected cloud posture
+- frontend-to-backend CORS behaves correctly
+- durable artifact/archive flows work against GCS
+- request latency and Cloud SQL connection behavior are observed under real settings
 
-Goals:
+Notes:
 
-- keep Cloud Run service startup clearly separate from Alembic execution
-- make the repository docs and packaging reflect that strategy consistently
+- this cannot be completed in a doc-only state
+- the repository already appears prepared for this step, but that is not equivalent to validation
 
-Primary files:
+## Workstream 3: Change management and rollback
 
-- `docker-compose.yml`
-- `backend\Dockerfile`
-- `backend\app\api.py`
-- `documents\gcp_cloud_run_rollout\cloud_run_deployment_runbook.md`
+Goal:
 
-Expected outcome:
+- make bug-fix and update deployment routine, reversible, and low-risk
 
-- no confusion between local convenience startup and the production migration path
+Needed outcome:
 
-### Workstream 3: Remove remaining durable local filesystem assumptions
+- deploys are image-tagged and revision-based
+- schema migration is run explicitly before or during rollout in a controlled step
+- staged rollout exists through `dev` -> `staging` -> `prod`
+- rollback means both application rollback and database recovery decision paths are documented
 
-Goals:
+Notes:
 
-- remove legacy path fallback where it is no longer needed
-- isolate local-only directory scans from the cloud-target path
-- keep only request-scoped temporary local disk usage
+- application rollback and database rollback are different operations and must not be conflated
+- reversible app deploys do not remove the need for Cloud SQL backup/PITR planning
 
-Primary files:
+## Workstream 4: Backup, restore, and recoverability
 
-- `backend\app\service.py`
-- `backend\app\order_import_paths.py`
-- `backend\app\config.py`
+Goal:
 
-Expected outcome:
+- define how the service is recovered after bad deploys, operator mistakes, or infrastructure incidents
 
-- the repository no longer suggests that durable Cloud Run behavior depends on repo-local paths
+Needed outcome:
 
-### Workstream 4: Normalize the rollout documentation set
+- Cloud SQL backup and point-in-time recovery expectations are documented and enabled
+- GCS lifecycle/versioning expectations are documented and enabled where appropriate
+- operators know when to use item-import undo/redo, when to restore from DB backup, and when to redeploy an older revision
 
-Goals:
+Notes:
 
-- reduce duplication across the rollout docs
-- keep one canonical file per topic
-- make the docs usable before any real GCP resources exist
+- import-job undo/redo exists only for some flows
+- that is helpful, but it is not a substitute for full system recovery planning
 
-Primary files:
+## Workstream 5: Monitoring and operational ownership
 
-- `documents\gcp_cloud_run_rollout\README.md`
-- `documents\gcp_cloud_run_rollout\migration_checklist.md`
-- `documents\gcp_cloud_run_rollout\task_breakdown_by_file.md`
-- `documents\gcp_cloud_run_rollout\environment_and_runtime_matrix.md`
-- `documents\gcp_cloud_run_rollout\implementation_slices.md`
+Goal:
 
-Expected outcome:
+- make failures visible before they become data or service incidents
 
-- the folder becomes a maintained working set instead of a pile of overlapping drafts
+Needed outcome:
 
-## Work blocked until a GCP project exists
+- request latency, error rate, instance count, and DB connection pressure are monitored
+- storage growth and failed artifact/archive flows are visible
+- deployment, migration, and recovery ownership is assigned
 
-### Resource-specific configuration
+## Suggested execution order
 
-- choose actual Cloud Run service names
-- create the Cloud SQL instance and obtain `INSTANCE_CONNECTION_NAME`
-- choose bucket names and object prefixes
-- define the actual frontend and backend public URLs
+1. real GCP resource provisioning
+2. live validation in `dev`
+3. monitoring and backup baseline
+4. staged deployment workflow (`dev` -> `staging` -> `prod`)
+5. stronger auth implementation
 
-### Secret and deployment wiring
+## Definition of operational readiness
 
-- configure Secret Manager
-- deploy the backend image with Cloud SQL attachment
-- deploy the frontend image with the real `VITE_API_BASE`
-- run Alembic through a real Cloud Run Job or equivalent deployment step
+Treat the rollout as operationally ready only when all of the following are true:
 
-### Runtime validation
-
-- validate `/api/health` on a deployed backend
-- validate browser CORS behavior between the real frontend and backend services
-- validate artifact and archive flows against GCS
-- validate mutation flows with a real active user and `X-User-Name`
-
-## Recommended execution order
-
-1. frontend/backend contract cleanup
-2. migration contract cleanup
-3. remaining local filesystem cleanup
-4. documentation consolidation
-5. GCP resource creation
-6. deployment wiring
-7. runtime validation
-
-## Definition of ready before creating a GCP project
-
-The repository is ready for project creation and deployment wiring when:
-
-- frontend production behavior no longer assumes Docker-local backend proxying
-- production migration strategy is clearly externalized
-- remaining cloud-conflicting local compatibility paths are isolated or removed
-- rollout docs clearly separate repository work from project-dependent work
+- live Cloud Run, Cloud SQL, and GCS validation has been completed
+- backup and restore expectations are active, not just documented
+- rollback procedure is rehearsed
+- production monitoring exists
+- the current temporary auth posture is either replaced or explicitly accepted with time-bounded risk ownership

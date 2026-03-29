@@ -102,6 +102,8 @@ def test_health_endpoint(client):
     payload = response.json()
     assert payload["status"] == "ok"
     assert payload["data"]["healthy"] is True
+    assert payload["data"]["readiness"]["probe_path"] == "/readyz"
+    assert payload["data"]["readiness"]["liveness_path"] == "/healthz"
     assert payload["data"]["runtime_target"] in {"local", "cloud_run"}
     assert isinstance(payload["data"]["cloud_run_mode"], bool)
     assert isinstance(payload["data"]["app_data_root"], str)
@@ -113,8 +115,67 @@ def test_health_endpoint(client):
     assert payload["data"]["operating_targets"]["cloud_run_concurrency_target"] == 10
     assert payload["data"]["cloud_sql"]["strategy"] == "connector_unix_socket"
     assert "storage" in payload["data"]
+    assert payload["data"]["storage"]["retention_days"]["staging"] == 7
+    assert payload["data"]["storage"]["retention_days"]["exports"] == 30
+    assert payload["data"]["storage"]["retention_days"]["artifacts"] == 90
+    assert payload["data"]["storage"]["retention_days"]["archives"] is None
+    assert payload["data"]["storage"]["versioning_policy_required"] is True
+    assert payload["data"]["storage"]["restore_strategy"] == "restore_to_recovery_prefix_then_validate"
+    assert payload["data"]["recovery_policy"]["status"] == "documented_not_verified"
+    assert payload["data"]["recovery_policy"]["cloud_sql"]["backup_policy_required"] is True
+    assert payload["data"]["recovery_policy"]["cloud_sql"]["pitr_required_environments"] == ["staging", "prod"]
+    assert (
+        payload["data"]["recovery_policy"]["cloud_sql"]["restore_strategy"]
+        == "restore_to_new_instance_then_cut_over"
+    )
+    assert payload["data"]["recovery_policy"]["object_storage"]["versioning_policy_required"] is True
+    assert "/readyz" in payload["data"]["recovery_policy"]["post_restore_validation"]
     assert payload["data"]["temporary_identity_model"]["mode"] == "x-user-name"
     assert payload["data"]["temporary_identity_model"]["temporary"] is True
+
+
+def test_liveness_and_readiness_endpoints(client):
+    healthz = client.get("/healthz")
+    assert healthz.status_code == 200
+    assert healthz.json()["data"]["alive"] is True
+
+    readyz = client.get("/readyz")
+    assert readyz.status_code == 200
+    payload = readyz.json()
+    assert payload["status"] == "ok"
+    assert payload["data"]["ready"] is True
+    assert payload["data"]["checks"]["database"]["ready"] is True
+
+
+def test_readiness_endpoint_reports_unavailable_database():
+    original_env = os.environ.copy()
+    try:
+        os.environ["AUTO_MIGRATE_ON_STARTUP"] = "0"
+        import app.api as api_module
+        import app.config as config_module
+
+        importlib.reload(config_module)
+        importlib.reload(api_module)
+
+        app = api_module.create_app(
+            database_url="postgresql+psycopg://user:pass@127.0.0.1:59999/materials?connect_timeout=1"
+        )
+        with TestClient(app) as test_client:
+            response = test_client.get("/readyz")
+
+        assert response.status_code == 503
+        payload = response.json()
+        assert payload["status"] == "error"
+        assert payload["error"]["code"] == "NOT_READY"
+        assert payload["error"]["details"]["checks"]["database"]["ready"] is False
+    finally:
+        os.environ.clear()
+        os.environ.update(original_env)
+        import app.api as api_module
+        import app.config as config_module
+
+        importlib.reload(config_module)
+        importlib.reload(api_module)
 
 
 def test_health_endpoint_uses_effective_database_url_for_unix_socket_reporting():
@@ -526,13 +587,16 @@ def test_auth_capabilities_endpoint_defaults_and_header(client):
     payload = response.json()["data"]
     assert payload["auth_mode"] == "none"
     assert payload["auth_enforced"] is False
+    assert payload["auth_dry_run"] is False
     assert payload["planned_roles"] == ["admin", "operator", "viewer"]
-    assert payload["effective_role"] == "operator"
+    assert payload["effective_role"] == "admin"
     assert payload["mutation_identity"]["mode"] == "x-user-name"
     assert payload["mutation_identity"]["temporary"] is True
     assert payload["mutation_identity"]["stronger_auth_required"] is True
     assert "/api/users" in payload["mutation_identity"]["admin_only_scope"]
+    assert payload["endpoint_policy"]["users"] == "admin_when_rbac_enabled"
 
+    client.headers.pop("X-User-Name", None)
     header_response = client.get("/api/auth/capabilities", headers={"X-User-Role": "Viewer"})
     assert header_response.status_code == 200
     header_payload = header_response.json()["data"]
@@ -658,6 +722,65 @@ def test_users_endpoint_allows_anonymous_read(client):
     payload = response.json()
     assert payload["status"] == "ok"
     assert any(row["username"] == "pytest" for row in payload["data"])
+
+
+def test_users_endpoint_requires_admin_role_when_rbac_is_enforced(database_url: str):
+    original_env = os.environ.copy()
+    try:
+        os.environ["INVENTORY_AUTH_MODE"] = "rbac_enforced"
+        import app.api as api_module
+        import app.config as config_module
+
+        importlib.reload(config_module)
+        importlib.reload(api_module)
+
+        _reset_database(database_url)
+        init_db(database_url)
+        seed_conn = get_connection(database_url)
+        try:
+            service.create_user(
+                seed_conn,
+                {
+                    "username": "admin-user",
+                    "display_name": "Admin User",
+                    "role": "admin",
+                    "is_active": True,
+                },
+            )
+            service.create_user(
+                seed_conn,
+                {
+                    "username": "operator-user",
+                    "display_name": "Operator User",
+                    "role": "operator",
+                    "is_active": True,
+                },
+            )
+            seed_conn.commit()
+        finally:
+            seed_conn.close()
+
+        app = api_module.create_app(database_url=database_url)
+        with TestClient(app) as test_client:
+            anonymous_response = test_client.get("/api/users")
+            assert anonymous_response.status_code == 403
+            assert anonymous_response.json()["error"]["code"] == "FORBIDDEN"
+
+            operator_response = test_client.get("/api/users", headers={"X-User-Name": "operator-user"})
+            assert operator_response.status_code == 403
+            assert operator_response.json()["error"]["code"] == "FORBIDDEN"
+
+            admin_response = test_client.get("/api/users", headers={"X-User-Name": "admin-user"})
+            assert admin_response.status_code == 200
+            assert any(row["username"] == "operator-user" for row in admin_response.json()["data"])
+    finally:
+        os.environ.clear()
+        os.environ.update(original_env)
+        import app.api as api_module
+        import app.config as config_module
+
+        importlib.reload(config_module)
+        importlib.reload(api_module)
 
 
 def test_users_me_endpoint_requires_active_user_header_on_read_request(client):
