@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from app import storage
 
 
@@ -106,3 +108,18 @@ def test_gcs_storage_backend_round_trip(monkeypatch, tmp_path: Path):
     storage.delete_storage_ref(moved.storage_ref)
     assert storage.stat_storage_ref(moved.storage_ref) is None
 
+
+def test_gcs_storage_ref_rejects_bucket_mismatch(monkeypatch):
+    fake_client = _FakeClient()
+    monkeypatch.setattr(storage.config, "GCS_BUCKET", "materials-dev")
+    monkeypatch.setattr(storage.config, "GCS_OBJECT_PREFIX", "materials/dev")
+    monkeypatch.setattr(storage.config, "get_storage_backend", lambda: storage.config.STORAGE_BACKEND_GCS)
+    monkeypatch.setattr(storage, "_get_gcs_client", lambda: fake_client)
+
+    with pytest.raises(storage.AppError) as exc_info:
+        storage.stat_storage_ref(
+            "gcs://other-bucket/materials/dev/artifacts/generated_artifacts/report.csv"
+        )
+
+    assert exc_info.value.code == "ARTIFACT_NOT_FOUND"
+    assert "does not match configured GCS bucket" in exc_info.value.message

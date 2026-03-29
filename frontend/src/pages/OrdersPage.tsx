@@ -72,7 +72,7 @@ function downloadMissingRowsCsv(rows: MissingItemResolverRow[], filename: string
   document.body.append(link);
   link.click();
   link.remove();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
 type ImportResult = {

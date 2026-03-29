@@ -123,8 +123,8 @@ def get_storage_prefix(*parts: str) -> str:
     return "/".join(values)
 
 
-def uses_cloud_sql_unix_socket() -> bool:
-    normalized = DATABASE_URL.lower()
+def uses_cloud_sql_unix_socket(database_url: str | None = None) -> bool:
+    normalized = (database_url or DATABASE_URL).lower()
     return "/cloudsql/" in normalized or "@/" in normalized
 
 

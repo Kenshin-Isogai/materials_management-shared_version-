@@ -131,8 +131,28 @@ def _get_gcs_client():
     return gcs_storage.Client()
 
 
-def _get_gcs_bucket():
-    return _get_gcs_client().bucket(config.GCS_BUCKET)
+def _get_gcs_bucket(bucket_name: str | None = None):
+    target_bucket = bucket_name or config.GCS_BUCKET
+    if not target_bucket:
+        raise AppError(
+            code="STORAGE_NOT_CONFIGURED",
+            message="GCS_BUCKET must be configured when STORAGE_BACKEND=gcs",
+            status_code=500,
+        )
+    return _get_gcs_client().bucket(target_bucket)
+
+
+def _get_gcs_bucket_for_ref(storage_ref: str, bucket_name: str):
+    if bucket_name != config.GCS_BUCKET:
+        raise AppError(
+            code="ARTIFACT_NOT_FOUND",
+            message=(
+                f"Stored object '{storage_ref}' not found: "
+                f"bucket '{bucket_name}' does not match configured GCS bucket"
+            ),
+            status_code=404,
+        )
+    return _get_gcs_bucket()
 
 
 def get_storage_backend_summary() -> dict[str, object]:
@@ -222,7 +242,7 @@ def stat_storage_ref(storage_ref: str) -> StoredObject | None:
             path=path,
         )
     if scheme == config.STORAGE_BACKEND_GCS:
-        blob = _get_gcs_bucket().get_blob(relative_path.as_posix())
+        blob = _get_gcs_bucket_for_ref(storage_ref, bucket).get_blob(relative_path.as_posix())
         if blob is None:
             return None
         updated = getattr(blob, "updated", None)
@@ -257,7 +277,7 @@ def read_storage_bytes(storage_ref: str) -> tuple[str, bytes]:
         return stored.filename, stored.path.read_bytes()
     scheme, bucket, relative_path = _parse_storage_ref(storage_ref)
     if scheme == config.STORAGE_BACKEND_GCS:
-        blob = _get_gcs_bucket().blob(relative_path.as_posix())
+        blob = _get_gcs_bucket_for_ref(storage_ref, bucket).blob(relative_path.as_posix())
         return stored.filename, blob.download_as_bytes()
     raise AppError(
         code="ARTIFACT_NOT_FOUND",
@@ -401,7 +421,7 @@ def delete_storage_ref(storage_ref: str) -> None:
             path.unlink(missing_ok=True)
         return
     if scheme == config.STORAGE_BACKEND_GCS:
-        blob = _get_gcs_bucket().blob(relative_path.as_posix())
+        blob = _get_gcs_bucket_for_ref(storage_ref, bucket).blob(relative_path.as_posix())
         blob.delete()
         return
     raise AppError(

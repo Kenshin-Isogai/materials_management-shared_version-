@@ -130,6 +130,15 @@ def _public_item_import_result(result: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _request_too_large_error() -> AppError:
+    return AppError(
+        code="REQUEST_TOO_LARGE",
+        message=f"Request body exceeds the configured limit of {MAX_UPLOAD_BYTES} bytes",
+        status_code=413,
+        details={"max_upload_bytes": MAX_UPLOAD_BYTES},
+    )
+
+
 def _db_dep(app: FastAPI):
     def _get_db(request: Request):
         conn = get_connection(app.state.database_url)
@@ -227,28 +236,34 @@ class UserIdentityMiddleware(BaseHTTPMiddleware):
 
 class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        content_length = request.headers.get("content-length")
-        if content_length:
-            try:
-                if int(content_length) > MAX_UPLOAD_BYTES:
-                    return JSONResponse(
-                        status_code=413,
-                        content={
-                            "status": "error",
-                            "error": {
-                                "code": "REQUEST_TOO_LARGE",
-                                "message": (
-                                    f"Request body exceeds the configured limit of {MAX_UPLOAD_BYTES} bytes"
-                                ),
-                                "details": {
-                                    "max_upload_bytes": MAX_UPLOAD_BYTES,
-                                },
-                            },
-                        },
-                    )
-            except ValueError:
-                pass
-        return await call_next(request)
+        try:
+            content_length = request.headers.get("content-length")
+            if content_length:
+                try:
+                    if int(content_length) > MAX_UPLOAD_BYTES:
+                        raise _request_too_large_error()
+                except ValueError:
+                    pass
+
+            received = 0
+            original_receive = request.receive
+
+            async def receive_with_limit():
+                nonlocal received
+                message = await original_receive()
+                if message.get("type") == "http.request":
+                    received += len(message.get("body") or b"")
+                    if received > MAX_UPLOAD_BYTES:
+                        raise _request_too_large_error()
+                return message
+
+            request._receive = receive_with_limit  # type: ignore[attr-defined]
+            return await call_next(request)
+        except AppError as exc:
+            handler = request.app.exception_handlers.get(AppError)
+            if handler is None:
+                raise
+            return await handler(request, exc)
 
 
 def create_app(database_url: str | None = None, db_path: str | None = None) -> FastAPI:
@@ -338,7 +353,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
                 "cloud_sql": {
                     "strategy": "connector_unix_socket",
                     "instance_connection_name_configured": bool(INSTANCE_CONNECTION_NAME),
-                    "database_url_uses_unix_socket": uses_cloud_sql_unix_socket(),
+                    "database_url_uses_unix_socket": uses_cloud_sql_unix_socket(app.state.database_url),
                 },
                 "storage": storage_summary,
                 "public_urls": {

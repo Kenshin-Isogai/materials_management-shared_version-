@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import csv
 import importlib
 import json
@@ -114,6 +115,36 @@ def test_health_endpoint(client):
     assert "storage" in payload["data"]
     assert payload["data"]["temporary_identity_model"]["mode"] == "x-user-name"
     assert payload["data"]["temporary_identity_model"]["temporary"] is True
+
+
+def test_health_endpoint_uses_effective_database_url_for_unix_socket_reporting():
+    original_env = os.environ.copy()
+    try:
+        os.environ["AUTO_MIGRATE_ON_STARTUP"] = "0"
+        os.environ["DATABASE_URL"] = (
+            "postgresql+psycopg://user:pass@/materials?host=/cloudsql/project:region:instance"
+        )
+
+        import app.config as config_module
+        import app.api as api_module
+
+        importlib.reload(config_module)
+        importlib.reload(api_module)
+
+        app = api_module.create_app(database_url="postgresql+psycopg://user:pass@localhost/materials")
+        with TestClient(app) as test_client:
+            response = test_client.get("/api/health")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["data"]["cloud_sql"]["database_url_uses_unix_socket"] is False
+    finally:
+        os.environ.clear()
+        os.environ.update(original_env)
+        import app.config as config_module
+        import app.api as api_module
+        importlib.reload(config_module)
+        importlib.reload(api_module)
 
 
 def test_inventory_snapshot_endpoint_supports_net_available_basis(client):
@@ -548,6 +579,67 @@ def test_request_size_limit_rejects_oversized_upload(database_url: str):
         assert payload["status"] == "error"
         assert payload["error"]["code"] == "REQUEST_TOO_LARGE"
         assert payload["error"]["details"]["max_upload_bytes"] == 32
+    finally:
+        os.environ.clear()
+        os.environ.update(original_env)
+        import app.config as config_module
+        import app.api as api_module
+        importlib.reload(config_module)
+        importlib.reload(api_module)
+
+
+def test_request_size_limit_rejects_streaming_body_without_content_length():
+    original_env = os.environ.copy()
+    try:
+        os.environ["AUTO_MIGRATE_ON_STARTUP"] = "0"
+        os.environ["MAX_UPLOAD_BYTES"] = "4"
+
+        import app.api as api_module
+        import app.config as config_module
+
+        importlib.reload(config_module)
+        importlib.reload(api_module)
+
+        app = api_module.create_app(database_url="postgresql+psycopg://user:pass@localhost/materials")
+        middleware = api_module.RequestSizeLimitMiddleware(app)
+        chunks = iter(
+            [
+                {"type": "http.request", "body": b"abc", "more_body": True},
+                {"type": "http.request", "body": b"de", "more_body": False},
+            ]
+        )
+
+        async def receive():
+            return next(chunks)
+
+        request = api_module.Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "path": "/api/items/import",
+                "raw_path": b"/api/items/import",
+                "scheme": "http",
+                "query_string": b"",
+                "headers": [],
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+                "app": app,
+            },
+            receive=receive,
+        )
+
+        async def call_next(inner_request):
+            await inner_request.body()
+            return api_module.JSONResponse({"status": "ok"})
+
+        response = asyncio.run(middleware.dispatch(request, call_next))
+
+        assert response.status_code == 413
+        payload = json.loads(response.body)
+        assert payload["status"] == "error"
+        assert payload["error"]["code"] == "REQUEST_TOO_LARGE"
+        assert payload["error"]["details"]["max_upload_bytes"] == 4
     finally:
         os.environ.clear()
         os.environ.update(original_env)
