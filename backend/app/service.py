@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import csv
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta
@@ -16,21 +15,33 @@ from typing import Any, Iterable
 from uuid import uuid4
 
 from .config import (
-    DEFAULT_EXPORTS_DIR,
-    ITEMS_IMPORT_MAX_CONSOLIDATED_ROWS,
     ITEMS_IMPORT_STAGING_ROOT,
     ITEMS_IMPORT_UNREGISTERED_ROOT,
     ITEMS_IMPORT_REGISTERED_ROOT,
+    ORDERS_IMPORT_REGISTERED_CSV_ROOT,
+    ORDERS_IMPORT_REGISTERED_PDF_ROOT,
 )
 from .errors import AppError
 from .order_import_paths import (
-    OrderImportRoots,
     build_roots,
     ensure_roots,
     registered_csv_supplier_dir,
     registered_pdf_supplier_dir,
-    safe_workspace_relative,
     supplier_from_unregistered_csv_path,
+)
+from .storage import (
+    GENERATED_ARTIFACTS_BUCKET,
+    ITEMS_REGISTERED_ARCHIVES_BUCKET,
+    ITEMS_UNREGISTERED_BUCKET,
+    ORDERS_REGISTERED_CSV_BUCKET,
+    ORDERS_REGISTERED_PDF_BUCKET,
+    StoredObject,
+    delete_storage_ref,
+    is_local_storage_backend,
+    move_file_to_storage,
+    read_storage_bytes,
+    stat_storage_ref,
+    write_storage_bytes,
 )
 from .utils import (
     normalize_external_document_url,
@@ -55,10 +66,6 @@ def _rows_to_dict(rows: Iterable[sqlite3.Row]) -> list[dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def _generated_artifact_roots() -> tuple[Path, ...]:
-    return (ITEMS_IMPORT_UNREGISTERED_ROOT.resolve(),)
-
-
 def _infer_generated_artifact_type(path: Path) -> str:
     name = path.name.lower()
     if "missing_items_registration" in name:
@@ -66,29 +73,24 @@ def _infer_generated_artifact_type(path: Path) -> str:
     return "generated_file"
 
 
-def _encode_generated_artifact_id(relative_path: str) -> str:
-    raw = relative_path.encode("utf-8")
-    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+def _infer_generated_artifact_type_from_filename(filename: str) -> str:
+    return _infer_generated_artifact_type(Path(filename))
 
 
-def _decode_generated_artifact_id(artifact_id: str) -> str:
-    text = require_non_empty(artifact_id, "artifact_id")
-    padding = "=" * (-len(text) % 4)
-    try:
-        decoded = base64.urlsafe_b64decode(f"{text}{padding}".encode("ascii")).decode("utf-8")
-    except Exception as exc:  # noqa: BLE001
-        raise AppError(
-            code="ARTIFACT_NOT_FOUND",
-            message=f"Generated artifact '{artifact_id}' not found",
-            status_code=404,
-        ) from exc
-    if not decoded.strip():
-        raise AppError(
-            code="ARTIFACT_NOT_FOUND",
-            message=f"Generated artifact '{artifact_id}' not found",
-            status_code=404,
-        )
-    return decoded
+def _disabled_items_archive_rollup_result() -> dict[str, Any]:
+    return {
+        "consolidated": 0,
+        "folders": [],
+        "disabled": True,
+        "reason": "storage_backed_archives_are_not_rescanned",
+    }
+
+
+def _csv_archive_sync_disabled_result() -> dict[str, Any]:
+    return {
+        "enabled": False,
+        "reason": "database_is_source_of_truth_for_order_and_quotation_edits",
+    }
 
 
 def _artifact_payload_from_row(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
@@ -110,13 +112,7 @@ def _artifact_payload_from_row(row: sqlite3.Row | dict[str, Any]) -> dict[str, A
     return payload
 
 
-def _register_generated_artifact(
-    conn: sqlite3.Connection,
-    path: Path,
-    *,
-    source_job_type: str | None = None,
-    source_job_id: str | None = None,
-) -> dict[str, Any]:
+def _stored_object_from_path(path: Path) -> StoredObject:
     resolved = path.resolve()
     if not resolved.exists() or not resolved.is_file():
         raise AppError(
@@ -126,8 +122,30 @@ def _register_generated_artifact(
         )
 
     stats = resolved.stat()
-    created_at = datetime.fromtimestamp(stats.st_mtime).isoformat(timespec="seconds")
-    artifact_type = _infer_generated_artifact_type(resolved)
+    return StoredObject(
+        storage_ref=str(resolved),
+        filename=resolved.name,
+        size_bytes=int(stats.st_size),
+        created_at=datetime.fromtimestamp(stats.st_mtime).isoformat(timespec="seconds"),
+        path=resolved,
+    )
+
+
+def _safe_stat_storage_ref(storage_ref: str) -> StoredObject | None:
+    try:
+        return stat_storage_ref(storage_ref)
+    except AppError:
+        return None
+
+
+def _register_generated_artifact(
+    conn: sqlite3.Connection,
+    stored: StoredObject,
+    *,
+    source_job_type: str | None = None,
+    source_job_id: str | None = None,
+) -> dict[str, Any]:
+    artifact_type = _infer_generated_artifact_type_from_filename(stored.filename)
     existing = conn.execute(
         """
         SELECT
@@ -144,7 +162,7 @@ def _register_generated_artifact(
         ORDER BY created_at DESC, artifact_id DESC
         LIMIT 1
         """,
-        (str(resolved),),
+        (stored.storage_ref,),
     ).fetchone()
     if existing is not None:
         return _artifact_payload_from_row(existing)
@@ -166,10 +184,10 @@ def _register_generated_artifact(
         (
             artifact_id,
             artifact_type,
-            resolved.name,
-            str(resolved),
-            int(stats.st_size),
-            created_at,
+            stored.filename,
+            stored.storage_ref,
+            stored.size_bytes,
+            stored.created_at,
             source_job_type,
             source_job_id,
         ),
@@ -178,9 +196,9 @@ def _register_generated_artifact(
         {
             "artifact_id": artifact_id,
             "artifact_type": artifact_type,
-            "filename": resolved.name,
-            "size_bytes": int(stats.st_size),
-            "created_at": created_at,
+            "filename": stored.filename,
+            "size_bytes": stored.size_bytes,
+            "created_at": stored.created_at,
             "source_job_type": source_job_type,
             "source_job_id": source_job_id,
         }
@@ -196,31 +214,24 @@ def _build_generated_artifact(
 ) -> dict[str, Any]:
     return _register_generated_artifact(
         conn,
-        path,
+        _stored_object_from_path(path),
         source_job_type=source_job_type,
         source_job_id=source_job_id,
     )
 
 
-def _resolve_generated_artifact_path(artifact_id: str) -> Path:
-    relative_text = _decode_generated_artifact_id(artifact_id)
-    for root in _generated_artifact_roots():
-        try:
-            workspace_root = root.parents[2]
-        except IndexError:
-            workspace_root = root.parent
-        candidate = (workspace_root / relative_text).resolve()
-        try:
-            candidate.relative_to(root)
-        except ValueError:
-            continue
-        if candidate.exists() and candidate.is_file():
-            return candidate
-        break
-    raise AppError(
-        code="ARTIFACT_NOT_FOUND",
-        message=f"Generated artifact '{artifact_id}' not found",
-        status_code=404,
+def _build_generated_artifact_from_stored_object(
+    conn: sqlite3.Connection,
+    stored: StoredObject,
+    *,
+    source_job_type: str | None = None,
+    source_job_id: str | None = None,
+) -> dict[str, Any]:
+    return _register_generated_artifact(
+        conn,
+        stored,
+        source_job_type=source_job_type,
+        source_job_id=source_job_id,
     )
 
 
@@ -245,11 +256,20 @@ def _get_generated_artifact_row(conn: sqlite3.Connection, artifact_id: str) -> s
 
 def get_generated_artifact(conn: sqlite3.Connection, artifact_id: str) -> dict[str, Any]:
     row = _get_generated_artifact_row(conn, artifact_id)
-    if row is not None:
-        path = Path(str(row["storage_path"]))
-        if path.exists() and path.is_file():
-            return _artifact_payload_from_row(row)
-    return _register_generated_artifact(conn, _resolve_generated_artifact_path(artifact_id))
+    if row is None:
+        raise AppError(
+            code="ARTIFACT_NOT_FOUND",
+            message=f"Generated artifact '{artifact_id}' not found",
+            status_code=404,
+        )
+    storage_ref = str(row["storage_path"])
+    if _safe_stat_storage_ref(storage_ref) is not None:
+        return _artifact_payload_from_row(row)
+    raise AppError(
+        code="ARTIFACT_NOT_FOUND",
+        message=f"Generated artifact '{artifact_id}' not found",
+        status_code=404,
+    )
 
 
 def list_generated_artifacts(conn: sqlite3.Connection, *, artifact_type: str | None = None) -> list[dict[str, Any]]:
@@ -272,8 +292,9 @@ def list_generated_artifacts(conn: sqlite3.Connection, *, artifact_type: str | N
         params = (artifact_type,)
     sql += " ORDER BY created_at DESC, artifact_id DESC"
     for row in conn.execute(sql, params).fetchall():
-        path = Path(str(row["storage_path"]))
-        if not path.exists() or not path.is_file():
+        storage_ref = str(row["storage_path"])
+        stored = _safe_stat_storage_ref(storage_ref)
+        if stored is None:
             continue
         rows.append(_artifact_payload_from_row(row))
     return rows
@@ -281,12 +302,21 @@ def list_generated_artifacts(conn: sqlite3.Connection, *, artifact_type: str | N
 
 def get_generated_artifact_download(conn: sqlite3.Connection, artifact_id: str) -> tuple[str, bytes]:
     row = _get_generated_artifact_row(conn, artifact_id)
-    if row is not None:
-        path = Path(str(row["storage_path"]))
-        if path.exists() and path.is_file():
-            return str(row["filename"]), path.read_bytes()
-    path = _resolve_generated_artifact_path(artifact_id)
-    return path.name, path.read_bytes()
+    if row is None:
+        raise AppError(
+            code="ARTIFACT_NOT_FOUND",
+            message=f"Generated artifact '{artifact_id}' not found",
+            status_code=404,
+        )
+    storage_ref = str(row["storage_path"])
+    stored = _safe_stat_storage_ref(storage_ref)
+    if stored is not None:
+        return read_storage_bytes(storage_ref)
+    raise AppError(
+        code="ARTIFACT_NOT_FOUND",
+        message=f"Generated artifact '{artifact_id}' not found",
+        status_code=404,
+    )
 
 
 def _safe_staging_component(value: str, default: str) -> str:
@@ -309,48 +339,8 @@ def _safe_staging_filename(value: str, default: str) -> str:
     return f"{stem}{suffix}"
 
 
-def _create_staging_job_root(base_root: Path, prefix: str) -> tuple[str, Path]:
-    job_id = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
-    job_root = base_root / job_id
-    job_root.mkdir(parents=True, exist_ok=False)
-    return job_id, job_root
-
-
-def _write_uploaded_batch_csvs_to_staging(
-    files: list[tuple[str, bytes]],
-    *,
-    staging_root: str | Path | None = None,
-) -> dict[str, Any]:
-    if not files:
-        raise AppError(
-            code="INVALID_REQUEST",
-            message="At least one CSV file is required",
-            status_code=422,
-        )
-
-    base_root = Path(staging_root) if staging_root else ITEMS_IMPORT_STAGING_ROOT
-    job_id, job_root = _create_staging_job_root(base_root, "items")
-    unregistered_root = job_root / "unregistered"
-    unregistered_root.mkdir(parents=True, exist_ok=True)
-
-    staged_files: list[str] = []
-    for index, (filename, content) in enumerate(files, start=1):
-        safe_name = _safe_staging_filename(filename or f"upload_{index}.csv", f"upload_{index}.csv")
-        if not safe_name.lower().endswith(".csv"):
-            raise AppError(
-                code="INVALID_CSV",
-                message=f"Uploaded file must be CSV: {filename or safe_name}",
-                status_code=422,
-            )
-        target = _move_file_preserve_name_bytes(content, unregistered_root, safe_name)
-        staged_files.append(str(target))
-
-    return {
-        "job_id": job_id,
-        "job_root": str(job_root),
-        "items_unregistered_root": str(unregistered_root),
-        "staged_files": staged_files,
-    }
+def _create_upload_job_id(prefix: str) -> str:
+    return f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:8]}"
 
 
 def _move_file_preserve_name_bytes(content: bytes, dst_dir: Path, filename: str) -> Path:
@@ -738,6 +728,67 @@ def _resolve_order_import_supplier_context(
         "supplier_id": int(supplier["supplier_id"]),
         "supplier_name": str(supplier["name"]),
         "exists": True,
+    }
+
+
+def _resolve_order_import_row_supplier_context(
+    conn: sqlite3.Connection,
+    *,
+    row: dict[str, str],
+    row_number: int,
+    default_supplier_id: int | None = None,
+    default_supplier_name: str | None = None,
+) -> dict[str, Any]:
+    row_supplier_name = str(row.get("supplier") or "").strip()
+    if row_supplier_name:
+        return _resolve_order_import_supplier_context(
+            conn,
+            supplier_name=row_supplier_name,
+        )
+    if default_supplier_id is not None or default_supplier_name is not None:
+        return _resolve_order_import_supplier_context(
+            conn,
+            supplier_id=default_supplier_id,
+            supplier_name=default_supplier_name,
+        )
+    raise AppError(
+        code="INVALID_CSV",
+        message=f"supplier is required (row {row_number})",
+        status_code=422,
+    )
+
+
+def _summarize_order_import_supplier_contexts(
+    contexts: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if not contexts:
+        return {
+            "supplier_id": None,
+            "supplier_name": "",
+            "exists": False,
+            "mode": "empty",
+        }
+    unique_pairs = {
+        (
+            context.get("supplier_id"),
+            str(context.get("supplier_name") or ""),
+            bool(context.get("exists")),
+        )
+        for context in contexts
+    }
+    if len(unique_pairs) == 1:
+        supplier_id, supplier_name, exists = next(iter(unique_pairs))
+        return {
+            "supplier_id": supplier_id,
+            "supplier_name": supplier_name,
+            "exists": exists,
+            "mode": "single",
+        }
+    return {
+        "supplier_id": None,
+        "supplier_name": "Multiple suppliers",
+        "exists": False,
+        "mode": "per_row",
     }
 
 
@@ -1182,6 +1233,7 @@ IMPORT_TEMPLATE_SPECS: dict[str, dict[str, Any]] = {
     "orders": {
         "filename": "orders_import_template.csv",
         "fieldnames": [
+            "supplier",
             "item_number",
             "quantity",
             "quotation_number",
@@ -1784,66 +1836,82 @@ def _write_missing_items_csv(
     rows: list[dict[str, Any]],
     source_name: str,
     output_dir: str | Path | None = None,
-) -> str:
-    target_dir = Path(output_dir) if output_dir is not None else DEFAULT_EXPORTS_DIR
-    target_dir.mkdir(parents=True, exist_ok=True)
+) -> StoredObject:
+    output = StringIO()
+    writer = csv.DictWriter(output, fieldnames=MISSING_ITEMS_FIELDNAMES)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({k: row.get(k, "") for k in MISSING_ITEMS_FIELDNAMES})
+
     stem = Path(source_name).stem or "order_import"
-    file_path = target_dir / f"{stem}_missing_items_registration.csv"
+    filename = f"{stem}_missing_items_registration.csv"
+    if output_dir is None:
+        return write_storage_bytes(
+            bucket=GENERATED_ARTIFACTS_BUCKET,
+            subdir="missing_items",
+            filename=filename,
+            content=output.getvalue().encode("utf-8"),
+        )
+
+    target_dir = Path(output_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    file_path = target_dir / filename
     with file_path.open("w", encoding="utf-8", newline="") as fp:
-        writer = csv.DictWriter(fp, fieldnames=MISSING_ITEMS_FIELDNAMES)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({k: row.get(k, "") for k in MISSING_ITEMS_FIELDNAMES})
-    return str(file_path)
+        fp.write(output.getvalue())
+    return _stored_object_from_path(file_path)
 
 
 def _write_batch_missing_items_register(
     missing_reports: list[dict[str, Any]],
     *,
     output_dir: Path,
-) -> str:
-    output_dir.mkdir(parents=True, exist_ok=True)
+) -> StoredObject:
     batch_timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    target_path = output_dir / f"batch_missing_items_registration_{batch_timestamp}.csv"
+    output = StringIO()
+    fieldnames = [
+        "source_csv",
+        "source_supplier",
+        *MISSING_ITEMS_FIELDNAMES,
+    ]
+    writer = csv.DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    seen_missing_keys: set[tuple[str, str, str]] = set()
+    for report in missing_reports:
+        source_csv = str(report.get("file", ""))
+        source_supplier = str(report.get("supplier", ""))
+        for row in report.get("missing_rows", []):
+            item_number = str(row.get("item_number", "")).strip()
+            manufacturer_name = str(row.get("manufacturer_name", "")).strip()
+            supplier_name = str(row.get("supplier", source_supplier)).strip()
+            dedupe_key = (
+                supplier_name.casefold(),
+                manufacturer_name.casefold(),
+                item_number.casefold(),
+            )
+            if dedupe_key in seen_missing_keys:
+                continue
+            seen_missing_keys.add(dedupe_key)
+            out_row = {
+                "source_csv": source_csv,
+                "source_supplier": source_supplier,
+            }
+            for key in MISSING_ITEMS_FIELDNAMES:
+                out_row[key] = row.get(key, "")
+            writer.writerow(out_row)
 
+    filename = f"batch_missing_items_registration_{batch_timestamp}.csv"
+    if output_dir.resolve() == ITEMS_IMPORT_UNREGISTERED_ROOT.resolve():
+        return write_storage_bytes(
+            bucket=ITEMS_UNREGISTERED_BUCKET,
+            filename=filename,
+            content=output.getvalue().encode("utf-8"),
+        )
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    target_path = output_dir / filename
     with target_path.open("w", encoding="utf-8", newline="") as fp:
-        fieldnames = [
-            "source_csv",
-            "source_supplier",
-            *MISSING_ITEMS_FIELDNAMES,
-        ]
-        writer = csv.DictWriter(fp, fieldnames=fieldnames)
-        writer.writeheader()
-        seen_missing_keys: set[tuple[str, str, str]] = set()
-        for report in missing_reports:
-            source_csv = str(report.get("file", ""))
-            source_supplier = str(report.get("supplier", ""))
-            for row in report.get("missing_rows", []):
-                item_number = str(row.get("item_number", "")).strip()
-                manufacturer_name = str(row.get("manufacturer_name", "")).strip()
-                supplier_name = str(row.get("supplier", source_supplier)).strip()
-                dedupe_key = (
-                    supplier_name.casefold(),
-                    manufacturer_name.casefold(),
-                    item_number.casefold(),
-                )
-                if dedupe_key in seen_missing_keys:
-                    continue
-                seen_missing_keys.add(dedupe_key)
-                out_row = {
-                    "source_csv": source_csv,
-                    "source_supplier": source_supplier,
-                }
-                for key in MISSING_ITEMS_FIELDNAMES:
-                    out_row[key] = row.get(key, "")
-                writer.writerow(out_row)
-    return str(target_path)
-
-
-def _safe_workspace_relative(path: Path) -> str:
-    return safe_workspace_relative(path)
-
-
+        fp.write(output.getvalue())
+    return _stored_object_from_path(target_path)
 def _target_path_preserve_name(dst_dir: Path, filename: str) -> Path:
     dst_dir.mkdir(parents=True, exist_ok=True)
     safe_name = Path(filename).name or "items_import.csv"
@@ -1894,9 +1962,18 @@ def _archive_imported_items_csv(
     root = Path(registered_root) if registered_root else ITEMS_IMPORT_REGISTERED_ROOT
     unreg_root = Path(unregistered_root) if unregistered_root else ITEMS_IMPORT_UNREGISTERED_ROOT
 
-    month_dir = root / today_jst()[:7]
-    archived_path = _write_bytes_preserve_name(content, month_dir, source_name)
-    consolidation = consolidate_registered_item_csvs(root)
+    month_subdir = today_jst()[:7]
+    if root.resolve() == ITEMS_IMPORT_REGISTERED_ROOT.resolve():
+        archived = write_storage_bytes(
+            bucket=ITEMS_REGISTERED_ARCHIVES_BUCKET,
+            subdir=month_subdir,
+            filename=source_name,
+            content=content,
+        )
+    else:
+        month_dir = root / month_subdir
+        archived_path = _write_bytes_preserve_name(content, month_dir, source_name)
+        archived = _stored_object_from_path(archived_path)
 
     cleanup_file = None
     safe_name = Path(source_name).name
@@ -1906,9 +1983,9 @@ def _archive_imported_items_csv(
             cleanup_file = str(potential_unreg_file)
 
     return {
-        "registered_root": str(root),
-        "archived_path": str(archived_path),
-        "consolidation": consolidation,
+        "archive_storage_ref": archived.storage_ref,
+        "archived_filename": archived.filename,
+        "consolidation": _disabled_items_archive_rollup_result(),
         "cleanup_unreg_file": cleanup_file,
     }
 
@@ -5012,9 +5089,6 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
                 status_code=422,
             ) from exc
 
-    row_matcher = _order_csv_row_matcher_for_identity(conn, current)
-    roots = build_roots()
-
     if split_quantity is None:
         updates = ["expected_arrival = ?", "status = COALESCE(?, status)"]
         params: list[Any] = [expected_arrival, status]
@@ -5032,13 +5106,6 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
             tuple(params),
         )
         updated = get_order(conn, order_id)
-        updated_expected_arrival = updated.get("expected_arrival")
-
-        def _updater(row: dict[str, Any]) -> dict[str, Any]:
-            row["expected_arrival"] = updated_expected_arrival or ""
-            return row
-
-        _rewrite_order_csv_rows(roots, row_matcher=row_matcher, row_updater=_updater)
         if current.get("expected_arrival") != updated.get("expected_arrival"):
             _record_order_lineage_event(
                 conn,
@@ -5138,28 +5205,7 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
     )
     split_order_id = int(cur.lastrowid)
 
-    def _updater(row: dict[str, Any]) -> dict[str, Any]:
-        row["quantity"] = str(remaining_ordered)
-        return row
-
-    _rewrite_order_csv_rows(roots, row_matcher=row_matcher, row_updater=_updater)
-
     split_order = get_order(conn, split_order_id)
-    sibling_ids = _order_csv_sibling_ids_for_identity(conn, split_order)
-    anchor_occurrence_index = max(len(sibling_ids) - 2, 0)
-    row_matcher_for_insert = _order_csv_row_matcher_for_occurrence(split_order, anchor_occurrence_index)
-
-    def _builder(row: dict[str, Any]) -> dict[str, Any]:
-        next_row = dict(row)
-        next_row["quantity"] = str(split_ordered)
-        next_row["expected_arrival"] = expected_arrival or ""
-        next_row["order_date"] = str(current.get("order_date") or "")
-        next_row["issue_date"] = str(current.get("issue_date") or "")
-        next_row["quotation_document_url"] = str(current.get("quotation_document_url") or "")
-        next_row["purchase_order_document_url"] = str(current.get("purchase_order_document_url") or "")
-        return next_row
-
-    _insert_order_csv_row_after_match(roots, row_matcher=row_matcher_for_insert, row_builder=_builder)
     _record_order_lineage_event(
         conn,
         event_type="ETA_SPLIT",
@@ -5187,12 +5233,8 @@ def delete_order(conn: sqlite3.Connection, order_id: int) -> dict[str, Any]:
             message="Arrived orders cannot be deleted",
             status_code=409,
         )
-    row_matcher = _order_csv_row_matcher_for_identity(conn, order)
 
     conn.execute("DELETE FROM orders WHERE order_id = ?", (order_id,))
-
-    roots = build_roots()
-    csv_sync = _rewrite_order_csv_rows(roots, row_matcher=row_matcher, row_updater=None)
 
     remaining = conn.execute(
         "SELECT COUNT(*) AS c FROM orders WHERE quotation_id = ?",
@@ -5206,7 +5248,7 @@ def delete_order(conn: sqlite3.Connection, order_id: int) -> dict[str, Any]:
         "deleted": True,
         "order_id": order_id,
         "quotation_deleted": quotation_deleted,
-        "csv_sync": csv_sync,
+        "csv_sync": _csv_archive_sync_disabled_result(),
     }
 
 
@@ -5249,13 +5291,6 @@ def merge_open_orders(
     target_ordered = int(target["ordered_quantity"] or target_amount)
     source_ordered = int(source["ordered_quantity"] or source_amount)
 
-    sibling_ids = _order_csv_sibling_ids_for_identity(conn, source)
-    source_idx = sibling_ids.index(source_order_id) if source_order_id in sibling_ids else 0
-    target_idx = sibling_ids.index(target_order_id) if target_order_id in sibling_ids else 0
-    adjusted_target_idx = target_idx - 1 if source_idx < target_idx else target_idx
-    source_matcher = _order_csv_row_matcher_for_occurrence(source, source_idx)
-    target_matcher = _order_csv_row_matcher_for_occurrence(target, adjusted_target_idx)
-
     conn.execute(
         """
         UPDATE orders
@@ -5268,20 +5303,6 @@ def merge_open_orders(
         (target_amount + source_amount, target_ordered + source_ordered, final_eta, target_order_id),
     )
     conn.execute("DELETE FROM orders WHERE order_id = ?", (source_order_id,))
-
-    roots = build_roots()
-
-    def _target_updater(row: dict[str, Any]) -> dict[str, Any]:
-        row["quantity"] = str(target_ordered + source_ordered)
-        row["expected_arrival"] = final_eta or ""
-        return row
-
-    _merge_order_csv_rows(
-        roots,
-        source_row_matcher=source_matcher,
-        target_row_matcher=target_matcher,
-        target_row_updater=_target_updater,
-    )
 
     event = _record_order_lineage_event(
         conn,
@@ -5301,40 +5322,6 @@ def merge_open_orders(
         "target_order": get_order(conn, target_order_id),
         "lineage_event": event,
     }
-
-
-def _order_csv_sibling_ids_for_identity(
-    conn: sqlite3.Connection,
-    order_row: dict[str, Any],
-) -> list[int]:
-    sibling_rows = conn.execute(
-        """
-        SELECT o.order_id
-        FROM orders o
-        JOIN quotations q ON q.quotation_id = o.quotation_id
-        JOIN suppliers s ON s.supplier_id = q.supplier_id
-        WHERE s.name = ?
-          AND q.quotation_number = ?
-          AND o.ordered_item_number = ?
-        ORDER BY o.order_id ASC
-        """,
-        (
-            str(order_row.get("supplier_name") or ""),
-            str(order_row.get("quotation_number") or ""),
-            str(order_row.get("ordered_item_number") or ""),
-        ),
-    ).fetchall()
-    return [int(row["order_id"]) for row in sibling_rows]
-
-
-def _order_csv_row_matcher_for_identity(
-    conn: sqlite3.Connection,
-    order_row: dict[str, Any],
-) -> Any:
-    sibling_ids = _order_csv_sibling_ids_for_identity(conn, order_row)
-    order_id = int(order_row["order_id"])
-    occurrence_index = sibling_ids.index(order_id) if order_id in sibling_ids else 0
-    return _order_csv_row_matcher_for_occurrence(order_row, occurrence_index)
 
 
 def _normalize_required_quotation_document_url(
@@ -5363,199 +5350,6 @@ def _resolve_import_quotation_document_url(
         if legacy_pdf_link:
             return None
     return _normalize_required_quotation_document_url(raw_value, row_index=row_index)
-
-
-def _iter_order_csv_files(roots: OrderImportRoots) -> list[Path]:
-    files: list[Path] = []
-    seen: set[str] = set()
-    for base in (roots.unregistered_csv_root, roots.registered_csv_root):
-        if not base.exists():
-            continue
-        for csv_file in sorted(base.rglob("*.csv"), key=lambda p: str(p).lower()):
-            try:
-                if csv_file.resolve().is_relative_to(ITEMS_IMPORT_UNREGISTERED_ROOT.resolve()):
-                    continue
-            except Exception:
-                pass
-            key = str(csv_file.resolve()).casefold()
-            if key in seen:
-                continue
-            seen.add(key)
-            files.append(csv_file)
-    return files
-
-
-def _rewrite_order_csv_rows(
-    roots: OrderImportRoots,
-    *,
-    row_matcher: Any,
-    row_updater: Any | None = None,
-) -> dict[str, Any]:
-    rewritten_files = 0
-    updated_rows = 0
-    deleted_rows = 0
-    touched_files: list[str] = []
-
-    for csv_file in _iter_order_csv_files(roots):
-        with csv_file.open("r", encoding="utf-8-sig", newline="") as fp:
-            reader = csv.DictReader(fp)
-            fieldnames = list(reader.fieldnames or [])
-            rows = list(reader)
-
-        if not fieldnames:
-            continue
-
-        changed = False
-        next_rows: list[dict[str, Any]] = []
-        for row in rows:
-            if not row_matcher(row):
-                next_rows.append(row)
-                continue
-            changed = True
-            if row_updater is None:
-                deleted_rows += 1
-                continue
-            updated = row_updater(dict(row))
-            if updated is None:
-                deleted_rows += 1
-                continue
-            if updated != row:
-                updated_rows += 1
-            next_rows.append(updated)
-
-        if not changed:
-            continue
-
-        extra_keys = [
-            key
-            for row in next_rows
-            for key in row.keys()
-            if key not in fieldnames
-        ]
-        if extra_keys:
-            fieldnames.extend(key for key in extra_keys if key not in fieldnames)
-
-        with csv_file.open("w", encoding="utf-8", newline="") as fp:
-            writer = csv.DictWriter(fp, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(next_rows)
-        rewritten_files += 1
-        touched_files.append(str(csv_file))
-
-    return {
-        "rewritten_files": rewritten_files,
-        "updated_rows": updated_rows,
-        "deleted_rows": deleted_rows,
-        "files": touched_files,
-    }
-
-
-def _insert_order_csv_row_after_match(
-    roots: OrderImportRoots,
-    *,
-    row_matcher: Any,
-    row_builder: Any,
-) -> dict[str, Any]:
-    for csv_file in _iter_order_csv_files(roots):
-        with csv_file.open("r", encoding="utf-8-sig", newline="") as fp:
-            reader = csv.DictReader(fp)
-            fieldnames = list(reader.fieldnames or [])
-            rows = list(reader)
-
-        if not fieldnames:
-            continue
-
-        next_rows: list[dict[str, Any]] = []
-        inserted = False
-        for row in rows:
-            next_rows.append(row)
-            if inserted:
-                continue
-            if not row_matcher(row):
-                continue
-            built_row = row_builder(dict(row))
-            if built_row is None:
-                inserted = True
-                continue
-            extra_keys = [key for key in built_row.keys() if key not in fieldnames]
-            if extra_keys:
-                fieldnames.extend(key for key in extra_keys if key not in fieldnames)
-            merged = {key: built_row.get(key, row.get(key, "")) for key in fieldnames}
-            next_rows.append(merged)
-            inserted = True
-
-        if not inserted:
-            continue
-
-        with csv_file.open("w", encoding="utf-8", newline="") as fp:
-            writer = csv.DictWriter(fp, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(next_rows)
-        return {"inserted": True, "file": str(csv_file)}
-
-    return {"inserted": False, "file": None}
-
-
-def _order_csv_row_matcher_for_occurrence(
-    order_row: dict[str, Any],
-    occurrence_index: int,
-) -> Any:
-    safe_occurrence_index = max(int(occurrence_index), 0)
-    seen = -1
-
-    def _matcher(csv_row: dict[str, Any]) -> bool:
-        nonlocal seen
-        is_same_order_key = (
-            str(csv_row.get("supplier") or "").strip() == str(order_row.get("supplier_name") or "")
-            and str(csv_row.get("quotation_number") or "").strip() == str(order_row.get("quotation_number") or "")
-            and str(csv_row.get("item_number") or "").strip() == str(order_row.get("ordered_item_number") or "")
-        )
-        if not is_same_order_key:
-            return False
-        seen += 1
-        return seen == safe_occurrence_index
-
-    return _matcher
-
-
-def _merge_order_csv_rows(
-    roots: OrderImportRoots,
-    *,
-    source_row_matcher: Any,
-    target_row_matcher: Any,
-    target_row_updater: Any,
-) -> dict[str, Any]:
-    for csv_file in _iter_order_csv_files(roots):
-        with csv_file.open("r", encoding="utf-8-sig", newline="") as fp:
-            reader = csv.DictReader(fp)
-            fieldnames = list(reader.fieldnames or [])
-            rows = list(reader)
-
-        if not fieldnames:
-            continue
-
-        changed = False
-        next_rows: list[dict[str, Any]] = []
-        for row in rows:
-            if source_row_matcher(row):
-                changed = True
-                continue
-            if target_row_matcher(row):
-                changed = True
-                next_rows.append(target_row_updater(dict(row)))
-                continue
-            next_rows.append(row)
-
-        if not changed:
-            continue
-
-        with csv_file.open("w", encoding="utf-8", newline="") as fp:
-            writer = csv.DictWriter(fp, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(next_rows)
-        return {"updated": True, "file": str(csv_file)}
-
-    return {"updated": False, "file": None}
 
 
 def _order_import_duplicate_quotation_numbers(
@@ -5683,6 +5477,8 @@ def _normalize_order_import_overrides(
 
 def _normalize_order_import_alias_saves(
     alias_saves: list[dict[str, Any]] | None,
+    *,
+    default_supplier_name: str | None = None,
 ) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     alias_payload = _require_json_array(
@@ -5697,7 +5493,9 @@ def _normalize_order_import_alias_saves(
                 message=f"Alias save entry #{idx} must be an object",
                 status_code=422,
             )
-        unexpected_fields = sorted(set(raw_alias) - {"ordered_item_number", "item_id", "units_per_order"})
+        unexpected_fields = sorted(
+            set(raw_alias) - {"supplier_name", "ordered_item_number", "item_id", "units_per_order"}
+        )
         if unexpected_fields:
             raise AppError(
                 code="INVALID_ORDER_IMPORT_ALIAS",
@@ -5708,6 +5506,8 @@ def _normalize_order_import_alias_saves(
             str(raw_alias.get("ordered_item_number", "")),
             f"ordered_item_number (alias save #{idx})",
         )
+        supplier_name = str(raw_alias.get("supplier_name") or default_supplier_name or "").strip()
+        supplier_name = require_non_empty(supplier_name, f"supplier_name (alias save #{idx})")
         if raw_alias.get("item_id") in (None, ""):
             raise AppError(
                 code="INVALID_ORDER_IMPORT_ALIAS",
@@ -5739,6 +5539,7 @@ def _normalize_order_import_alias_saves(
             ) from exc
         normalized.append(
             {
+                "supplier_name": supplier_name,
                 "ordered_item_number": ordered_item_number,
                 "item_id": item_id,
                 "units_per_order": units_per_order,
@@ -5750,15 +5551,20 @@ def _normalize_order_import_alias_saves(
 def _apply_order_import_alias_saves(
     conn: sqlite3.Connection,
     *,
-    supplier_id: int,
     alias_saves: list[dict[str, Any]],
 ) -> int:
-    deduped: dict[str, dict[str, Any]] = {}
+    deduped: dict[tuple[str, str], dict[str, Any]] = {}
     for alias in alias_saves:
-        deduped[str(alias["ordered_item_number"]).casefold()] = alias
+        deduped[
+            (
+                str(alias["supplier_name"]).casefold(),
+                str(alias["ordered_item_number"]).casefold(),
+            )
+        ] = alias
 
     saved_count = 0
     for alias in deduped.values():
+        supplier_id = _get_or_create_supplier(conn, str(alias["supplier_name"]))
         ordered_item_number = str(alias["ordered_item_number"])
         if _resolve_item_by_number(conn, ordered_item_number) is not None:
             continue
@@ -6209,18 +6015,17 @@ def preview_orders_import_from_rows(
     default_order_date: str | None = None,
     source_name: str = "order_import.csv",
 ) -> dict[str, Any]:
-    supplier_context = _resolve_order_import_supplier_context(
-        conn,
-        supplier_id=supplier_id,
-        supplier_name=supplier_name,
-    )
-    supplier_name_value = str(supplier_context["supplier_name"])
-    preview_candidates = _load_order_import_preview_candidates(
-        conn,
-        supplier_context["supplier_id"],
-    )
+    default_supplier_context = None
+    if supplier_id is not None or supplier_name is not None:
+        default_supplier_context = _resolve_order_import_supplier_context(
+            conn,
+            supplier_id=supplier_id,
+            supplier_name=supplier_name,
+        )
     normalized_default_date = normalize_optional_date(default_order_date, "default_order_date")
     preview_rows: list[dict[str, Any]] = []
+    row_supplier_contexts: list[dict[str, Any]] = []
+    preview_candidate_cache: dict[int | None, list[dict[str, Any]]] = {}
     summary = {
         "total_rows": 0,
         "exact": 0,
@@ -6233,6 +6038,33 @@ def preview_orders_import_from_rows(
         if not any(str(value or "").strip() for value in row.values()):
             continue
 
+        supplier_context = _resolve_order_import_row_supplier_context(
+            conn,
+            row=row,
+            row_number=row_number,
+            default_supplier_id=(
+                int(default_supplier_context["supplier_id"])
+                if default_supplier_context and default_supplier_context.get("supplier_id") is not None
+                else None
+            ),
+            default_supplier_name=(
+                str(default_supplier_context["supplier_name"])
+                if default_supplier_context is not None
+                else None
+            ),
+        )
+        row_supplier_contexts.append(supplier_context)
+        preview_supplier_id = (
+            int(supplier_context["supplier_id"])
+            if supplier_context.get("supplier_id") is not None
+            else None
+        )
+        if preview_supplier_id not in preview_candidate_cache:
+            preview_candidate_cache[preview_supplier_id] = _load_order_import_preview_candidates(
+                conn,
+                preview_supplier_id,
+            )
+        preview_candidates = preview_candidate_cache[preview_supplier_id]
         item_number = require_non_empty(str(row.get("item_number", "")), f"item_number (row {row_number})")
         quantity_raw = row.get("quantity")
         try:
@@ -6275,7 +6107,8 @@ def preview_orders_import_from_rows(
         suggested_match = best_candidate if status != "unresolved" else None
         preview_row = {
             "row": row_number,
-            "supplier_name": supplier_name_value,
+            "supplier_name": str(supplier_context["supplier_name"]),
+            "supplier_id": preview_supplier_id,
             "item_number": item_number,
             "quantity": ordered_quantity,
             "quotation_number": quotation_number,
@@ -6294,6 +6127,7 @@ def preview_orders_import_from_rows(
                 if suggested_match is not None
                 else None
             ),
+            "supplier_exists": bool(supplier_context["exists"]),
         }
         preview_rows.append(preview_row)
         summary["total_rows"] += 1
@@ -6301,25 +6135,38 @@ def preview_orders_import_from_rows(
 
     blocking_errors: list[str] = []
     duplicate_quotation_numbers: list[str] = []
-    if supplier_context["supplier_id"] is not None:
-        duplicate_quotation_numbers = _order_import_duplicate_quotation_numbers(
+    duplicate_messages_seen: set[str] = set()
+    rows_by_supplier_id: dict[int, list[dict[str, Any]]] = {}
+    for preview_row in preview_rows:
+        supplier_row_id = preview_row.get("supplier_id")
+        if supplier_row_id is None:
+            continue
+        rows_by_supplier_id.setdefault(int(supplier_row_id), []).append(preview_row)
+    for duplicate_supplier_id, supplier_rows in rows_by_supplier_id.items():
+        supplier_duplicates = _order_import_duplicate_quotation_numbers(
             conn,
-            int(supplier_context["supplier_id"]),
-            [str(row["quotation_number"]) for row in preview_rows],
+            duplicate_supplier_id,
+            [str(row["quotation_number"]) for row in supplier_rows],
         )
-        if duplicate_quotation_numbers:
-            duplicate_set = set(duplicate_quotation_numbers)
-            blocking_errors.append(
-                "Quotation already imported for this supplier: "
-                + ", ".join(duplicate_quotation_numbers)
-            )
-            for preview_row in preview_rows:
-                if str(preview_row["quotation_number"]) in duplicate_set:
-                    preview_row["warnings"].append("Quotation already imported for this supplier.")
+        if not supplier_duplicates:
+            continue
+        duplicate_quotation_numbers.extend(supplier_duplicates)
+        duplicate_set = set(supplier_duplicates)
+        supplier_name_value = str(supplier_rows[0]["supplier_name"])
+        duplicate_message = (
+            f"Quotation already imported for supplier '{supplier_name_value}': "
+            + ", ".join(supplier_duplicates)
+        )
+        if duplicate_message not in duplicate_messages_seen:
+            blocking_errors.append(duplicate_message)
+            duplicate_messages_seen.add(duplicate_message)
+        for preview_row in supplier_rows:
+            if str(preview_row["quotation_number"]) in duplicate_set:
+                preview_row["warnings"].append("Quotation already imported for this supplier.")
 
     return {
         "source_name": source_name,
-        "supplier": supplier_context,
+        "supplier": _summarize_order_import_supplier_contexts(row_supplier_contexts),
         "thresholds": {
             "auto_accept": ORDER_IMPORT_AUTO_ACCEPT_SCORE,
             "review": ORDER_IMPORT_REVIEW_SCORE,
@@ -6340,7 +6187,8 @@ def preview_orders_import_from_rows(
 def _process_order_rows_for_import(
     conn: sqlite3.Connection,
     *,
-    supplier_id: int,
+    supplier_id: int | None = None,
+    supplier_name: str | None = None,
     rows: list[dict[str, str]],
     default_order_date: str | None = None,
     allow_noncanonical_pdf_link: bool = False,
@@ -6349,15 +6197,38 @@ def _process_order_rows_for_import(
     resolved: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
     seen_missing: set[tuple[str, str]] = set()
-    supplier_name_row = conn.execute(
-        "SELECT name FROM suppliers WHERE supplier_id = ?",
-        (supplier_id,),
-    ).fetchone()
-    supplier_name = supplier_name_row["name"] if supplier_name_row else str(supplier_id)
+    default_supplier_context = None
+    if supplier_id is not None or supplier_name is not None:
+        default_supplier_context = _resolve_order_import_supplier_context(
+            conn,
+            supplier_id=supplier_id,
+            supplier_name=supplier_name,
+        )
     normalized_default_date = normalize_optional_date(default_order_date, "default_order_date")
     for idx, row in enumerate(rows, start=2):
         if not any(str(value or "").strip() for value in row.values()):
             continue
+        supplier_context = _resolve_order_import_row_supplier_context(
+            conn,
+            row=row,
+            row_number=idx,
+            default_supplier_id=(
+                int(default_supplier_context["supplier_id"])
+                if default_supplier_context and default_supplier_context.get("supplier_id") is not None
+                else None
+            ),
+            default_supplier_name=(
+                str(default_supplier_context["supplier_name"])
+                if default_supplier_context is not None
+                else None
+            ),
+        )
+        row_supplier_id = (
+            int(supplier_context["supplier_id"])
+            if supplier_context.get("supplier_id") is not None
+            else _get_or_create_supplier(conn, str(supplier_context["supplier_name"]))
+        )
+        row_supplier_name = str(supplier_context["supplier_name"])
         item_number = require_non_empty(str(row.get("item_number", "")), f"item_number (row {idx})")
         quantity_raw = row.get("quantity")
         try:
@@ -6377,7 +6248,7 @@ def _process_order_rows_for_import(
             row.get("purchase_order_document_url"),
             f"purchase_order_document_url (row {idx})",
         )
-        item_id, units_per_order = _resolve_order_item(conn, supplier_id, item_number)
+        item_id, units_per_order = _resolve_order_item(conn, row_supplier_id, item_number)
         override = (row_overrides or {}).get(idx, {})
         override_item_id = override.get("item_id")
         override_units = override.get("units_per_order")
@@ -6396,14 +6267,14 @@ def _process_order_rows_for_import(
         if override_units is not None:
             units_per_order = override_units
         if item_id is None:
-            dedupe_key = (supplier_name.casefold(), item_number.casefold())
+            dedupe_key = (row_supplier_name.casefold(), item_number.casefold())
             if dedupe_key not in seen_missing:
                 seen_missing.add(dedupe_key)
                 missing.append(
                     {
                         "row": idx,
                         "item_number": item_number,
-                        "supplier": supplier_name,
+                        "supplier": row_supplier_name,
                         "manufacturer_name": "",
                         "resolution_type": "new_item",
                         "category": "",
@@ -6420,6 +6291,8 @@ def _process_order_rows_for_import(
         resolved.append(
             {
                 "item_id": item_id,
+                "supplier_id": row_supplier_id,
+                "supplier_name": row_supplier_name,
                 "row_number": idx,
                 "quotation_number": require_non_empty(
                     str(row.get("quotation_number", "")),
@@ -6455,9 +6328,11 @@ def import_orders_from_rows(
     alias_saves: list[dict[str, Any]] | None = None,
     import_job_id: int | None = None,
 ) -> dict[str, Any]:
-    sid = _resolve_supplier_id(conn, supplier_id, supplier_name)
     normalized_overrides = _normalize_order_import_overrides(row_overrides)
-    normalized_alias_saves = _normalize_order_import_alias_saves(alias_saves)
+    normalized_alias_saves = _normalize_order_import_alias_saves(
+        alias_saves,
+        default_supplier_name=supplier_name,
+    )
     _validate_import_override_rows(
         normalized_overrides,
         valid_row_numbers=_valid_csv_row_numbers(rows, skip_blank_rows=True),
@@ -6466,14 +6341,15 @@ def import_orders_from_rows(
     )
     resolved, missing = _process_order_rows_for_import(
         conn,
-        supplier_id=sid,
+        supplier_id=supplier_id,
+        supplier_name=supplier_name,
         rows=rows,
         default_order_date=default_order_date,
         allow_noncanonical_pdf_link=allow_noncanonical_pdf_link,
         row_overrides=normalized_overrides,
     )
     if missing:
-        missing_csv_path = _write_missing_items_csv(
+        missing_csv = _write_missing_items_csv(
             missing,
             source_name=source_name,
             output_dir=missing_output_dir,
@@ -6494,25 +6370,47 @@ def import_orders_from_rows(
         return {
             "status": "missing_items",
             "missing_count": len(missing),
-            "missing_csv_path": missing_csv_path,
-            "missing_artifact": _build_generated_artifact(
+            "missing_csv_path": str(missing_csv.path),
+            "missing_storage_ref": missing_csv.storage_ref,
+            "missing_artifact": _build_generated_artifact_from_stored_object(
                 conn,
-                Path(missing_csv_path),
+                missing_csv,
                 source_job_type="orders" if import_job_id is not None else None,
                 source_job_id=str(import_job_id) if import_job_id is not None else None,
             ),
             "rows": missing,
         }
 
-    duplicated = _order_import_duplicate_quotation_numbers(
-        conn,
-        sid,
-        [str(row["quotation_number"]) for row in resolved],
-    )
-    if duplicated:
+    duplicate_details: list[dict[str, Any]] = []
+    duplicate_messages: list[str] = []
+    rows_by_supplier_id: dict[int, list[dict[str, Any]]] = {}
+    for row in resolved:
+        rows_by_supplier_id.setdefault(int(row["supplier_id"]), []).append(row)
+    for duplicate_supplier_id, supplier_rows in rows_by_supplier_id.items():
+        supplier_duplicates = _order_import_duplicate_quotation_numbers(
+            conn,
+            duplicate_supplier_id,
+            [str(row["quotation_number"]) for row in supplier_rows],
+        )
+        if not supplier_duplicates:
+            continue
+        duplicate_set = set(supplier_duplicates)
+        duplicate_details.extend(
+            {
+                "supplier_id": duplicate_supplier_id,
+                "supplier_name": str(supplier_rows[0]["supplier_name"]),
+                "quotation_number": quotation_number,
+            }
+            for quotation_number in supplier_duplicates
+        )
+        duplicate_messages.append(
+            "Quotation already imported for supplier "
+            f"'{supplier_rows[0]['supplier_name']}': {', '.join(supplier_duplicates)}"
+        )
         if import_job_id is not None:
-            duplicate_set = set(duplicated)
             for row in resolved:
+                if int(row["supplier_id"]) != duplicate_supplier_id:
+                    continue
                 if str(row["quotation_number"]) not in duplicate_set:
                     continue
                 _record_import_job_effect(
@@ -6522,26 +6420,28 @@ def import_orders_from_rows(
                     status="duplicate",
                     effect_type="order_duplicate_quotation",
                     item_id=int(row["item_id"]),
+                    supplier_id=int(row["supplier_id"]),
+                    supplier_name=str(row["supplier_name"]),
                     item_number=str(row.get("ordered_item_number") or ""),
                     message=(
                         "Quotation already imported for this supplier: "
-                        f"{', '.join(duplicated)}"
+                        f"{', '.join(supplier_duplicates)}"
                     ),
                     code="DUPLICATE_QUOTATION_IMPORT",
                 )
+    if duplicate_messages:
         raise AppError(
             code="DUPLICATE_QUOTATION_IMPORT",
-            message=(
-                "Quotation already imported for this supplier: "
-                f"{', '.join(duplicated)}"
-            ),
+            message="; ".join(duplicate_messages),
             status_code=409,
-            details={"quotation_numbers": duplicated},
+            details={
+                "quotation_numbers": [detail["quotation_number"] for detail in duplicate_details],
+                "quotation_numbers_by_supplier": duplicate_details,
+            },
         )
 
     saved_alias_count = _apply_order_import_alias_saves(
         conn,
-        supplier_id=sid,
         alias_saves=normalized_alias_saves,
     )
 
@@ -6549,7 +6449,7 @@ def import_orders_from_rows(
     for row in resolved:
         quotation_id = _get_or_create_quotation(
             conn,
-            sid,
+            int(row["supplier_id"]),
             row["quotation_number"],
             row["issue_date"],
             row["quotation_document_url"],
@@ -6587,13 +6487,14 @@ def import_orders_from_rows(
                 import_job_id=import_job_id,
                 row_number=int(row["row_number"]),
                 status="created",
-                effect_type="order_created",
-                item_id=int(row["item_id"]),
-                item_number=str(row.get("ordered_item_number") or ""),
-                supplier_id=int(sid),
-                after_state={
-                    "order_id": order_id,
-                    "item_id": int(row["item_id"]),
+                    effect_type="order_created",
+                    item_id=int(row["item_id"]),
+                    item_number=str(row.get("ordered_item_number") or ""),
+                    supplier_id=int(row["supplier_id"]),
+                    supplier_name=str(row["supplier_name"]),
+                    after_state={
+                        "order_id": order_id,
+                        "item_id": int(row["item_id"]),
                     "quotation_id": quotation_id,
                     "quotation_number": row["quotation_number"],
                     "quotation_document_url": row["quotation_document_url"],
@@ -6883,241 +6784,6 @@ def import_orders_from_csv_path(
     )
 
 
-def register_unregistered_item_csvs(
-    conn: sqlite3.Connection,
-    *,
-    items_unregistered_root: str | Path | None = None,
-    items_registered_root: str | Path | None = None,
-    continue_on_error: bool = False,
-) -> dict[str, Any]:
-    unregistered_root = Path(items_unregistered_root) if items_unregistered_root else ITEMS_IMPORT_UNREGISTERED_ROOT
-    registered_root = Path(items_registered_root) if items_registered_root else ITEMS_IMPORT_REGISTERED_ROOT
-    
-    unregistered_root.mkdir(parents=True, exist_ok=True)
-    registered_root.mkdir(parents=True, exist_ok=True)
-
-    files = sorted(unregistered_root.rglob("*.csv"))
-    report: list[dict[str, Any]] = []
-    processed = 0
-    succeeded = 0
-    failed = 0
-    warnings: list[str] = []
-    normalizations: list[dict[str, str]] = []
-
-    for csv_path in files:
-        processed += 1
-        supplier_name = "UNKNOWN"
-        file_warnings: list[str] = []
-        moved_to: Path | None = None
-        try:
-            savepoint = f"sp_register_missing_{uuid4().hex}"
-            conn.execute(f"SAVEPOINT {savepoint}")
-            try:
-                result = register_missing_items_from_csv_path(conn, csv_path, skip_unresolved=True)
-                
-                if result.get("is_completely_unresolved") and csv_path.name.startswith("batch_missing_items_registration"):
-                    # For generated batch reports, if nothing was actually registered, we safely delete it.
-                    csv_path.unlink(missing_ok=True)
-                    status_text = "skipped_unresolved_batch_file"
-                    moved_to = None
-                else:
-                    month_dir = registered_root / today_jst()[:7]
-                    month_dir.mkdir(parents=True, exist_ok=True)
-                    moved_to = _move_file_preserve_name(
-                        csv_path,
-                        month_dir,
-                    )
-                    status_text = "ok"
-
-                report.append(
-                    {
-                        "file": str(csv_path),
-                        "supplier": supplier_name,
-                        "status": status_text,
-                        "moved_to": str(moved_to) if moved_to else None,
-                        "result": result,
-                        "warnings": file_warnings,
-                        "normalizations": [],
-                    }
-                )
-                conn.execute(f"RELEASE {savepoint}")
-                succeeded += 1
-            except Exception:
-                if moved_to is not None and moved_to.exists() and not csv_path.exists():
-                    _move_file_to_target(moved_to, csv_path)
-                    moved_to = None
-                conn.execute(f"ROLLBACK TO {savepoint}")
-                conn.execute(f"RELEASE {savepoint}")
-                raise
-        except Exception as exc:  # noqa: BLE001
-            failed += 1
-            report.append(
-                {
-                    "file": str(csv_path),
-                    "supplier": supplier_name,
-                    "status": "error",
-                    "error": str(exc),
-                    "warnings": file_warnings,
-                    "normalizations": [],
-                }
-            )
-            if not continue_on_error:
-                break
-
-    status = "ok" if failed == 0 else ("partial" if succeeded > 0 else "error")
-    if status == "ok":
-        consolidation = consolidate_registered_item_csvs(registered_root)
-    else:
-        consolidation = {"consolidated": 0, "folders": [], "skipped_due_to_errors": True}
-
-    return {
-        "status": status,
-        "processed": processed,
-        "succeeded": succeeded,
-        "failed": failed,
-        "files": report,
-        "warnings": warnings,
-        "normalizations": normalizations,
-        "consolidation": consolidation,
-    }
-
-
-def upload_and_register_item_batch_csvs(
-    conn: sqlite3.Connection,
-    *,
-    files: list[tuple[str, bytes]],
-    continue_on_error: bool = False,
-    staging_root: str | Path | None = None,
-) -> dict[str, Any]:
-    staged = _write_uploaded_batch_csvs_to_staging(files, staging_root=staging_root)
-    result = register_unregistered_item_csvs(
-        conn,
-        items_unregistered_root=staged["items_unregistered_root"],
-        items_registered_root=ITEMS_IMPORT_REGISTERED_ROOT,
-        continue_on_error=continue_on_error,
-    )
-    result["upload_job_id"] = staged["job_id"]
-    result["staging_root"] = staged["job_root"]
-    result["uploaded_files"] = staged["staged_files"]
-    return result
-
-
-_CONSOLIDATED_NAME_RE = re.compile(r"^items_\d{4}-\d{2}_\d{3}\.csv$")
-
-
-def consolidate_registered_item_csvs(
-    registered_root: str | Path | None = None,
-    *,
-    max_rows: int = ITEMS_IMPORT_MAX_CONSOLIDATED_ROWS,
-) -> dict[str, Any]:
-    """Merge small CSVs in each YYYY-MM subfolder into consolidated files.
-
-    Consolidated files are named ``items_YYYY-MM_001.csv``, ``_002.csv``, etc.
-    Each file contains at most *max_rows* data rows.  Original small CSVs are
-    deleted after a successful merge.  Already-consolidated files are re-read so
-    their rows are included in the new output (and the old files replaced).
-    """
-    root = Path(registered_root) if registered_root else ITEMS_IMPORT_REGISTERED_ROOT
-    if not root.is_dir():
-        return {"consolidated": 0, "folders": []}
-
-    folders_report: list[dict[str, Any]] = []
-    total_consolidated = 0
-
-    for month_dir in sorted(root.iterdir()):
-        if not month_dir.is_dir():
-            continue
-        month_name = month_dir.name
-
-        consolidated_files: list[Path] = []
-        unconsolidated_files: list[Path] = []
-        for f in sorted(month_dir.glob("*.csv")):
-            if _CONSOLIDATED_NAME_RE.match(f.name):
-                consolidated_files.append(f)
-            else:
-                unconsolidated_files.append(f)
-
-        if not unconsolidated_files:
-            continue
-
-        all_fieldnames: list[str] = []
-
-        def _collect_fieldnames(rows: list[dict[str, str]]) -> None:
-            for row in rows:
-                for key in row:
-                    if key not in all_fieldnames:
-                        all_fieldnames.append(key)
-
-        existing_rows: list[dict[str, str]] = []
-        for cf in consolidated_files:
-            rows = _load_csv_rows_from_path(cf)
-            existing_rows.extend(rows)
-            _collect_fieldnames(rows)
-
-        new_rows: list[dict[str, str]] = []
-        for f in unconsolidated_files:
-            rows = _load_csv_rows_from_path(f)
-            new_rows.extend(rows)
-            _collect_fieldnames(rows)
-
-        all_rows = existing_rows + new_rows
-
-        if not all_rows:
-            for cf in consolidated_files:
-                cf.unlink(missing_ok=True)
-            for f in unconsolidated_files:
-                f.unlink(missing_ok=True)
-            total_consolidated += len(unconsolidated_files)
-            folders_report.append(
-                {
-                    "folder": month_name,
-                    "files_consolidated": len(unconsolidated_files),
-                    "total_rows": 0,
-                    "output_files": 0,
-                }
-            )
-            continue
-
-        staged_outputs: list[tuple[Path, Path]] = []
-        chunk_idx = 1
-        try:
-            for i in range(0, len(all_rows), max_rows):
-                chunk = all_rows[i : i + max_rows]
-                filename = f"items_{month_name}_{chunk_idx:03d}.csv"
-                filepath = month_dir / filename
-                temp_path = month_dir / f".tmp_{filename}.{uuid4().hex}"
-                temp_path.write_bytes(_csv_bytes(all_fieldnames, chunk))
-                staged_outputs.append((temp_path, filepath))
-                chunk_idx += 1
-
-            for temp_path, final_path in staged_outputs:
-                temp_path.replace(final_path)
-
-            output_paths = {final_path for _, final_path in staged_outputs}
-            for cf in consolidated_files:
-                if cf not in output_paths:
-                    cf.unlink(missing_ok=True)
-
-            for f in unconsolidated_files:
-                f.unlink(missing_ok=True)
-        except Exception:
-            for temp_path, _ in staged_outputs:
-                temp_path.unlink(missing_ok=True)
-            raise
-
-        total_consolidated += len(unconsolidated_files)
-        folders_report.append(
-            {
-                "folder": month_name,
-                "files_consolidated": len(unconsolidated_files),
-                "total_rows": len(all_rows),
-                "output_files": chunk_idx - 1,
-            }
-        )
-
-    return {"consolidated": total_consolidated, "folders": folders_report}
-
-
 def _import_unregistered_order_csv_file(
     conn: sqlite3.Connection,
     *,
@@ -7161,6 +6827,13 @@ def _import_unregistered_order_csv_file(
     reserved_pdf_targets: set[str] = set()
     moved_pdf_files: list[dict[str, str]] = []
     registered_pdf_dir = registered_pdf_supplier_dir(roots, supplier_name).resolve()
+    use_storage_registered_roots = (
+        not is_local_storage_backend()
+        or (
+            roots.registered_csv_root.resolve() == ORDERS_IMPORT_REGISTERED_CSV_ROOT.resolve()
+            and roots.registered_pdf_root.resolve() == ORDERS_IMPORT_REGISTERED_PDF_ROOT.resolve()
+        )
+    )
 
     for row in rows:
         quotation_number = (row.get("quotation_number") or "").strip()
@@ -7209,17 +6882,50 @@ def _import_unregistered_order_csv_file(
                 )
 
     csv_source = csv_path.resolve()
-    csv_dest, _ = _predict_move_target(
-        csv_source,
-        registered_csv_supplier_dir(roots, supplier_name).resolve(),
-        set(),
-    )
-    _execute_planned_file_moves([*planned_pdf_moves, (csv_source, csv_dest.resolve())])
+    if use_storage_registered_roots:
+        rollback_storage_refs: list[str] = []
+        actual_moved_pdf_files: list[dict[str, str]] = []
+        csv_dest_display: str | None = None
+        try:
+            for source_pdf, _predicted_target in planned_pdf_moves:
+                stored_pdf = move_file_to_storage(
+                    bucket=ORDERS_REGISTERED_PDF_BUCKET,
+                    source_path=source_pdf,
+                    subdir=supplier_name,
+                )
+                rollback_storage_refs.append(stored_pdf.storage_ref)
+                actual_moved_pdf_files.append(
+                    {
+                        "source_path": str(source_pdf),
+                        "registered_path": stored_pdf.storage_ref if stored_pdf.path is None else str(stored_pdf.path),
+                    }
+                )
+            stored_csv = move_file_to_storage(
+                bucket=ORDERS_REGISTERED_CSV_BUCKET,
+                source_path=csv_source,
+                subdir=supplier_name,
+            )
+            rollback_storage_refs.append(stored_csv.storage_ref)
+            csv_dest = stored_csv.path
+            csv_dest_display = stored_csv.storage_ref if stored_csv.path is None else str(stored_csv.path)
+            moved_pdf_files = actual_moved_pdf_files
+        except Exception:
+            for storage_ref in reversed(rollback_storage_refs):
+                delete_storage_ref(storage_ref)
+            raise
+    else:
+        csv_dest, _ = _predict_move_target(
+            csv_source,
+            registered_csv_supplier_dir(roots, supplier_name).resolve(),
+            set(),
+        )
+        _execute_planned_file_moves([*planned_pdf_moves, (csv_source, csv_dest.resolve())])
+        csv_dest_display = str(csv_dest)
     return {
         "file": str(csv_path),
         "supplier": supplier_name,
         "status": "ok",
-        "moved_to": str(csv_dest),
+        "moved_to": csv_dest_display,
         "imported_count": result.get("imported_count", 0),
         "moved_pdf_files": moved_pdf_files,
         "warnings": file_warnings,
@@ -7242,144 +6948,6 @@ def _predict_move_target(src: Path, dst_dir: Path, reserved_targets: set[str]) -
         if candidate_key not in reserved_targets and not candidate.exists():
             return candidate, True
         idx += 1
-
-
-
-def register_missing_items_from_rows(
-    conn: sqlite3.Connection,
-    rows: list[dict[str, str]],
-    *,
-    skip_unresolved: bool = False,
-) -> dict[str, Any]:
-    normalized_rows: list[dict[str, str]] = []
-    skipped_unresolved = 0
-    seen_new_items: set[tuple[str, str]] = set()
-
-    for raw_row in rows:
-        if not any(str(value or "").strip() for value in raw_row.values()):
-            normalized_rows.append({})
-            continue
-
-        row = dict(raw_row)
-        supplier = require_non_empty(str(row.get("supplier", "")), "supplier")
-        item_number = require_non_empty(str(row.get("item_number", "")), "item_number")
-        raw_row_type = str(row.get("resolution_type") or row.get("row_type") or "new_item").strip().lower()
-        row_type = "alias" if raw_row_type == "alias" else "item"
-
-        if row_type == "alias":
-            normalized_rows.append(
-                {
-                    "row_type": "alias",
-                    "supplier": supplier,
-                    "item_number": item_number,
-                    "canonical_item_number": str(row.get("canonical_item_number") or "").strip(),
-                    "units_per_order": str(row.get("units_per_order") or "").strip() or "1",
-                }
-            )
-            continue
-
-        category_value = str(row.get("category") or "").strip()
-        url_value = str(row.get("url") or "").strip()
-        description_value = str(row.get("description") or "").strip()
-        if not any((category_value, url_value, description_value)):
-            if skip_unresolved:
-                skipped_unresolved += 1
-                normalized_rows.append({})
-                continue
-            raise AppError(
-                code="MISSING_ITEM_UNRESOLVED",
-                message=(
-                    "new_item rows require at least one of category, url, or description. "
-                    "Fill details before registering missing items."
-                ),
-                status_code=422,
-                details={"supplier": supplier, "item_number": item_number},
-            )
-
-        manufacturer_name = str(row.get("manufacturer_name") or row.get("manufacturer") or "").strip() or "UNKNOWN"
-        existing_item = _get_item_by_number_and_manufacturer(
-            conn,
-            item_number=item_number,
-            manufacturer_name=manufacturer_name,
-        )
-        item_key = (manufacturer_name.casefold(), item_number.casefold())
-        if existing_item is not None or item_key in seen_new_items:
-            normalized_rows.append({})
-            continue
-
-        seen_new_items.add(item_key)
-        normalized_rows.append(
-            {
-                "row_type": "item",
-                "item_number": item_number,
-                "manufacturer_name": manufacturer_name,
-                "category": category_value,
-                "url": url_value,
-                "description": description_value,
-            }
-        )
-
-    import_result = import_items_from_rows(
-        conn,
-        rows=normalized_rows,
-        continue_on_error=False,
-    )
-    if int(import_result.get("failed_count", 0)) > 0 or str(import_result.get("status") or "").lower() == "error":
-        error_rows = [row for row in import_result.get("rows", []) if row.get("status") == "error"]
-        first_error = error_rows[0] if error_rows else None
-        raise AppError(
-            code="MISSING_ITEMS_IMPORT_FAILED",
-            message=(
-                first_error.get("error")
-                if isinstance(first_error, dict) and first_error.get("error")
-                else "Failed to register missing items from batch rows"
-            ),
-            status_code=422,
-            details={
-                "status": import_result.get("status"),
-                "failed_count": int(import_result.get("failed_count", 0)),
-                "rows": import_result.get("rows", []),
-            },
-        )
-    created_items = sum(
-        1 for row in import_result["rows"] if row.get("status") == "created" and row.get("entry_type") == "item"
-    )
-    created_aliases = sum(
-        1 for row in import_result["rows"] if row.get("status") == "created" and row.get("entry_type") == "alias"
-    )
-    return {
-        "created_items": created_items,
-        "created_aliases": created_aliases,
-        "skipped_unresolved": skipped_unresolved,
-        "is_completely_unresolved": (created_items == 0 and created_aliases == 0 and skipped_unresolved > 0),
-    }
-
-
-def register_missing_items_from_content(
-    conn: sqlite3.Connection,
-    content: bytes,
-    *,
-    skip_unresolved: bool = False,
-) -> dict[str, Any]:
-    return register_missing_items_from_rows(
-        conn,
-        _load_csv_rows_from_content(content),
-        skip_unresolved=skip_unresolved,
-    )
-
-
-def register_missing_items_from_csv_path(
-    conn: sqlite3.Connection,
-    csv_path: str | Path,
-    *,
-    skip_unresolved: bool = False,
-) -> dict[str, Any]:
-    return register_missing_items_from_rows(
-        conn,
-        _load_csv_rows_from_path(csv_path),
-        skip_unresolved=skip_unresolved,
-    )
-
 
 def process_order_arrival(
     conn: sqlite3.Connection,
@@ -7551,22 +7119,6 @@ def update_quotation(conn: sqlite3.Connection, quotation_id: int, payload: dict[
     ).fetchone()
     updated = dict(row)
 
-    roots = build_roots()
-
-    def _matcher(csv_row: dict[str, Any]) -> bool:
-        return (
-            str(csv_row.get("supplier") or "").strip() == str(updated.get("supplier_name") or "")
-            and str(csv_row.get("quotation_number") or "").strip() == str(updated.get("quotation_number") or "")
-        )
-
-    def _updater(csv_row: dict[str, Any]) -> dict[str, Any]:
-        if next_issue_date is not None:
-            csv_row["issue_date"] = updated.get("issue_date") or ""
-        if next_document_url is not None:
-            csv_row["quotation_document_url"] = updated.get("quotation_document_url") or ""
-        return csv_row
-
-    _rewrite_order_csv_rows(roots, row_matcher=_matcher, row_updater=_updater)
     return updated
 
 
@@ -7601,16 +7153,11 @@ def delete_quotation(conn: sqlite3.Connection, quotation_id: int) -> dict[str, A
     conn.execute("DELETE FROM orders WHERE quotation_id = ?", (quotation_id,))
     conn.execute("DELETE FROM quotations WHERE quotation_id = ?", (quotation_id,))
 
-    roots = build_roots()
-
-    def _matcher(csv_row: dict[str, Any]) -> bool:
-        return (
-            str(csv_row.get("supplier") or "").strip() == str(row["supplier_name"] or "")
-            and str(csv_row.get("quotation_number") or "").strip() == str(row["quotation_number"] or "")
-        )
-
-    csv_sync = _rewrite_order_csv_rows(roots, row_matcher=_matcher, row_updater=None)
-    return {"deleted": True, "quotation_id": quotation_id, "csv_sync": csv_sync}
+    return {
+        "deleted": True,
+        "quotation_id": quotation_id,
+        "csv_sync": _csv_archive_sync_disabled_result(),
+    }
 
 
 def list_reservations(
@@ -12565,6 +12112,26 @@ def upsert_supplier_item_alias(
         (supplier_id, normalized_item_number),
     ).fetchone()
     return dict(row)
+
+
+def upsert_supplier_item_alias_by_name(
+    conn: sqlite3.Connection,
+    *,
+    supplier_name: str,
+    ordered_item_number: str,
+    canonical_item_id: int | None = None,
+    canonical_item_number: str | None = None,
+    units_per_order: int = 1,
+) -> dict[str, Any]:
+    supplier_id = _get_or_create_supplier(conn, require_non_empty(supplier_name, "supplier_name"))
+    return upsert_supplier_item_alias(
+        conn,
+        supplier_id=supplier_id,
+        ordered_item_number=ordered_item_number,
+        canonical_item_id=canonical_item_id,
+        canonical_item_number=canonical_item_number,
+        units_per_order=units_per_order,
+    )
 
 
 def delete_supplier_item_alias(conn: sqlite3.Connection, alias_id: int) -> None:

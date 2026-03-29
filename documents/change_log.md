@@ -1,3 +1,126 @@
+## 2026-03-29
+
+### Changed
+
+- Continued the Cloud Run cleanup on the frontend/backend runtime contract.
+  - `frontend/nginx.conf` is now cloud-first and no longer proxies `/api` to `backend:8000`
+  - added `frontend/nginx.local-proxy.conf` so local Docker Compose can keep same-origin `/api` behavior without preserving that proxy assumption in the built image
+  - `docker-compose.yml` now mounts that local proxy config explicitly for the shared-server stack
+- Separated local backend startup from the old inline migration command pattern.
+  - base Docker Compose now relies on normal backend startup migration via `AUTO_MIGRATE_ON_STARTUP=1` instead of embedding `uv run alembic upgrade head` in the container command
+  - this keeps local convenience behavior while making the container startup contract closer to Cloud Run
+- Hardened generated artifact lookup against Cloud Run local-path compatibility fallback.
+  - `backend/app/service.py` now ignores legacy raw filesystem artifact paths when runtime posture is Cloud Run
+  - local/shared-server runtime still keeps that fallback for older local artifacts
+- Removed unused order-import directory-scan helpers from the active code path.
+  - `backend/app/order_import_paths.py` now keeps only the path helpers still used by active import flows
+  - backend tests and fixtures were updated to match the reduced helper surface
+- Removed the last runtime support for historical workspace and raw-path artifact migration behavior.
+  - `backend/app/config.py` no longer migrates `quotations/`, `pending/`, or `processed/` legacy folders during startup
+  - `backend/app/service.py` now expects generated artifacts to resolve through storage-backed refs only
+- Implemented comprehensive End-to-End (E2E) test suite using Playwright.
+  - Added read-only smoke tests for Layout, Users, Items, Orders, and Projects.
+  - Added stateful CRUD tests verifying full lifecycles for Users, Projects, Items (CSV import), and Orders (CSV import).
+  - Configured `afterAll` cleanup hooks for stateful tests to maintain database cleanliness.
+  - Added `@types/node` and `tsconfig.e2e.json` to support Node.js APIs (e.g., `Buffer`) in tests.
+
+### Tests
+
+- Backend:
+  - `uv run python -m pytest tests/test_runtime_config.py tests/test_order_import_paths.py`
+  - `uv run --project backend python -m pytest --import-mode=importlib backend/tests/test_document_url_migration.py`
+  - `docker compose -f docker-compose.test.yml up -d db-test`
+- Frontend:
+  - `npm run build`
+  - `npx playwright test`
+ - Docker:
+   - `docker compose -f docker-compose.yml up -d --build`
+   - validated `http://127.0.0.1/` and `http://127.0.0.1/api/health`
+
+## 2026-03-28
+
+### Changed
+
+- Simplified the browser item-registration workflow around one CSV import UI.
+  - removed the Items-page missing-item resolver section and the dedicated missing-item batch-upload section
+  - order-generated missing-item CSVs are now expected to be downloaded, edited, and re-imported through the normal Items preview/import flow
+  - Orders preview/import now offers CSV download handoff instead of routing unresolved rows into a browser-side retry/resolver loop
+  - removed the unused `POST /api/items/batch-upload` endpoint and its compatibility-only backend path now that the browser no longer depends on it
+  - replaced the last browser dependency on `POST /api/register-missing/rows` with a dedicated alias upsert-by-supplier-name API, then removed both `POST /api/register-missing` and `POST /api/register-missing/rows`
+- Simplified the Cloud Run-target Orders import contract.
+  - order CSV rows now carry required `supplier` values instead of relying on a selected supplier outside the file
+  - the Orders page now supports selecting multiple CSV files in one preview/import pass
+  - browser-side retry-after-missing-items now replays the remaining selected files instead of one cached file plus a top-level supplier
+- Removed the remaining repo-local item-batch compatibility path.
+  - deleted `POST /api/items/register-unregistered-batch`
+  - removed the Items-page `Run Existing Imported Batch` fallback
+  - Cloud-facing missing-item registration is now upload-only through `POST /api/items/batch-upload`
+- Removed the remaining archive-rescan behavior from item and order compatibility flows.
+  - item import archives under `imports/items/registered/<YYYY-MM>/` are now stored as historical files without monthly consolidation rescans
+  - order and quotation mutation flows no longer rescan or rewrite archived order CSV files after update/delete/split/merge actions
+  - delete responses still expose `csv_sync`, but only as an explicit `enabled=false` compatibility marker
+- Removed a remaining cloud-sensitive local staging dependency from the Items batch upload path.
+  - `POST /api/items/batch-upload` now processes uploaded missing-item CSV bytes directly instead of writing them into a server-side staging directory first
+  - successful batch-upload archives still flow through the durable storage boundary, so Cloud Run can keep the upload path stateless
+- Added a concrete first-rollout Cloud Run deployment runbook.
+  - `documents/gcp_cloud_run_rollout/cloud_run_deployment_runbook.md`
+  - documents build/push, migration, deploy, environment, and post-deploy validation steps for frontend + backend Cloud Run services
+- Completed the next Cloud Run-essential storage slice.
+  - `backend/app/storage.py` now supports both `local://...` and `gcs://...` durable object refs
+  - backend durable writes/moves can now target GCS when `STORAGE_BACKEND=gcs` with `GCS_BUCKET`
+  - backend order/item durable archive flows now use that GCS-capable storage boundary instead of local-only assumptions
+  - backend build dependencies now include `google-cloud-storage`
+- Started turning the locked GCP rollout decisions into explicit runtime behavior instead of doc-only assumptions.
+  - backend runtime now exposes Cloud SQL/GCS/public-URL deployment metadata through config and `/api/health`
+  - `/api/health` and `/api/auth/capabilities` now describe the temporary `X-User-Name` mutation model explicitly, including the initial admin/operator boundary
+  - backend request handling now enforces the first-rollout upload ceiling via `MAX_UPLOAD_BYTES` and returns `413 REQUEST_TOO_LARGE` for oversized requests
+  - frontend nginx upload limit now matches the same 32 MB first-rollout ceiling
+  - selecting `STORAGE_BACKEND=gcs` now fails explicitly as not-yet-implemented instead of silently implying Cloud Run durable storage is already complete
+- Extended runtime/deployment configuration docs and examples for the started Decision-track work.
+  - `.env.example`, `README.md`, `backend/README.md`, `documents/technical_documentation.md`, and `documents/source_current_state.md` now include the rollout guardrail and deployment-metadata variables
+
+- Continued the GCP Cloud Run rollout implementation on the runtime contract surfaces.
+  - Cloud Run runtime now defaults `AUTO_MIGRATE_ON_STARTUP` to off while local runtime still defaults to startup migration unless explicitly disabled.
+  - SQLAlchemy pool behavior is now environment-driven via `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT`, and `DB_POOL_RECYCLE_SECONDS`.
+  - Backend health output now reports migration strategy, configured CORS origins, and effective DB pool settings for deployment validation.
+  - Backend CORS defaults are no longer wildcard-based: local runtime allows the common localhost origins, while Cloud Run defaults to no browser origins until `CORS_ALLOWED_ORIGINS` is set explicitly.
+  - Frontend API base handling now normalizes `VITE_API_BASE` so split Cloud Run deployments can use an absolute backend `/api` URL cleanly.
+- Continued the GCP Cloud Run rollout implementation on the storage boundary.
+  - added `backend/app/storage.py` as the first persistent-storage abstraction surface
+  - generated artifacts now persist through storage refs (`local://generated_artifacts/...`) instead of relying only on raw filesystem paths in `generated_artifacts.storage_path`
+  - manual order-import missing-item responses now expose only `missing_artifact` publicly, not raw storage-location fields
+  - manual item-import archive metadata now also goes through the storage boundary internally while the public API omits cleanup/storage-ref details
+  - item batch-upload and batch-register responses now expose file names only, not staging/archive filesystem paths
+  - default registered-item archive moves and default registered-order CSV/PDF moves now execute through the storage layer, with rollback preserved for the item batch-registration path
+- Updated deployment/runtime documentation to match the new Cloud Run contract.
+  - `.env.example`, `README.md`, `backend/README.md`, `documents/technical_documentation.md`, `documents/source_current_state.md`
+  - `documents/gcp_cloud_run_rollout/environment_and_runtime_matrix.md`
+  - `documents/gcp_cloud_run_rollout/migration_checklist.md`
+- Locked the remaining first-rollout decisions that were still causing scope ambiguity in the GCP plan.
+  - split frontend/backend Cloud Run services stay in place and the frontend keeps nginx for static delivery
+  - Cloud SQL uses the Cloud SQL Connector / Unix socket model, with secrets sourced from Google Secret Manager
+  - GCS uses one bucket per environment plus prefix-based class separation and lifecycle retention of 7-day staging, 30-day exports, 90-day artifacts, and non-expiring archives
+  - the first rollout assumes `dev` / `staging` / `prod`, native `*.run.app` URLs, backend-mediated downloads, a public browser-reachable backend with temporary `X-User-Name` mutations, a 32 MB upload ceiling, a roughly 60-second heavy-request target, and small-team / conservative-concurrency operation
+  - rollout planning now also fixes the initial admin/operator boundary, audit scope, monitoring baseline, and production-index review scope, while still deferring stronger end-user auth
+- Clarified checklist semantics in `documents/gcp_cloud_run_rollout/migration_checklist.md`.
+  - added an explicit legend separating locked decisions from implementation/validation-complete items
+  - converted decision-only entries from `[x]` to `[Decision]` so rollout progress no longer implies those items are already implemented
+
+### Tests
+
+- Added backend regression coverage for:
+  - direct Items batch-upload archiving while the durable storage backend is set to GCS
+  - GCS-backed storage write/read/move/delete behavior through the storage abstraction
+- Added backend regression coverage for:
+  - runtime parsing of upload-limit, concurrency, Cloud SQL, public-URL, and GCS/storage config
+  - `/api/health` and `/api/auth/capabilities` rollout metadata fields
+  - oversized upload rejection through the new request-size middleware
+- Added backend runtime-config regression coverage for:
+  - Cloud Run default migration/CORS/pool behavior
+  - local default migration/CORS behavior
+  - explicit DB pool and CORS override parsing
+- Extended backend API health coverage to assert the new runtime contract fields.
+
 ## 2026-03-27
 
 ### Documentation

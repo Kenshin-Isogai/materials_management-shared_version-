@@ -16,16 +16,27 @@ from .config import (
     APP_PORT,
     APP_DATA_ROOT,
     AUTO_MIGRATE_ON_STARTUP,
-    ITEMS_IMPORT_UNREGISTERED_ROOT,
+    BACKEND_PUBLIC_BASE_URL,
+    CLOUD_RUN_CONCURRENCY_TARGET,
+    DB_MAX_OVERFLOW,
+    DB_POOL_RECYCLE_SECONDS,
+    DB_POOL_SIZE,
+    DB_POOL_TIMEOUT,
+    FRONTEND_PUBLIC_BASE_URL,
+    HEAVY_REQUEST_TARGET_SECONDS,
+    INSTANCE_CONNECTION_NAME,
+    MAX_UPLOAD_BYTES,
     get_auth_mode,
     get_cors_allowed_origins,
     get_runtime_target,
     is_cloud_run_runtime,
+    uses_cloud_sql_unix_socket,
 )
 from .db import get_connection, init_db
 from .errors import AppError
-from . import service
+from . import service, storage
 from .schemas import (
+    AliasUpsertBySupplierNameRequest,
     AliasUpsertRequest,
     BomAnalyzeRequest,
     BomReserveRequest,
@@ -39,7 +50,6 @@ from .schemas import (
     ItemCreate,
     ItemMetadataBulkUpdateRequest,
     ItemUpdate,
-    MissingItemRegistrationRequest,
     ManufacturerCreate,
     OrderMergeRequest,
     OrderUpdateRequest,
@@ -49,7 +59,6 @@ from .schemas import (
     ProcurementBatchUpdate,
     ProcurementLineUpdate,
     QuotationUpdateRequest,
-    UnregisteredItemBatchRequest,
     ProjectCreate,
     ProjectRequirementUnresolvedItemsCsvRequest,
     ProjectRequirementPreviewRequest,
@@ -101,6 +110,33 @@ def _parse_optional_json_form(value: str | None, field_name: str) -> Any | None:
             message=f"{field_name} must be valid JSON",
             status_code=422,
         ) from exc
+
+
+def _public_order_import_result(result: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(result)
+    payload.pop("missing_csv_path", None)
+    payload.pop("missing_storage_ref", None)
+    return payload
+
+
+def _public_item_import_result(result: dict[str, Any]) -> dict[str, Any]:
+    payload = dict(result)
+    archive = payload.get("archive")
+    if isinstance(archive, dict):
+        archive_payload = dict(archive)
+        archive_payload.pop("cleanup_unreg_file", None)
+        archive_payload.pop("archive_storage_ref", None)
+        payload["archive"] = archive_payload
+    return payload
+
+
+def _request_too_large_error() -> AppError:
+    return AppError(
+        code="REQUEST_TOO_LARGE",
+        message=f"Request body exceeds the configured limit of {MAX_UPLOAD_BYTES} bytes",
+        status_code=413,
+        details={"max_upload_bytes": MAX_UPLOAD_BYTES},
+    )
 
 
 def _db_dep(app: FastAPI):
@@ -198,7 +234,41 @@ class UserIdentityMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        try:
+            content_length = request.headers.get("content-length")
+            if content_length:
+                try:
+                    if int(content_length) > MAX_UPLOAD_BYTES:
+                        raise _request_too_large_error()
+                except ValueError:
+                    pass
+
+            received = 0
+            original_receive = request.receive
+
+            async def receive_with_limit():
+                nonlocal received
+                message = await original_receive()
+                if message.get("type") == "http.request":
+                    received += len(message.get("body") or b"")
+                    if received > MAX_UPLOAD_BYTES:
+                        raise _request_too_large_error()
+                return message
+
+            request._receive = receive_with_limit  # type: ignore[attr-defined]
+            return await call_next(request)
+        except AppError as exc:
+            handler = request.app.exception_handlers.get(AppError)
+            if handler is None:
+                raise
+            return await handler(request, exc)
+
+
 def create_app(database_url: str | None = None, db_path: str | None = None) -> FastAPI:
+    cors_allowed_origins = get_cors_allowed_origins()
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         if AUTO_MIGRATE_ON_STARTUP:
@@ -214,11 +284,12 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
 
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=get_cors_allowed_origins(),
+        allow_origins=cors_allowed_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.add_middleware(RequestSizeLimitMiddleware)
     app.add_middleware(UserIdentityMiddleware)
 
     @app.exception_handler(AppError)
@@ -254,6 +325,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
 
     @app.get("/api/health")
     def healthcheck():
+        storage_summary = storage.get_storage_backend_summary()
         return ok(
             {
                 "healthy": True,
@@ -262,6 +334,37 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
                 "app_port": APP_PORT,
                 "app_data_root": str(APP_DATA_ROOT),
                 "auto_migrate_on_startup": AUTO_MIGRATE_ON_STARTUP,
+                "migration_strategy": "startup" if AUTO_MIGRATE_ON_STARTUP else "external",
+                "cors_allowed_origins": cors_allowed_origins,
+                "db_pool": {
+                    "pool_size": DB_POOL_SIZE,
+                    "max_overflow": DB_MAX_OVERFLOW,
+                    "pool_timeout": DB_POOL_TIMEOUT,
+                    "pool_recycle_seconds": DB_POOL_RECYCLE_SECONDS,
+                },
+                "upload_limits": {
+                    "max_upload_bytes": MAX_UPLOAD_BYTES,
+                    "max_upload_mebibytes": round(MAX_UPLOAD_BYTES / (1024 * 1024), 2),
+                },
+                "operating_targets": {
+                    "heavy_request_target_seconds": HEAVY_REQUEST_TARGET_SECONDS,
+                    "cloud_run_concurrency_target": CLOUD_RUN_CONCURRENCY_TARGET,
+                },
+                "cloud_sql": {
+                    "strategy": "connector_unix_socket",
+                    "instance_connection_name_configured": bool(INSTANCE_CONNECTION_NAME),
+                    "database_url_uses_unix_socket": uses_cloud_sql_unix_socket(app.state.database_url),
+                },
+                "storage": storage_summary,
+                "public_urls": {
+                    "backend_public_base_url": BACKEND_PUBLIC_BASE_URL or None,
+                    "frontend_public_base_url": FRONTEND_PUBLIC_BASE_URL or None,
+                },
+                "temporary_identity_model": {
+                    "mode": "x-user-name",
+                    "temporary": True,
+                    "stronger_auth_required": True,
+                },
             }
         )
 
@@ -276,6 +379,16 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
                 "auth_enforced": auth_mode != "none",
                 "planned_roles": planned_roles,
                 "effective_role": effective_role,
+                "mutation_identity": {
+                    "mode": "x-user-name",
+                    "temporary": True,
+                    "stronger_auth_required": True,
+                    "admin_only_scope": [
+                        "/api/users",
+                        "future role/setting management",
+                    ],
+                    "operator_scope": "normal business mutations, imports, exports, and planning workflows",
+                },
             }
         )
 
@@ -391,7 +504,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         conn.commit()
         if result.get("archive") and result["archive"].get("cleanup_unreg_file"):
             background_tasks.add_task(cleanup_unreg_file_with_retry, result["archive"]["cleanup_unreg_file"])
-        return ok(result)
+        return ok(_public_item_import_result(result))
 
     @app.post("/api/items/import-preview")
     async def post_items_import_preview(
@@ -470,30 +583,6 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         service.delete_item(conn, item_id)
         conn.commit()
         return ok({"deleted": True})
-
-    @app.post("/api/items/register-unregistered-batch")
-    def post_register_unregistered_item_csvs(body: UnregisteredItemBatchRequest, conn= db):
-        result = service.register_unregistered_item_csvs(
-            conn,
-            continue_on_error=body.continue_on_error,
-        )
-        conn.commit()
-        return ok(result)
-
-    @app.post("/api/items/batch-upload")
-    async def post_items_batch_upload(
-        files: list[UploadFile] = File(...),
-        continue_on_error: bool = Form(default=True),
-        conn= db,
-    ):
-        uploaded_files = [(file.filename or "items_batch.csv", await file.read()) for file in files]
-        result = service.upload_and_register_item_batch_csvs(
-            conn,
-            files=uploaded_files,
-            continue_on_error=continue_on_error,
-        )
-        conn.commit()
-        return ok(result)
 
     @app.get("/api/items/{item_id}/history")
     def get_item_history(item_id: int, conn= db):
@@ -690,7 +779,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
                 content=content,
                 default_order_date=default_order_date,
                 source_name=file.filename or "order_import.csv",
-                missing_output_dir=ITEMS_IMPORT_UNREGISTERED_ROOT,
+                missing_output_dir=None,
                 row_overrides=_parse_optional_json_form(row_overrides, "row_overrides"),
                 alias_saves=_parse_optional_json_form(alias_saves, "alias_saves"),
             )
@@ -698,7 +787,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
             conn.commit()
             raise
         conn.commit()
-        return ok(result)
+        return ok(_public_order_import_result(result))
 
     @app.get("/api/orders/import-jobs")
     def get_order_import_jobs(
@@ -1343,6 +1432,19 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         conn.commit()
         return ok(result)
 
+    @app.post("/api/aliases/upsert")
+    def post_alias_by_supplier_name(body: AliasUpsertBySupplierNameRequest, conn= db):
+        result = service.upsert_supplier_item_alias_by_name(
+            conn,
+            supplier_name=body.supplier_name,
+            ordered_item_number=body.ordered_item_number,
+            canonical_item_id=body.canonical_item_id,
+            canonical_item_number=body.canonical_item_number,
+            units_per_order=body.units_per_order,
+        )
+        conn.commit()
+        return ok(result)
+
     @app.delete("/api/aliases/{alias_id}")
     def delete_alias(alias_id: int, conn= db):
         service.delete_supplier_item_alias(conn, alias_id)
@@ -1376,30 +1478,6 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         service.remove_category_alias(conn, alias_category)
         conn.commit()
         return ok({"deleted": True})
-
-    @app.post("/api/register-missing")
-    async def post_register_missing(
-        file: UploadFile = File(...),
-        skip_unresolved: bool = Form(False),
-        conn= db,
-    ):
-        content = await file.read()
-        result = service.register_missing_items_from_content(
-            conn,
-            content,
-            skip_unresolved=skip_unresolved,
-        )
-        conn.commit()
-        return ok(result)
-
-    @app.post("/api/register-missing/rows")
-    def post_register_missing_rows(body: MissingItemRegistrationRequest, conn= db):
-        result = service.register_missing_items_from_rows(
-            conn,
-            [row.model_dump() for row in body.rows],
-        )
-        conn.commit()
-        return ok(result)
 
     return app
 

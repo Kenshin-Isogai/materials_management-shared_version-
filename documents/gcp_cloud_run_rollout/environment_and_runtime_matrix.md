@@ -2,99 +2,77 @@
 
 ## Purpose
 
-This document lists the repository runtime variables and deployment-facing configuration relevant to the GCP rollout.
+This file defines the rollout configuration contract.
 
-Backward compatibility is explicitly out of scope.
+It focuses on which variables matter, where they are consumed, and whether they can be finalized before a real GCP project exists.
 
-## Classification Legend
+## Classification legend
 
 - **Service**: where the variable is consumed
 - **Secret**: whether it should be treated as sensitive
-- **Target**: where it matters most (`local`, `cloud`, or `both`)
-- **Action**: what should happen during the rollout
+- **Stage**:
+  - `now`: can be decided or documented before a GCP project exists
+  - `project`: requires a real GCP project or real cloud resources
+- **Notes**: rollout-specific expectation
 
-## Backend runtime variables
+## Backend variables
 
-| Variable | Service | Secret | Target | Current use | Action |
-|---|---|---:|---|---|---|
-| `DATABASE_URL` | Backend | Yes | both | DB connection string in `backend\app\config.py` and `backend\app\db.py` | Keep, but source from managed secrets in cloud deployment |
-| `APP_RUNTIME_TARGET` | Backend | No | both | Runtime posture selection in `backend\app\config.py` | Keep, but use explicitly in deployment config |
-| `APP_DATA_ROOT` | Backend | No | both | Base local filesystem root in `backend\app\config.py` | De-emphasize for cloud; keep only for temporary local working files if still needed |
-| `IMPORTS_ROOT` | Backend | No | local | Overrides local imports root in `backend\app\config.py` | Avoid as a durable cloud contract |
-| `EXPORTS_ROOT` | Backend | No | local | Overrides local exports root in `backend\app\config.py` | Avoid as a durable cloud contract |
-| `ITEMS_IMPORT_MAX_CONSOLIDATED_ROWS` | Backend | No | both | Consolidation chunk size in `backend\app\config.py` | Keep, but document cost/performance impact |
-| `PORT` | Backend | No | cloud | Used by `backend\app\config.py` and container startup | Keep |
-| `APP_PORT` | Backend | No | local | Local fallback port in `backend\app\config.py` | Keep for local only |
-| `APP_HOST` | Backend | No | local | Local bind host in `backend\app\config.py` | Keep for local only |
-| `LOG_LEVEL` | Backend | No | both | Logging level in `backend\app\config.py` and `backend\main.py` | Keep |
-| `WEB_CONCURRENCY` | Backend | No | both | Gunicorn workers in compose and Dockerfile | Keep, but align with Cloud SQL pool/concurrency plan |
-| `AUTO_MIGRATE_ON_STARTUP` | Backend | No | both | Startup migration gate in `backend\app\config.py` and `backend\app\api.py` | Disable in production Cloud Run |
-| `INVENTORY_AUTH_MODE` | Backend | No | both | Auth posture mode in `backend\app\config.py` | Keep, but treat current modes as transitional |
-| `CORS_ALLOWED_ORIGINS` | Backend | No | both | Origin parsing in `backend\app\config.py`; middleware use in `backend\app\api.py` | Keep, but require explicit cloud values |
-| `K_SERVICE` | Backend | No | cloud | Implicit Cloud Run detection in `backend\app\config.py` | No code change required; deployment-provided |
-
-## Frontend build/runtime variables
-
-| Variable | Service | Secret | Target | Current use | Action |
-|---|---|---:|---|---|---|
-| `VITE_API_BASE` | Frontend | No | both | API base in `frontend\src\lib\api.ts`; build arg in `frontend\Dockerfile` | Keep, but define one production convention clearly |
-
-## Local Docker Compose variables already visible in the repo
-
-| Variable | Service | Secret | Target | Current use | Action |
-|---|---|---:|---|---|---|
-| `POSTGRES_USER` | DB | Yes | local | Compose DB bootstrap | Local/dev only |
-| `POSTGRES_PASSWORD` | DB | Yes | local | Compose DB bootstrap | Local/dev only |
-| `POSTGRES_DB` | DB | No | local | Compose DB bootstrap | Local/dev only |
-
-## Additional recommended variables for the rollout
-
-These are not yet the documented canonical repository contract, but they are recommended targets for implementation.
-
-| Variable | Service | Secret | Target | Why add it |
+| Variable | Service | Secret | Stage | Notes |
 |---|---|---:|---|---|
-| `DB_POOL_SIZE` | Backend | No | both | Externalize SQLAlchemy pool sizing |
-| `DB_MAX_OVERFLOW` | Backend | No | both | Externalize burst connection behavior |
-| `DB_POOL_TIMEOUT` | Backend | No | both | Make connection wait behavior explicit |
-| `DB_POOL_RECYCLE_SECONDS` | Backend | No | cloud | Improve long-lived connection handling |
-| `GCS_BUCKET_ARTIFACTS` | Backend | No | cloud | Durable storage for generated artifacts |
-| `GCS_BUCKET_ARCHIVES` | Backend | No | cloud | Durable import/archive storage if retained |
-| `GCS_BUCKET_STAGING` | Backend | No | cloud | Durable or multi-step staging if required |
-| `GCS_OBJECT_PREFIX` | Backend | No | cloud | Namespace separation inside buckets |
-| `FRONTEND_PUBLIC_BASE_URL` | Frontend | No | cloud | Optional explicit public URL handling |
-| `BACKEND_PUBLIC_BASE_URL` | Frontend/Backend | No | cloud | Optional explicit service-to-service/browser endpoint target |
+| `APP_RUNTIME_TARGET` | Backend | No | now | Use `cloud_run` for the target deployment posture |
+| `DATABASE_URL` | Backend | Yes | project | Final value depends on real Cloud SQL naming and Secret Manager wiring |
+| `INSTANCE_CONNECTION_NAME` | Backend | No | project | Requires the real Cloud SQL instance |
+| `STORAGE_BACKEND` | Backend | No | now | Use `gcs` in cloud, `local` locally |
+| `GCS_BUCKET` | Backend | No | project | Requires the real bucket name |
+| `GCS_OBJECT_PREFIX` | Backend | No | now | Prefix pattern can be decided now; final value may still wait on environment naming |
+| `CORS_ALLOWED_ORIGINS` | Backend | No | project | Final value depends on the real frontend URL |
+| `BACKEND_PUBLIC_BASE_URL` | Backend | No | project | Final value depends on the real backend URL |
+| `FRONTEND_PUBLIC_BASE_URL` | Backend | No | project | Final value depends on the real frontend URL |
+| `AUTO_MIGRATE_ON_STARTUP` | Backend | No | now | Keep `0` for Cloud Run |
+| `DB_POOL_SIZE` | Backend | No | now | Can be documented and tuned now |
+| `DB_MAX_OVERFLOW` | Backend | No | now | Can be documented and tuned now |
+| `DB_POOL_TIMEOUT` | Backend | No | now | Can be documented and tuned now |
+| `DB_POOL_RECYCLE_SECONDS` | Backend | No | now | Cloud-friendly default can be documented now |
+| `WEB_CONCURRENCY` | Backend | No | now | Cloud default can be decided now and adjusted later |
+| `MAX_UPLOAD_BYTES` | Backend | No | now | First-rollout ceiling remains 32 MB |
+| `HEAVY_REQUEST_TARGET_SECONDS` | Backend | No | now | First-rollout target remains about 60 seconds |
+| `CLOUD_RUN_CONCURRENCY_TARGET` | Backend | No | now | Conservative first-rollout target remains about 10 |
+| `LOG_LEVEL` | Backend | No | now | Standard runtime setting |
+| `PORT` | Backend | No | project | Provided by Cloud Run at runtime; no manual final value needed |
 
-## Runtime surfaces that are not pure environment variables but still matter
+## Frontend variables
 
-### Backend startup path
+| Variable | Service | Secret | Stage | Notes |
+|---|---|---:|---|---|
+| `VITE_API_BASE` | Frontend | No | project | Contract is already fixed, but the final value depends on the real backend URL and is baked in at build time |
 
-- `backend\Dockerfile`
-- `backend\main.py`
-- `backend\app\api.py`
-- `backend\app\db.py`
+## Local-only or de-emphasized variables
 
-These files together define:
+| Variable | Why it is not part of the durable cloud contract |
+|---|---|
+| `APP_DATA_ROOT` | Acceptable for temporary local working files, not durable cloud storage |
+| `IMPORTS_ROOT` | Local compatibility path, not a durable cloud contract |
+| `EXPORTS_ROOT` | Local compatibility path, not a durable cloud contract |
+| `APP_HOST` | Local bind behavior only |
+| `APP_PORT` | Local fallback only |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Local Docker Compose bootstrap only |
 
-- process start command
-- Gunicorn/Uvicorn worker behavior
-- migration timing
-- DB engine initialization
+## Canonical value patterns that can be decided now
 
-### Frontend delivery path
+- `APP_RUNTIME_TARGET=cloud_run`
+- `AUTO_MIGRATE_ON_STARTUP=0`
+- `STORAGE_BACKEND=gcs`
+- `MAX_UPLOAD_BYTES=33554432`
+- `HEAVY_REQUEST_TARGET_SECONDS=60`
+- `CLOUD_RUN_CONCURRENCY_TARGET=10`
+- `VITE_API_BASE=https://<backend-service-url>/api`
+- `DATABASE_URL=postgresql+psycopg://<user>:<password>@/<db-name>?host=/cloudsql/<project>:<region>:<instance>`
 
-- `frontend\Dockerfile`
-- `frontend\nginx.conf`
-- `frontend\src\lib\api.ts`
+## Values that cannot be finalized yet
 
-These files together define:
-
-- whether API routing is same-origin or cross-origin
-- whether nginx remains part of the cloud deployment
-- where browser uploads and downloads are sent
-
-## Rollout recommendations
-
-1. Keep only variables that express durable target behavior.
-2. Avoid preserving variables whose main purpose is legacy local folder compatibility.
-3. Make production-secret sourcing explicit rather than implicit.
-4. Keep cloud and local defaults intentionally different where needed.
+- actual frontend URL
+- actual backend URL
+- actual bucket name
+- actual object prefix by environment
+- actual Cloud SQL instance name
+- actual Secret Manager secret names

@@ -356,104 +356,32 @@ def test_item_flow_ignores_allocation_only_reserve_logs(conn):
 
     assert [event["delta"] for event in transaction_events] == [10]
 
-def test_register_missing_requires_details_for_new_item(conn):
-    with pytest.raises(AppError) as exc_info:
-        service.register_missing_items_from_rows(
-            conn,
-            [
-                {
-                    "supplier": "SupplierA",
-                    "item_number": "UNRESOLVED-001",
-                    "resolution_type": "new_item",
-                    "category": "",
-                    "url": "",
-                    "description": "",
-                }
-            ],
-        )
-
-    assert exc_info.value.code == "MISSING_ITEM_UNRESOLVED"
-
-def test_register_missing_new_item_uses_manufacturer_from_csv(conn):
-    result = service.register_missing_items_from_rows(
-        conn,
-        [
-            {
-                "supplier": "SupplierA",
-                "item_number": "MFG-SPEC-001",
-                "manufacturer_name": "MFG-SPEC",
-                "resolution_type": "new_item",
-                "category": "Lens",
-                "url": "",
-                "description": "",
-            }
-        ],
-    )
-
-    assert result["created_items"] == 1
-    row = conn.execute(
-        """
-        SELECT i.item_number, m.name AS manufacturer_name
-        FROM items_master i
-        JOIN manufacturers m ON m.manufacturer_id = i.manufacturer_id
-        WHERE i.item_number = ?
-        """,
-        ("MFG-SPEC-001",),
-    ).fetchone()
-    assert row is not None
-    assert row["manufacturer_name"] == "MFG-SPEC"
-
-def test_register_missing_new_item_existing_row_is_noop(conn):
-    manufacturer = service.create_manufacturer(conn, "MFG-EXISTING")
-    service.create_item(
+def test_upsert_supplier_item_alias_by_name_creates_supplier_when_missing(conn):
+    manufacturer = service.create_manufacturer(conn, "MFG-SERVICE-ALIAS")
+    item = service.create_item(
         conn,
         {
-            "item_number": "EXISTING-MISSING-001",
+            "item_number": "SERVICE-ALIAS-CANONICAL-001",
             "manufacturer_id": manufacturer["manufacturer_id"],
             "category": "Lens",
         },
     )
 
-    result = service.register_missing_items_from_rows(
+    result = service.upsert_supplier_item_alias_by_name(
         conn,
-        [
-            {
-                "supplier": "SupplierA",
-                "item_number": "EXISTING-MISSING-001",
-                "manufacturer_name": "MFG-EXISTING",
-                "resolution_type": "new_item",
-                "category": "Lens",
-                "url": "",
-                "description": "already registered",
-            }
-        ],
+        supplier_name="ServiceAliasSupplier",
+        ordered_item_number="SERVICE-ALIAS-ORDERED-001",
+        canonical_item_number=item["item_number"],
+        units_per_order=3,
     )
 
-    assert result == {
-        "created_items": 0,
-        "created_aliases": 0,
-        "skipped_unresolved": 0,
-        "is_completely_unresolved": False,
-    }
+    assert result["supplier_name"] == "ServiceAliasSupplier"
+    assert result["ordered_item_number"] == "SERVICE-ALIAS-ORDERED-001"
+    assert result["canonical_item_number"] == item["item_number"]
+    assert result["units_per_order"] == 3
 
-def test_register_missing_content_skips_unresolved_when_requested(conn):
-    content = "\n".join(
-        [
-            "supplier,item_number,resolution_type,category,url,description",
-            "SupplierA,UNRESOLVED-CONTENT-001,new_item,,,",
-        ]
-    ).encode("utf-8")
-
-    result = service.register_missing_items_from_content(
-        conn,
-        content,
-        skip_unresolved=True,
-    )
-
-    assert result["created_items"] == 0
-    assert result["created_aliases"] == 0
-    assert result["skipped_unresolved"] == 1
-    assert result["is_completely_unresolved"] is True
+    suppliers = service.list_suppliers(conn)
+    assert any(row["name"] == "ServiceAliasSupplier" for row in suppliers)
 
 def test_import_orders_missing_items_csv_includes_manufacturer_column(conn, tmp_path: Path):
     supplier = service.create_supplier(conn, "SupplierA")
@@ -526,7 +454,7 @@ def test_import_orders_resolves_alias_with_case_insensitive_supplier_name(conn):
     assert int(order["ordered_quantity"]) == 2
     assert int(order["order_amount"]) == 6
 
-def test_register_missing_items_alias_uses_case_insensitive_supplier_lookup(conn):
+def test_upsert_supplier_item_alias_by_name_uses_case_insensitive_supplier_lookup(conn):
     supplier = service.create_supplier(conn, "SupplierCase")
     manufacturer = service.create_manufacturer(conn, "MFG-CASE")
     service.create_item(
@@ -538,74 +466,31 @@ def test_register_missing_items_alias_uses_case_insensitive_supplier_lookup(conn
         },
     )
 
-    result = service.register_missing_items_from_rows(
+    result = service.upsert_supplier_item_alias_by_name(
         conn,
-        [
-            {
-                "supplier": "suppliercase",
-                "item_number": "CASE-ALIAS-001",
-                "resolution_type": "alias",
-                "canonical_item_number": "CASE-CANONICAL-001",
-                "units_per_order": "2",
-            }
-        ],
+        supplier_name="suppliercase",
+        ordered_item_number="CASE-ALIAS-001",
+        canonical_item_number="CASE-CANONICAL-001",
+        units_per_order=2,
     )
 
-    assert result["created_aliases"] == 1
+    assert result["ordered_item_number"] == "CASE-ALIAS-001"
     aliases = service.list_supplier_item_aliases(conn, int(supplier["supplier_id"]))
     assert len(aliases) == 1
     assert aliases[0]["ordered_item_number"] == "CASE-ALIAS-001"
 
-def test_register_missing_items_accepts_legacy_row_type_alias(conn):
-    supplier = service.create_supplier(conn, "SupplierLegacy")
-    manufacturer = service.create_manufacturer(conn, "MFG-LEGACY")
-    service.create_item(
-        conn,
-        {
-            "item_number": "LEGACY-CANONICAL-001",
-            "manufacturer_id": manufacturer["manufacturer_id"],
-            "category": "Mirror",
-        },
-    )
-
-    result = service.register_missing_items_from_rows(
-        conn,
-        [
-            {
-                "supplier": "SupplierLegacy",
-                "item_number": "LEGACY-ALIAS-001",
-                "row_type": "alias",
-                "canonical_item_number": "LEGACY-CANONICAL-001",
-                "units_per_order": "4",
-            }
-        ],
-    )
-
-    assert result["created_aliases"] == 1
-    aliases = service.list_supplier_item_aliases(conn, int(supplier["supplier_id"]))
-    assert len(aliases) == 1
-    assert aliases[0]["ordered_item_number"] == "LEGACY-ALIAS-001"
-
-def test_register_missing_items_propagates_alias_import_failures(conn):
+def test_upsert_supplier_item_alias_by_name_propagates_item_not_found(conn):
     with pytest.raises(AppError) as exc_info:
-        service.register_missing_items_from_rows(
+        service.upsert_supplier_item_alias_by_name(
             conn,
-            [
-                {
-                    "supplier": "SupplierFail",
-                    "item_number": "ALIAS-FAIL-001",
-                    "resolution_type": "alias",
-                    "canonical_item_number": "DOES-NOT-EXIST",
-                    "units_per_order": "1",
-                }
-            ],
+            supplier_name="SupplierFail",
+            ordered_item_number="ALIAS-FAIL-001",
+            canonical_item_number="DOES-NOT-EXIST",
+            units_per_order=1,
         )
 
-    assert exc_info.value.code == "MISSING_ITEMS_IMPORT_FAILED"
-    assert exc_info.value.status_code == 422
-    assert exc_info.value.details is not None
-    assert exc_info.value.details["failed_count"] == 1
-    assert exc_info.value.details["status"] == "error"
+    assert exc_info.value.code == "ITEM_NOT_FOUND"
+    assert exc_info.value.status_code == 404
 
 def test_import_orders_resolves_alias_with_dash_variant_item_number(conn):
     supplier = service.create_supplier(conn, "SupplierDash")
@@ -648,365 +533,13 @@ def test_import_orders_resolves_alias_with_dash_variant_item_number(conn):
     assert int(order["ordered_quantity"]) == 2
     assert int(order["order_amount"]) == 20
 
-def test_register_unregistered_item_csvs_reads_from_unregistered_root(conn, tmp_path: Path):
-    items_unregistered_root = tmp_path / "imports" / "items" / "unregistered"
-    items_registered_root = tmp_path / "imports" / "items" / "registered"
-    items_unregistered_root.mkdir(parents=True, exist_ok=True)
-    items_registered_root.mkdir(parents=True, exist_ok=True)
-    
-    register_csv = items_unregistered_root / "batch_missing_items_registration_20260302_120000.csv"
-    with register_csv.open("w", encoding="utf-8", newline="") as fp:
-        writer = csv.DictWriter(
-            fp,
-            fieldnames=[
-                "source_csv",
-                "source_supplier",
-                "item_number",
-                "supplier",
-                "resolution_type",
-                "category",
-                "url",
-                "description",
-                "canonical_item_number",
-                "units_per_order",
-            ],
-        )
-        writer.writeheader()
-        writer.writerow(
-            {
-                "source_csv": "imports/orders/unregistered/csv_files/SupplierBatch/QB-001.csv",
-                "source_supplier": "SupplierBatch",
-                "item_number": "BATCH-NEW-001",
-                "supplier": "SupplierBatch",
-                "resolution_type": "new_item",
-                "category": "Lens",
-                "url": "",
-                "description": "",
-                "canonical_item_number": "",
-                "units_per_order": "",
-            }
-        )
-
-    result = service.register_unregistered_item_csvs(
-        conn,
-        items_unregistered_root=items_unregistered_root,
-        items_registered_root=items_registered_root,
-        continue_on_error=True,
-    )
-    conn.commit()
-
-    assert result["status"] == "ok"
-    assert result["succeeded"] == 1
-    assert not register_csv.exists()
-    from app.utils import today_jst
-    moved = items_registered_root / today_jst()[:7] / register_csv.name
-    # After consolidation, the original file is merged into a consolidated CSV
-    consolidated = items_registered_root / today_jst()[:7] / f"items_{today_jst()[:7]}_001.csv"
-    assert not moved.exists()
-    assert consolidated.exists()
-
-    row = conn.execute(
-        """
-        SELECT i.item_number
-        FROM items_master i
-        JOIN manufacturers m ON m.manufacturer_id = i.manufacturer_id
-        WHERE i.item_number = ? AND m.name = ?
-        """,
-        ("BATCH-NEW-001", "UNKNOWN"),
-    ).fetchone()
-    assert row is not None
-
-
-def test_register_unregistered_item_csvs_restores_moved_file_when_post_move_reporting_fails(
-    conn, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    items_unregistered_root = tmp_path / "imports" / "items" / "unregistered"
-    items_registered_root = tmp_path / "imports" / "items" / "registered"
-    items_unregistered_root.mkdir(parents=True, exist_ok=True)
-    items_registered_root.mkdir(parents=True, exist_ok=True)
-
-    register_csv = items_unregistered_root / "batch_missing_items_registration_restore.csv"
-    with register_csv.open("w", encoding="utf-8", newline="") as fp:
-        writer = csv.DictWriter(
-            fp,
-            fieldnames=[
-                "source_csv",
-                "source_supplier",
-                "item_number",
-                "supplier",
-                "resolution_type",
-                "category",
-                "url",
-                "description",
-                "canonical_item_number",
-                "units_per_order",
-            ],
-        )
-        writer.writeheader()
-        writer.writerow(
-            {
-                "source_csv": "imports/orders/unregistered/csv_files/SupplierBatch/QB-RESTORE.csv",
-                "source_supplier": "SupplierBatch",
-                "item_number": "BATCH-RESTORE-001",
-                "supplier": "SupplierBatch",
-                "resolution_type": "new_item",
-                "category": "Lens",
-                "url": "",
-                "description": "",
-                "canonical_item_number": "",
-                "units_per_order": "",
-            }
-        )
-
-    original_move = service._move_file_preserve_name
-
-    class _ExplodingOncePath:
-        def __init__(self, path: Path):
-            self._path = path
-            self._has_raised = False
-
-        def exists(self) -> bool:
-            return self._path.exists()
-
-        def __str__(self) -> str:
-            if not self._has_raised:
-                self._has_raised = True
-                raise RuntimeError("simulated post-move reporting failure")
-            return str(self._path)
-
-    def _move_then_fail_once(src: Path, dst_dir: Path):
-        return _ExplodingOncePath(original_move(src, dst_dir))
-
-    monkeypatch.setattr(service, "_move_file_preserve_name", _move_then_fail_once)
-
-    result = service.register_unregistered_item_csvs(
-        conn,
-        items_unregistered_root=items_unregistered_root,
-        items_registered_root=items_registered_root,
-        continue_on_error=True,
-    )
-
-    assert result["status"] == "error"
-    assert result["succeeded"] == 0
-    assert result["failed"] == 1
-    assert register_csv.exists()
-    assert list(items_registered_root.rglob("*.csv")) == []
-    row = conn.execute(
-        """
-        SELECT 1
-        FROM items_master i
-        JOIN manufacturers m ON m.manufacturer_id = i.manufacturer_id
-        WHERE i.item_number = ? AND m.name = ?
-        """,
-        ("BATCH-RESTORE-001", "UNKNOWN"),
-    ).fetchone()
-    assert row is None
-
-
-def test_register_unregistered_item_csvs_skips_consolidation_when_any_file_fails(conn, tmp_path: Path):
-    items_unregistered_root = tmp_path / "imports" / "items" / "unregistered"
-    items_registered_root = tmp_path / "imports" / "items" / "registered"
-    items_unregistered_root.mkdir(parents=True, exist_ok=True)
-    items_registered_root.mkdir(parents=True, exist_ok=True)
-
-    valid_csv = items_unregistered_root / "batch_missing_items_registration_ok.csv"
-    with valid_csv.open("w", encoding="utf-8", newline="") as fp:
-        writer = csv.DictWriter(
-            fp,
-            fieldnames=[
-                "source_csv",
-                "source_supplier",
-                "item_number",
-                "supplier",
-                "resolution_type",
-                "category",
-                "url",
-                "description",
-                "canonical_item_number",
-                "units_per_order",
-            ],
-        )
-        writer.writeheader()
-        writer.writerow(
-            {
-                "source_csv": "imports/orders/unregistered/csv_files/SupplierBatch/QB-OK.csv",
-                "source_supplier": "SupplierBatch",
-                "item_number": "BATCH-OK-001",
-                "supplier": "SupplierBatch",
-                "resolution_type": "new_item",
-                "category": "Lens",
-                "url": "",
-                "description": "",
-                "canonical_item_number": "",
-                "units_per_order": "",
-            }
-        )
-
-    invalid_csv = items_unregistered_root / "batch_missing_items_registration_fail.csv"
-    with invalid_csv.open("w", encoding="utf-8", newline="") as fp:
-        writer = csv.DictWriter(
-            fp,
-            fieldnames=[
-                "source_csv",
-                "source_supplier",
-                "item_number",
-                "supplier",
-                "resolution_type",
-                "category",
-                "url",
-                "description",
-                "canonical_item_number",
-                "units_per_order",
-            ],
-        )
-        writer.writeheader()
-        writer.writerow(
-            {
-                "source_csv": "imports/orders/unregistered/csv_files/SupplierBatch/QB-FAIL.csv",
-                "source_supplier": "SupplierBatch",
-                "item_number": "BATCH-FAIL-001",
-                "supplier": "SupplierBatch",
-                "resolution_type": "alias",
-                "category": "",
-                "url": "",
-                "description": "",
-                "canonical_item_number": "DOES-NOT-EXIST",
-                "units_per_order": "1",
-            }
-        )
-
-    result = service.register_unregistered_item_csvs(
-        conn,
-        items_unregistered_root=items_unregistered_root,
-        items_registered_root=items_registered_root,
-        continue_on_error=True,
-    )
-
-    from app.utils import today_jst
-
-    month_dir = items_registered_root / today_jst()[:7]
-    moved_valid = month_dir / valid_csv.name
-    consolidated = month_dir / f"items_{today_jst()[:7]}_001.csv"
-
-    assert result["status"] == "partial"
-    assert result["succeeded"] == 1
-    assert result["failed"] == 1
-    assert result["consolidation"] == {
-        "consolidated": 0,
-        "folders": [],
-        "skipped_due_to_errors": True,
-    }
-    assert moved_valid.exists()
-    assert invalid_csv.exists()
-    assert not consolidated.exists()
-
-
-def test_register_unregistered_item_csvs_skips_consolidation_when_error_stops_batch(conn, tmp_path: Path):
-    items_unregistered_root = tmp_path / "imports" / "items" / "unregistered"
-    items_registered_root = tmp_path / "imports" / "items" / "registered"
-    items_unregistered_root.mkdir(parents=True, exist_ok=True)
-    items_registered_root.mkdir(parents=True, exist_ok=True)
-
-    valid_csv = items_unregistered_root / "01_batch_missing_items_registration_ok.csv"
-    with valid_csv.open("w", encoding="utf-8", newline="") as fp:
-        writer = csv.DictWriter(
-            fp,
-            fieldnames=[
-                "source_csv",
-                "source_supplier",
-                "item_number",
-                "supplier",
-                "resolution_type",
-                "category",
-                "url",
-                "description",
-                "canonical_item_number",
-                "units_per_order",
-            ],
-        )
-        writer.writeheader()
-        writer.writerow(
-            {
-                "source_csv": "imports/orders/unregistered/csv_files/SupplierBatch/QB-OK-STOP.csv",
-                "source_supplier": "SupplierBatch",
-                "item_number": "BATCH-OK-STOP-001",
-                "supplier": "SupplierBatch",
-                "resolution_type": "new_item",
-                "category": "Lens",
-                "url": "",
-                "description": "",
-                "canonical_item_number": "",
-                "units_per_order": "",
-            }
-        )
-
-    invalid_csv = items_unregistered_root / "02_batch_missing_items_registration_fail.csv"
-    with invalid_csv.open("w", encoding="utf-8", newline="") as fp:
-        writer = csv.DictWriter(
-            fp,
-            fieldnames=[
-                "source_csv",
-                "source_supplier",
-                "item_number",
-                "supplier",
-                "resolution_type",
-                "category",
-                "url",
-                "description",
-                "canonical_item_number",
-                "units_per_order",
-            ],
-        )
-        writer.writeheader()
-        writer.writerow(
-            {
-                "source_csv": "imports/orders/unregistered/csv_files/SupplierBatch/QB-FAIL-STOP.csv",
-                "source_supplier": "SupplierBatch",
-                "item_number": "BATCH-FAIL-STOP-001",
-                "supplier": "SupplierBatch",
-                "resolution_type": "alias",
-                "category": "",
-                "url": "",
-                "description": "",
-                "canonical_item_number": "DOES-NOT-EXIST",
-                "units_per_order": "1",
-            }
-        )
-
-    result = service.register_unregistered_item_csvs(
-        conn,
-        items_unregistered_root=items_unregistered_root,
-        items_registered_root=items_registered_root,
-        continue_on_error=False,
-    )
-
-    from app.utils import today_jst
-
-    month_dir = items_registered_root / today_jst()[:7]
-    moved_valid = month_dir / valid_csv.name
-    consolidated = month_dir / f"items_{today_jst()[:7]}_001.csv"
-
-    assert result["status"] == "partial"
-    assert result["processed"] == 2
-    assert result["succeeded"] == 1
-    assert result["failed"] == 1
-    assert result["consolidation"] == {
-        "consolidated": 0,
-        "folders": [],
-        "skipped_due_to_errors": True,
-    }
-    assert moved_valid.exists()
-    assert invalid_csv.exists()
-    assert not consolidated.exists()
-
-def test_update_and_delete_quotation_syncs_csv_and_db(conn, tmp_path: Path, monkeypatch):
+def test_update_and_delete_quotation_use_db_as_source_of_truth(conn, tmp_path: Path, monkeypatch):
     item = _create_basic_item(conn, item_number="SYNC-ITEM-001")
     roots = service.build_roots(
         unregistered_root=tmp_path / "quotations" / "unregistered",
         registered_root=tmp_path / "quotations" / "registered",
     )
     service.ensure_roots(roots)
-    monkeypatch.setattr(service, "build_roots", lambda **_: roots)
 
     csv_path = roots.registered_csv_root / "SupplierSync" / "Q-SYNC-001.csv"
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1060,28 +593,33 @@ def test_update_and_delete_quotation_syncs_csv_and_db(conn, tmp_path: Path, monk
     assert updated["issue_date"] == "2026-03-05"
     assert updated["quotation_document_url"] == "https://example.sharepoint.com/sites/procurement/Q-SYNC-001"
 
+    monkeypatch.setattr(
+        service,
+        "build_roots",
+        lambda **_: (_ for _ in ()).throw(AssertionError("build_roots should not be used during quotation edits")),
+    )
     with csv_path.open("r", encoding="utf-8", newline="") as fp:
         rows = list(csv.DictReader(fp))
-    assert rows[0]["issue_date"] == "2026-03-05"
+    assert rows[0]["issue_date"] == "2026-03-01"
     assert rows[0]["quotation_document_url"] == "https://example.sharepoint.com/sites/procurement/Q-SYNC-001"
 
     delete_result = service.delete_quotation(conn, int(order["quotation_id"]))
     assert delete_result["deleted"] is True
+    assert delete_result["csv_sync"]["enabled"] is False
     assert conn.execute("SELECT COUNT(*) AS c FROM orders").fetchone()["c"] == 0
     assert conn.execute("SELECT COUNT(*) AS c FROM quotations").fetchone()["c"] == 0
 
     with csv_path.open("r", encoding="utf-8", newline="") as fp:
         remaining_rows = list(csv.DictReader(fp))
-    assert remaining_rows == []
+    assert len(remaining_rows) == 1
 
-def test_update_and_delete_order_with_duplicate_item_rows_only_touches_target_order(conn, tmp_path: Path, monkeypatch):
+def test_update_and_delete_order_leave_archived_csv_unchanged(conn, tmp_path: Path, monkeypatch):
     item = _create_basic_item(conn, item_number="SYNC-DUP-001")
     roots = service.build_roots(
         unregistered_root=tmp_path / "quotations" / "unregistered",
         registered_root=tmp_path / "quotations" / "registered",
     )
     service.ensure_roots(roots)
-    monkeypatch.setattr(service, "build_roots", lambda **_: roots)
 
     csv_path = roots.registered_csv_root / "SupplierDup" / "Q-DUP-001.csv"
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1094,6 +632,7 @@ def test_update_and_delete_order_with_duplicate_item_rows_only_touches_target_or
                 "quantity",
                 "quotation_number",
                 "issue_date",
+                "quotation_document_url",
                 "order_date",
                 "expected_arrival",
                 "pdf_link",
@@ -1107,6 +646,7 @@ def test_update_and_delete_order_with_duplicate_item_rows_only_touches_target_or
                 "quantity": "3",
                 "quotation_number": "Q-DUP-001",
                 "issue_date": "2026-04-01",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-DUP-001",
                 "order_date": "2026-04-01",
                 "expected_arrival": "2026-04-10",
                 "pdf_link": "",
@@ -1119,6 +659,7 @@ def test_update_and_delete_order_with_duplicate_item_rows_only_touches_target_or
                 "quantity": "5",
                 "quotation_number": "Q-DUP-001",
                 "issue_date": "2026-04-01",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-DUP-001",
                 "order_date": "2026-04-01",
                 "expected_arrival": "2026-04-11",
                 "pdf_link": "",
@@ -1134,28 +675,34 @@ def test_update_and_delete_order_with_duplicate_item_rows_only_touches_target_or
     first_order_id = int(import_result["order_ids"][0])
     second_order_id = int(import_result["order_ids"][1])
 
+    monkeypatch.setattr(
+        service,
+        "build_roots",
+        lambda **_: (_ for _ in ()).throw(AssertionError("build_roots should not be used during order edits")),
+    )
     service.update_order(conn, first_order_id, {"expected_arrival": "2026-04-20"})
 
     with csv_path.open("r", encoding="utf-8", newline="") as fp:
         rows_after_update = list(csv.DictReader(fp))
-    assert rows_after_update[0]["expected_arrival"] == "2026-04-20"
+    assert rows_after_update[0]["expected_arrival"] == "2026-04-10"
     assert rows_after_update[1]["expected_arrival"] == "2026-04-11"
 
-    service.delete_order(conn, second_order_id)
+    delete_result = service.delete_order(conn, second_order_id)
+    assert delete_result["csv_sync"]["enabled"] is False
 
     with csv_path.open("r", encoding="utf-8", newline="") as fp:
         rows_after_delete = list(csv.DictReader(fp))
-    assert len(rows_after_delete) == 1
+    assert len(rows_after_delete) == 2
     assert rows_after_delete[0]["quantity"] == "3"
+    assert rows_after_delete[1]["quantity"] == "5"
 
-def test_update_order_can_split_partial_eta_with_csv_sync(conn, tmp_path: Path, monkeypatch):
+def test_update_order_can_split_partial_eta_without_archive_sync(conn, tmp_path: Path, monkeypatch):
     item = _create_basic_item(conn, item_number="SYNC-SPLIT-001")
     roots = service.build_roots(
         unregistered_root=tmp_path / "quotations" / "unregistered",
         registered_root=tmp_path / "quotations" / "registered",
     )
     service.ensure_roots(roots)
-    monkeypatch.setattr(service, "build_roots", lambda **_: roots)
 
     csv_path = roots.registered_csv_root / "SupplierSplit" / "Q-SPLIT-001.csv"
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1168,6 +715,7 @@ def test_update_order_can_split_partial_eta_with_csv_sync(conn, tmp_path: Path, 
                 "quantity",
                 "quotation_number",
                 "issue_date",
+                "quotation_document_url",
                 "order_date",
                 "expected_arrival",
                 "pdf_link",
@@ -1181,6 +729,7 @@ def test_update_order_can_split_partial_eta_with_csv_sync(conn, tmp_path: Path, 
                 "quantity": "50",
                 "quotation_number": "Q-SPLIT-001",
                 "issue_date": "2026-04-01",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-SPLIT-001",
                 "order_date": "2026-04-01",
                 "expected_arrival": "2026-04-10",
                 "pdf_link": "",
@@ -1195,6 +744,11 @@ def test_update_order_can_split_partial_eta_with_csv_sync(conn, tmp_path: Path, 
     assert import_result["status"] == "ok"
     order_id = int(import_result["order_ids"][0])
 
+    monkeypatch.setattr(
+        service,
+        "build_roots",
+        lambda **_: (_ for _ in ()).throw(AssertionError("build_roots should not be used during order split")),
+    )
     result = service.update_order(
         conn,
         order_id,
@@ -1212,11 +766,9 @@ def test_update_order_can_split_partial_eta_with_csv_sync(conn, tmp_path: Path, 
 
     with csv_path.open("r", encoding="utf-8", newline="") as fp:
         rows_after_update = list(csv.DictReader(fp))
-    assert len(rows_after_update) == 2
-    assert rows_after_update[0]["quantity"] == "20"
+    assert len(rows_after_update) == 1
+    assert rows_after_update[0]["quantity"] == "50"
     assert rows_after_update[0]["expected_arrival"] == "2026-04-10"
-    assert rows_after_update[1]["quantity"] == "30"
-    assert rows_after_update[1]["expected_arrival"] == "2026-04-25"
 
 
 def test_update_order_rejects_manual_project_reassignment_for_ordered_rfq_link(conn):
@@ -1286,14 +838,13 @@ def test_update_order_rejects_manual_project_reassignment_for_ordered_rfq_link(c
     assert int(service.get_order(conn, order_id)["project_id"]) == owner_project["project_id"]
 
 
-def test_merge_open_orders_records_lineage_and_syncs_csv(conn, tmp_path: Path, monkeypatch):
+def test_merge_open_orders_records_lineage_without_archive_sync(conn, tmp_path: Path, monkeypatch):
     item = _create_basic_item(conn, item_number="SYNC-MERGE-001")
     roots = service.build_roots(
         unregistered_root=tmp_path / "quotations" / "unregistered",
         registered_root=tmp_path / "quotations" / "registered",
     )
     service.ensure_roots(roots)
-    monkeypatch.setattr(service, "build_roots", lambda **_: roots)
 
     csv_path = roots.registered_csv_root / "SupplierMerge" / "Q-MERGE-001.csv"
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1306,6 +857,7 @@ def test_merge_open_orders_records_lineage_and_syncs_csv(conn, tmp_path: Path, m
                 "quantity",
                 "quotation_number",
                 "issue_date",
+                "quotation_document_url",
                 "order_date",
                 "expected_arrival",
                 "pdf_link",
@@ -1316,24 +868,26 @@ def test_merge_open_orders_records_lineage_and_syncs_csv(conn, tmp_path: Path, m
             {
                 "supplier": "SupplierMerge",
                 "item_number": item["item_number"],
-                "quantity": "20",
-                "quotation_number": "Q-MERGE-001",
-                "issue_date": "2026-05-01",
-                "order_date": "2026-05-01",
-                "expected_arrival": "2026-05-20",
-                "pdf_link": "",
+                    "quantity": "20",
+                    "quotation_number": "Q-MERGE-001",
+                    "issue_date": "2026-05-01",
+                    "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-MERGE-001",
+                    "order_date": "2026-05-01",
+                    "expected_arrival": "2026-05-20",
+                    "pdf_link": "",
             }
         )
         writer.writerow(
             {
                 "supplier": "SupplierMerge",
                 "item_number": item["item_number"],
-                "quantity": "30",
-                "quotation_number": "Q-MERGE-001",
-                "issue_date": "2026-05-01",
-                "order_date": "2026-05-01",
-                "expected_arrival": "2026-05-25",
-                "pdf_link": "",
+                    "quantity": "30",
+                    "quotation_number": "Q-MERGE-001",
+                    "issue_date": "2026-05-01",
+                    "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-MERGE-001",
+                    "order_date": "2026-05-01",
+                    "expected_arrival": "2026-05-25",
+                    "pdf_link": "",
             }
         )
 
@@ -1346,6 +900,11 @@ def test_merge_open_orders_records_lineage_and_syncs_csv(conn, tmp_path: Path, m
     first_order_id = int(import_result["order_ids"][0])
     second_order_id = int(import_result["order_ids"][1])
 
+    monkeypatch.setattr(
+        service,
+        "build_roots",
+        lambda **_: (_ for _ in ()).throw(AssertionError("build_roots should not be used during order merge")),
+    )
     merged = service.merge_open_orders(
         conn,
         source_order_id=first_order_id,
@@ -1366,21 +925,20 @@ def test_merge_open_orders_records_lineage_and_syncs_csv(conn, tmp_path: Path, m
 
     with csv_path.open("r", encoding="utf-8", newline="") as fp:
         rows_after = list(csv.DictReader(fp))
-    assert len(rows_after) == 1
-    assert rows_after[0]["quantity"] == "50"
-    assert rows_after[0]["expected_arrival"] == "2026-05-30"
+    assert len(rows_after) == 2
+    assert rows_after[0]["quantity"] == "20"
+    assert rows_after[1]["quantity"] == "30"
 
 
 
 
-def test_merge_open_orders_removes_correct_source_row_for_nonfirst_sibling(conn, tmp_path: Path, monkeypatch):
+def test_merge_open_orders_nonfirst_sibling_keeps_archived_csv_unchanged(conn, tmp_path: Path, monkeypatch):
     item = _create_basic_item(conn, item_number="SYNC-MERGE-ORDER-001")
     roots = service.build_roots(
         unregistered_root=tmp_path / "quotations" / "unregistered",
         registered_root=tmp_path / "quotations" / "registered",
     )
     service.ensure_roots(roots)
-    monkeypatch.setattr(service, "build_roots", lambda **_: roots)
 
     csv_path = roots.registered_csv_root / "SupplierMergeOrder" / "Q-MERGE-ORDER-001.csv"
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1393,20 +951,26 @@ def test_merge_open_orders_removes_correct_source_row_for_nonfirst_sibling(conn,
                 "quantity",
                 "quotation_number",
                 "issue_date",
+                "quotation_document_url",
                 "order_date",
                 "expected_arrival",
                 "pdf_link",
             ],
         )
         writer.writeheader()
-        writer.writerow({"supplier": "SupplierMergeOrder", "item_number": item["item_number"], "quantity": "10", "quotation_number": "Q-MERGE-ORDER-001", "issue_date": "2026-06-01", "order_date": "2026-06-01", "expected_arrival": "2026-06-10", "pdf_link": ""})
-        writer.writerow({"supplier": "SupplierMergeOrder", "item_number": item["item_number"], "quantity": "20", "quotation_number": "Q-MERGE-ORDER-001", "issue_date": "2026-06-01", "order_date": "2026-06-01", "expected_arrival": "2026-06-20", "pdf_link": ""})
-        writer.writerow({"supplier": "SupplierMergeOrder", "item_number": item["item_number"], "quantity": "30", "quotation_number": "Q-MERGE-ORDER-001", "issue_date": "2026-06-01", "order_date": "2026-06-01", "expected_arrival": "2026-06-30", "pdf_link": ""})
+        writer.writerow({"supplier": "SupplierMergeOrder", "item_number": item["item_number"], "quantity": "10", "quotation_number": "Q-MERGE-ORDER-001", "issue_date": "2026-06-01", "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-MERGE-ORDER-001", "order_date": "2026-06-01", "expected_arrival": "2026-06-10", "pdf_link": ""})
+        writer.writerow({"supplier": "SupplierMergeOrder", "item_number": item["item_number"], "quantity": "20", "quotation_number": "Q-MERGE-ORDER-001", "issue_date": "2026-06-01", "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-MERGE-ORDER-001", "order_date": "2026-06-01", "expected_arrival": "2026-06-20", "pdf_link": ""})
+        writer.writerow({"supplier": "SupplierMergeOrder", "item_number": item["item_number"], "quantity": "30", "quotation_number": "Q-MERGE-ORDER-001", "issue_date": "2026-06-01", "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-MERGE-ORDER-001", "order_date": "2026-06-01", "expected_arrival": "2026-06-30", "pdf_link": ""})
 
     import_result = service.import_orders_from_csv_path(conn, supplier_name="SupplierMergeOrder", csv_path=csv_path)
     assert import_result["status"] == "ok"
     first_order_id, second_order_id, third_order_id = [int(v) for v in import_result["order_ids"]]
 
+    monkeypatch.setattr(
+        service,
+        "build_roots",
+        lambda **_: (_ for _ in ()).throw(AssertionError("build_roots should not be used during order merge")),
+    )
     merged = service.merge_open_orders(
         conn,
         source_order_id=second_order_id,
@@ -1418,24 +982,25 @@ def test_merge_open_orders_removes_correct_source_row_for_nonfirst_sibling(conn,
     with csv_path.open("r", encoding="utf-8", newline="") as fp:
         rows_after = list(csv.DictReader(fp))
 
-    assert len(rows_after) == 2
+    assert len(rows_after) == 3
     assert rows_after[0]["quantity"] == "10"
     assert rows_after[0]["expected_arrival"] == "2026-06-10"
-    assert rows_after[1]["quantity"] == "50"
-    assert rows_after[1]["expected_arrival"] == "2026-07-05"
+    assert rows_after[1]["quantity"] == "20"
+    assert rows_after[1]["expected_arrival"] == "2026-06-20"
+    assert rows_after[2]["quantity"] == "30"
+    assert rows_after[2]["expected_arrival"] == "2026-06-30"
     assert conn.execute("SELECT COUNT(*) AS c FROM orders WHERE order_id = ?", (second_order_id,)).fetchone()["c"] == 0
     assert conn.execute("SELECT COUNT(*) AS c FROM orders WHERE order_id = ?", (first_order_id,)).fetchone()["c"] == 1
     assert conn.execute("SELECT COUNT(*) AS c FROM orders WHERE order_id = ?", (third_order_id,)).fetchone()["c"] == 1
 
 
-def test_split_order_appends_new_csv_row_after_sibling_block(conn, tmp_path: Path, monkeypatch):
+def test_split_order_keeps_archived_csv_unchanged(conn, tmp_path: Path, monkeypatch):
     item = _create_basic_item(conn, item_number="SYNC-SPLIT-ORDER-001")
     roots = service.build_roots(
         unregistered_root=tmp_path / "quotations" / "unregistered",
         registered_root=tmp_path / "quotations" / "registered",
     )
     service.ensure_roots(roots)
-    monkeypatch.setattr(service, "build_roots", lambda **_: roots)
 
     csv_path = roots.registered_csv_root / "SupplierSplitOrder" / "Q-SPLIT-ORDER-001.csv"
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1448,20 +1013,26 @@ def test_split_order_appends_new_csv_row_after_sibling_block(conn, tmp_path: Pat
                 "quantity",
                 "quotation_number",
                 "issue_date",
+                "quotation_document_url",
                 "order_date",
                 "expected_arrival",
                 "pdf_link",
             ],
         )
         writer.writeheader()
-        writer.writerow({"supplier": "SupplierSplitOrder", "item_number": item["item_number"], "quantity": "10", "quotation_number": "Q-SPLIT-ORDER-001", "issue_date": "2026-08-01", "order_date": "2026-08-01", "expected_arrival": "2026-08-10", "pdf_link": ""})
-        writer.writerow({"supplier": "SupplierSplitOrder", "item_number": item["item_number"], "quantity": "10", "quotation_number": "Q-SPLIT-ORDER-001", "issue_date": "2026-08-01", "order_date": "2026-08-01", "expected_arrival": "2026-08-20", "pdf_link": ""})
-        writer.writerow({"supplier": "SupplierSplitOrder", "item_number": item["item_number"], "quantity": "10", "quotation_number": "Q-SPLIT-ORDER-001", "issue_date": "2026-08-01", "order_date": "2026-08-01", "expected_arrival": "2026-08-30", "pdf_link": ""})
+        writer.writerow({"supplier": "SupplierSplitOrder", "item_number": item["item_number"], "quantity": "10", "quotation_number": "Q-SPLIT-ORDER-001", "issue_date": "2026-08-01", "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-SPLIT-ORDER-001", "order_date": "2026-08-01", "expected_arrival": "2026-08-10", "pdf_link": ""})
+        writer.writerow({"supplier": "SupplierSplitOrder", "item_number": item["item_number"], "quantity": "10", "quotation_number": "Q-SPLIT-ORDER-001", "issue_date": "2026-08-01", "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-SPLIT-ORDER-001", "order_date": "2026-08-01", "expected_arrival": "2026-08-20", "pdf_link": ""})
+        writer.writerow({"supplier": "SupplierSplitOrder", "item_number": item["item_number"], "quantity": "10", "quotation_number": "Q-SPLIT-ORDER-001", "issue_date": "2026-08-01", "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-SPLIT-ORDER-001", "order_date": "2026-08-01", "expected_arrival": "2026-08-30", "pdf_link": ""})
 
     import_result = service.import_orders_from_csv_path(conn, supplier_name="SupplierSplitOrder", csv_path=csv_path)
     assert import_result["status"] == "ok"
     _, second_order_id, _ = [int(v) for v in import_result["order_ids"]]
 
+    monkeypatch.setattr(
+        service,
+        "build_roots",
+        lambda **_: (_ for _ in ()).throw(AssertionError("build_roots should not be used during order split")),
+    )
     service.update_order(
         conn,
         second_order_id,
@@ -1474,15 +1045,13 @@ def test_split_order_appends_new_csv_row_after_sibling_block(conn, tmp_path: Pat
     with csv_path.open("r", encoding="utf-8", newline="") as fp:
         rows_after = list(csv.DictReader(fp))
 
-    assert len(rows_after) == 4
+    assert len(rows_after) == 3
     assert rows_after[0]["quantity"] == "10"
     assert rows_after[0]["expected_arrival"] == "2026-08-10"
-    assert rows_after[1]["quantity"] == "6"
+    assert rows_after[1]["quantity"] == "10"
     assert rows_after[1]["expected_arrival"] == "2026-08-20"
     assert rows_after[2]["quantity"] == "10"
     assert rows_after[2]["expected_arrival"] == "2026-08-30"
-    assert rows_after[3]["quantity"] == "4"
-    assert rows_after[3]["expected_arrival"] == "2026-09-05"
 
 def test_delete_quotation_rejects_if_any_linked_order_arrived(conn):
     item = _create_basic_item(conn, item_number="ARRIVE-GUARD-001")

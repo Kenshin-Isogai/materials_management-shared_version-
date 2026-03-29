@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 from io import StringIO
 
-
 def _make_orders_csv(rows: list[dict[str, str]]) -> bytes:
     output = StringIO()
     writer = csv.DictWriter(
@@ -170,6 +169,8 @@ def test_generated_artifact_metadata_hides_workspace_paths(client):
     payload = response.json()["data"]
     assert payload["status"] == "missing_items"
     assert isinstance(payload["import_job_id"], int)
+    assert "missing_csv_path" not in payload
+    assert "missing_storage_ref" not in payload
     artifact = payload["missing_artifact"]
     assert "relative_path" not in artifact
     assert artifact["detail_path"] == f"/api/artifacts/{artifact['artifact_id']}"

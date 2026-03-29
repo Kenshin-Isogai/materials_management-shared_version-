@@ -30,6 +30,12 @@ For Cloud Run deployment posture, the backend now supports:
 - automatic `PORT` pickup from Cloud Run
 - default ephemeral app-data root under `/tmp` when `APP_DATA_ROOT` is not set
 - startup that skips legacy repo/workspace folder migration in Cloud Run mode
+- startup migration disabled by default in Cloud Run mode
+- frontend nginx image no longer assumes a backend container-side `/api` proxy in the Cloud Run-target image
+- environment-driven DB pool settings (`DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT`, `DB_POOL_RECYCLE_SECONDS`)
+- environment-driven upload/concurrency guardrails (`MAX_UPLOAD_BYTES`, `HEAVY_REQUEST_TARGET_SECONDS`, `CLOUD_RUN_CONCURRENCY_TARGET`)
+- explicit cloud deployment metadata for Cloud SQL and storage (`INSTANCE_CONNECTION_NAME`, `STORAGE_BACKEND`, `GCS_BUCKET`, `GCS_OBJECT_PREFIX`, `BACKEND_PUBLIC_BASE_URL`, `FRONTEND_PUBLIC_BASE_URL`)
+- explicit CORS origins instead of wildcard defaults
 
 ## Repository Structure
 
@@ -73,6 +79,8 @@ Stop the stack with:
 - API: `http://127.0.0.1/api`
 - Swagger: `http://127.0.0.1/docs`
 
+The Docker Compose stack keeps the local `/api` path by mounting `frontend/nginx.local-proxy.conf`, while the built frontend image keeps `frontend/nginx.conf` as the cloud-first no-proxy default.
+
 4. Stop:
 
 ```powershell
@@ -98,22 +106,36 @@ cd frontend
 npm install
 $env:VITE_API_BASE = "http://127.0.0.1:8000/api"
 npm run dev
+npx playwright test (to run automated UI tests)
 ```
 
 ## Cloud Run Runtime Notes
 
 - Set `APP_RUNTIME_TARGET=cloud_run`
 - Set `DATABASE_URL` from Secret Manager / Cloud SQL connection config
+- Set `INSTANCE_CONNECTION_NAME` for the target Cloud SQL instance and keep `DATABASE_URL` on the Cloud SQL Unix-socket form
+- Set `VITE_API_BASE` to the backend Cloud Run public `/api` URL for split-service deployment
+- The built frontend image no longer proxies `/api` to an internal backend container by default; browser API traffic should come from `VITE_API_BASE`
+- Set `BACKEND_PUBLIC_BASE_URL` and `FRONTEND_PUBLIC_BASE_URL` if you want the runtime health surface to report the intended public URLs explicitly
+- Set `CORS_ALLOWED_ORIGINS` to the frontend Cloud Run origin explicitly
+- Keep `MAX_UPLOAD_BYTES=33554432` unless you intentionally revise the first-rollout 32 MB ceiling
+- Keep `CLOUD_RUN_CONCURRENCY_TARGET=10` and align actual Cloud Run/Gunicorn settings with Cloud SQL capacity
+- Set `STORAGE_BACKEND=gcs` plus `GCS_BUCKET` and optional `GCS_OBJECT_PREFIX` for Cloud Run durable storage; `local` remains the local/shared-server default
 - `PORT` is honored automatically; you do not need to force `APP_PORT`
 - If `APP_DATA_ROOT` is omitted, the backend now defaults to an ephemeral temp directory suitable for Cloud Run
 - Cloud Run startup no longer copies legacy `quotations/` or repo-local `imports/` folders into runtime storage
+- Cloud Run should run Alembic as a deployment step; request-serving startup should keep `AUTO_MIGRATE_ON_STARTUP=0`
+- local Docker Compose now relies on normal backend startup migration (`AUTO_MIGRATE_ON_STARTUP=1` by default in compose) instead of embedding `alembic upgrade head` into the container command
+- manual order-import missing-item outputs are now exposed through artifact metadata/download endpoints rather than raw path fields
 - Legacy ZIP/PDF compatibility import remains a local/shared-server workflow, not the target Cloud Run path
+- Concrete first-rollout deploy steps are documented in [documents/gcp_cloud_run_rollout/cloud_run_deployment_runbook.md](documents/gcp_cloud_run_rollout/cloud_run_deployment_runbook.md)
 
 ## API
 
 - API base: `http://127.0.0.1:8000/api`
 - API docs (Swagger): `http://127.0.0.1:8000/docs`
 - Mutation requests require `X-User-Name` for a pre-registered active user.
+- `X-User-Name` is a temporary rollout identity mechanism, not the intended long-term public-cloud auth boundary.
 - The frontend header bar now includes a user selector backed by `/api/users`.
 
 ## Database and File Layout
@@ -137,6 +159,7 @@ $env:PYTHONPATH = "backend"
 uv run --project backend python -m pytest --import-mode=importlib
 cd ..\frontend
 npm run test
+npx playwright test
 npm run build
 ```
 
@@ -162,13 +185,17 @@ For targeted backend slices from the repo root, keep the same `TEST_DATABASE_URL
   - `POST /api/items/import-preview`
   - previews duplicate item rows, alias create/update behavior, and canonical-item reconciliation before final `POST /api/items/import`
   - the Items page can preview/import one or more CSV files in a single run
-  - final item import accepts optional per-row `row_overrides` (`canonical_item_number`, `units_per_order`) and archives successful manual-import CSV content into `imports/items/registered/<YYYY-MM>/` before monthly consolidation
+  - order-generated missing-item CSVs now come back through this same Items import flow after the user edits the downloaded CSV
+  - final item import accepts optional per-row `row_overrides` (`canonical_item_number`, `units_per_order`) and archives successful manual-import CSV content into `imports/items/registered/<YYYY-MM>/` as durable history without a follow-up folder rescan
   - `POST /api/inventory/import-preview`
   - validates movement rows, simulates stock balance changes, and allows per-row `item_id` correction before final `POST /api/inventory/import-csv`
   - `POST /api/orders/import-preview`
   - classifies rows as `exact`, `high_confidence`, `needs_review`, or `unresolved`
+  - requires `supplier` on every CSV row
   - surfaces duplicate quotation conflicts before commit
   - supports per-row canonical item correction plus optional supplier-alias save on final `POST /api/orders/import`
+  - the Orders page can preview/import multiple CSV files in a single run
+  - when orders still contain unresolved item numbers, the page exposes a downloadable missing-item CSV instead of routing into a dedicated Items resolver
   - `POST /api/reservations/import-preview`
   - validates item/assembly targets, previews assembly expansion, and allows per-row `item_id`/`assembly_id` correction before final `POST /api/reservations/import-csv`
   - preview-confirmation JSON fields are strict: malformed JSON, wrong top-level shapes, missing required keys, and override row numbers not present in the uploaded CSV return `422` instead of bubbling as server errors

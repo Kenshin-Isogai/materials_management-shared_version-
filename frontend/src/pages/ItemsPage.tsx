@@ -1,10 +1,9 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
 import useSWR from "swr";
 import { CatalogPicker } from "../components/CatalogPicker";
 import { apiDownload, apiGet, apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
 import { formatActionError, resolvePreviewSelection } from "../lib/previewState";
-import type { CatalogSearchResult, Item, MissingItemResolverRow } from "../lib/types";
+import type { CatalogSearchResult, Item } from "../lib/types";
 
 type ItemRowType = "item" | "alias";
 
@@ -42,19 +41,6 @@ type ItemImportResult = {
   import_job_id?: number;
   import_job_ids?: number[];
   rows: ItemImportRow[];
-};
-
-type ItemBatchUploadResult = {
-  status: string;
-  processed: number;
-  succeeded: number;
-  failed: number;
-  upload_job_id?: string;
-  files?: Array<{
-    file: string;
-    status: string;
-    error?: string;
-  }>;
 };
 
 type ItemImportPreviewMatch = CatalogSearchResult & {
@@ -274,24 +260,6 @@ type MetadataBulkResult = {
   rows: MetadataBulkResultRow[];
 };
 
-type MissingResolverRow = {
-  row?: number;
-  supplier: string;
-  item_number: string;
-  manufacturer_name: string;
-  resolution_type: "new_item" | "alias";
-  category: string;
-  url: string;
-  description: string;
-  canonical_item_number: string;
-  units_per_order: string;
-};
-
-type RegisterMissingResult = {
-  created_items: number;
-  created_aliases: number;
-};
-
 type ItemFlowEvent = {
   event_at: string;
   delta: number;
@@ -309,24 +277,6 @@ type ItemFlowTimeline = {
   manufacturer_name: string;
   current_stock: number;
   events: ItemFlowEvent[];
-};
-
-const PENDING_MISSING_ITEMS_KEY = "mm.pending_missing_items";
-const PENDING_ORDER_IMPORT_KEY = "mm.pending_order_import";
-
-type PendingOrderImport = {
-  supplier_name: string;
-  default_order_date: string;
-  file_name: string;
-  file_text: string;
-};
-
-type OrderImportResult = {
-  status: string;
-  imported_count?: number;
-  missing_count?: number;
-  missing_csv_path?: string;
-  rows?: MissingItemResolverRow[];
 };
 
 const blankRow = (): ItemEntryRow => ({
@@ -348,38 +298,7 @@ const blankMetadataRow = (): MetadataBulkRow => ({
   description: "",
 });
 
-function toMissingResolverRows(rows: MissingItemResolverRow[] | undefined): MissingResolverRow[] {
-  const seen = new Set<string>();
-  return (rows ?? [])
-    .filter((row) => String(row.item_number ?? "").trim())
-    .map((row) => {
-      const resolutionType: MissingResolverRow["resolution_type"] =
-        row.resolution_type === "alias" ? "alias" : "new_item";
-      return {
-        row: row.row,
-        supplier: String(row.supplier ?? "").trim(),
-        item_number: String(row.item_number ?? "").trim(),
-        manufacturer_name: String(row.manufacturer_name ?? "UNKNOWN").trim() || "UNKNOWN",
-        resolution_type: resolutionType,
-        category: String(row.category ?? ""),
-        url: String(row.url ?? ""),
-        description: String(row.description ?? ""),
-        canonical_item_number: String(row.canonical_item_number ?? ""),
-        units_per_order: String(row.units_per_order ?? "1")
-      };
-    })
-    .filter((row) => {
-      if (!row.supplier || !row.item_number) return false;
-      const key = `${row.supplier.toLowerCase()}::${row.manufacturer_name.toLowerCase()}::${row.item_number.toLowerCase()}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-}
-
 export function ItemsPage() {
-  const location = useLocation();
-  const navigate = useNavigate();
   const [q, setQ] = useState("");
 
   const [entryMessage, setEntryMessage] = useState("");
@@ -395,8 +314,6 @@ export function ItemsPage() {
   const [selectedImportJobId, setSelectedImportJobId] = useState<number | null>(null);
   const [importJobBusyId, setImportJobBusyId] = useState<number | null>(null);
   const [importJobsMessage, setImportJobsMessage] = useState("");
-  const [missingRows, setMissingRows] = useState<MissingResolverRow[]>([]);
-  const [missingMessage, setMissingMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [listBusy, setListBusy] = useState(false);
   const [listMessage, setListMessage] = useState("");
@@ -410,9 +327,6 @@ export function ItemsPage() {
   const [metadataMessage, setMetadataMessage] = useState("");
   const [metadataResult, setMetadataResult] = useState<MetadataBulkResult | null>(null);
   const [metadataBusy, setMetadataBusy] = useState(false);
-  const [registerPendingMessage, setRegisterPendingMessage] = useState("");
-  const [registerPendingBusy, setRegisterPendingBusy] = useState(false);
-  const [batchUploadFiles, setBatchUploadFiles] = useState<File[]>([]);
   const [sortKey, setSortKey] = useState<"item_id" | "item_number" | "manufacturer_name" | "category" | "url">("item_id");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
   const [isItemListExpanded, setIsItemListExpanded] = useState(true);
@@ -503,26 +417,6 @@ export function ItemsPage() {
   }, [importJobs, selectedImportJobId]);
 
   useEffect(() => {
-    const stateRows = (location.state as { pendingMissingRows?: MissingItemResolverRow[] } | null)
-      ?.pendingMissingRows;
-    let nextRows = toMissingResolverRows(stateRows);
-    if (!nextRows.length) {
-      const raw = sessionStorage.getItem(PENDING_MISSING_ITEMS_KEY);
-      if (raw) {
-        try {
-          const parsed = JSON.parse(raw) as MissingItemResolverRow[];
-          nextRows = toMissingResolverRows(parsed);
-        } catch {
-          sessionStorage.removeItem(PENDING_MISSING_ITEMS_KEY);
-        }
-      }
-    }
-    if (nextRows.length) {
-      setMissingRows(nextRows);
-    }
-  }, [location.key, location.state]);
-
-  useEffect(() => {
     if (selectedFlowItemId == null) return;
     flowPanelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [selectedFlowItemId]);
@@ -549,21 +443,13 @@ export function ItemsPage() {
     if (!Number.isInteger(parsedUnits) || parsedUnits <= 0) {
       throw new Error("units_per_order must be a positive integer");
     }
-    await apiSend<RegisterMissingResult>("/register-missing/rows", {
+    await apiSend("/aliases/upsert", {
       method: "POST",
       body: JSON.stringify({
-        rows: [
-          {
-            supplier: normalizedSupplier,
-            item_number: normalizedOrdered,
-            resolution_type: "alias",
-            canonical_item_number: normalizedCanonical,
-            units_per_order: parsedUnits,
-            category: null,
-            url: null,
-            description: null,
-          },
-        ],
+        supplier_name: normalizedSupplier,
+        ordered_item_number: normalizedOrdered,
+        canonical_item_number: normalizedCanonical,
+        units_per_order: parsedUnits,
       }),
     });
   }
@@ -793,71 +679,6 @@ export function ItemsPage() {
     }
   }
 
-  async function runRegisterPending() {
-    setRegisterPendingBusy(true);
-    setRegisterPendingMessage("");
-    try {
-      const result = await apiSend<{
-        status: string;
-        processed: number;
-        succeeded: number;
-        failed: number;
-        files: Array<{
-          file: string;
-          status: string;
-          error?: string;
-          result?: { created_items: number; created_aliases: number; skipped_unresolved: number };
-        }>;
-      }>("/items/register-unregistered-batch", {
-        method: "POST",
-        body: JSON.stringify({ continue_on_error: true })
-      });
-      const summary = `Batch registration: status=${result.status}, processed=${result.processed}, succeeded=${result.succeeded}, failed=${result.failed}`;
-      const fileErrors = (result.files ?? [])
-        .filter(f => f.status === "error")
-        .map(f => `  ${f.file}: ${f.error ?? "unknown error"}`)
-        .join("\n");
-      setRegisterPendingMessage(fileErrors ? `${summary}\n${fileErrors}` : summary);
-      await mutate();
-      await mutateImportJobs();
-    } catch (error) {
-      setRegisterPendingMessage(formatActionError("Batch registration failed", error));
-    } finally {
-      setRegisterPendingBusy(false);
-    }
-  }
-
-  async function uploadBatchCsvs(event: FormEvent) {
-    event.preventDefault();
-    if (!batchUploadFiles.length) {
-      setRegisterPendingMessage("Select one or more CSV files to upload.");
-      return;
-    }
-    setRegisterPendingBusy(true);
-    setRegisterPendingMessage("");
-    try {
-      const form = new FormData();
-      for (const file of batchUploadFiles) {
-        form.append("files", file);
-      }
-      form.append("continue_on_error", "true");
-      const result = await apiSendForm<ItemBatchUploadResult>("/items/batch-upload", form);
-      const summary = `Missing-item batch registration: status=${result.status}, processed=${result.processed}, succeeded=${result.succeeded}, failed=${result.failed}${result.upload_job_id ? `, job=${result.upload_job_id}` : ""}`;
-      const fileErrors = (result.files ?? [])
-        .filter((file) => file.status === "error")
-        .map((file) => `  ${file.file}: ${file.error ?? "unknown error"}`)
-        .join("\n");
-      setRegisterPendingMessage(fileErrors ? `${summary}\n${fileErrors}` : summary);
-      setBatchUploadFiles([]);
-      await mutate();
-      await mutateImportJobs();
-    } catch (error) {
-      setRegisterPendingMessage(formatActionError("Batch upload failed", error));
-    } finally {
-      setRegisterPendingBusy(false);
-    }
-  }
-
   async function undoImportJob(job: ItemImportJobSummary) {
     if (job.lifecycle_state !== "active") return;
     if (
@@ -922,145 +743,6 @@ export function ItemsPage() {
       setImportJobsMessage(String(error instanceof Error ? error.message : error));
     } finally {
       setImportJobBusyId(null);
-    }
-  }
-
-  function setMissingRowsAndPersist(
-    updater: MissingResolverRow[] | ((prev: MissingResolverRow[]) => MissingResolverRow[])
-  ) {
-    setMissingRows((prev) => {
-      const next = typeof updater === "function" ? updater(prev) : updater;
-      if (next.length) {
-        sessionStorage.setItem(PENDING_MISSING_ITEMS_KEY, JSON.stringify(next));
-      } else {
-        sessionStorage.removeItem(PENDING_MISSING_ITEMS_KEY);
-      }
-      return next;
-    });
-  }
-
-  function updateMissingRow(index: number, patch: Partial<MissingResolverRow>) {
-    setMissingRowsAndPersist((prev) =>
-      prev.map((row, i) => (i === index ? { ...row, ...patch } : row))
-    );
-  }
-
-  function removeMissingRow(index: number) {
-    setMissingRowsAndPersist((prev) => prev.filter((_, i) => i !== index));
-  }
-
-  async function retryPendingOrderImportAfterResolve(): Promise<
-    | { status: "ok"; importedCount: number }
-    | { status: "missing_items"; rows: MissingResolverRow[]; missingCount: number }
-    | { status: "not_found" }
-  > {
-    const raw = sessionStorage.getItem(PENDING_ORDER_IMPORT_KEY);
-    if (!raw) return { status: "not_found" };
-    let pending: PendingOrderImport;
-    try {
-      pending = JSON.parse(raw) as PendingOrderImport;
-    } catch {
-      sessionStorage.removeItem(PENDING_ORDER_IMPORT_KEY);
-      return { status: "not_found" };
-    }
-
-    const form = new FormData();
-    const retryFile = new File([pending.file_text], pending.file_name || "order_import.csv", {
-      type: "text/csv",
-    });
-    form.append("file", retryFile);
-    form.append("supplier_name", pending.supplier_name);
-    if (pending.default_order_date) {
-      form.append("default_order_date", pending.default_order_date);
-    }
-    const result = await apiSendForm<OrderImportResult>("/orders/import", form);
-    if (result.status === "missing_items") {
-      const unresolved = toMissingResolverRows(result.rows);
-      if (unresolved.length) {
-        sessionStorage.setItem(PENDING_MISSING_ITEMS_KEY, JSON.stringify(unresolved));
-      }
-      return {
-        status: "missing_items",
-        rows: unresolved,
-        missingCount: Number(result.missing_count ?? unresolved.length),
-      };
-    }
-    sessionStorage.removeItem(PENDING_ORDER_IMPORT_KEY);
-    sessionStorage.removeItem(PENDING_MISSING_ITEMS_KEY);
-    return { status: "ok", importedCount: Number(result.imported_count ?? 0) };
-  }
-
-  async function registerMissingRows() {
-    if (!missingRows.length) return;
-    const aliasMissingCanonical = missingRows.find(
-      (row) => row.resolution_type === "alias" && !row.canonical_item_number.trim()
-    );
-    if (aliasMissingCanonical) {
-      setMissingMessage(
-        `CSV row ${aliasMissingCanonical.row ?? "-"}: alias requires canonical item selection`
-      );
-      return;
-    }
-    const aliasInvalidUnits = missingRows.find(
-      (row) =>
-        row.resolution_type === "alias" &&
-        (!Number.isInteger(Number(row.units_per_order)) || Number(row.units_per_order) <= 0)
-    );
-    if (aliasInvalidUnits) {
-      setMissingMessage(
-        `CSV row ${aliasInvalidUnits.row ?? "-"}: units_per_order must be a positive integer`
-      );
-      return;
-    }
-
-    setSubmitting(true);
-    setMissingMessage("");
-    try {
-      const payloadRows = missingRows.map((row) => ({
-        item_number: row.item_number.trim(),
-        supplier: row.supplier.trim(),
-        manufacturer_name:
-          row.resolution_type === "alias" ? null : row.manufacturer_name.trim() || "UNKNOWN",
-        resolution_type: row.resolution_type,
-        category: row.category.trim() || null,
-        url: row.url.trim() || null,
-        description: row.description.trim() || null,
-        canonical_item_number:
-          row.resolution_type === "alias" ? row.canonical_item_number.trim() : null,
-        units_per_order:
-          row.resolution_type === "alias"
-            ? Number(row.units_per_order || "1")
-            : null,
-      }));
-      const result = await apiSend<RegisterMissingResult>("/register-missing/rows", {
-        method: "POST",
-        body: JSON.stringify({ rows: payloadRows }),
-      });
-      const registrationSummary = `Registered missing items: created_items=${result.created_items}, created_aliases=${result.created_aliases}`;
-      const retry = await retryPendingOrderImportAfterResolve();
-      if (retry.status === "ok") {
-        setMissingRowsAndPersist([]);
-        await mutate();
-        navigate("/orders", {
-          state: {
-            autoMessage: `${registrationSummary}. Auto re-import succeeded (${retry.importedCount} rows).`,
-          },
-        });
-        return;
-      }
-      if (retry.status === "missing_items") {
-        setMissingRowsAndPersist(retry.rows);
-        setMissingMessage(
-          `${registrationSummary}. Auto re-import still has missing items (${retry.missingCount}). Continue editing below.`
-        );
-        await mutate();
-        return;
-      }
-      setMissingRowsAndPersist([]);
-      setMissingMessage(`${registrationSummary}. Re-import manually from Orders.`);
-      await mutate();
-    } finally {
-      setSubmitting(false);
     }
   }
 
@@ -1220,153 +902,6 @@ export function ItemsPage() {
         ))}
       </datalist>
 
-      {missingRows.length > 0 && (
-        <section className="panel p-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="font-display text-lg font-semibold">Resolve Missing Items From Orders</h2>
-            <button className="button-subtle" onClick={() => navigate("/orders")} type="button">
-              Back To Orders
-            </button>
-          </div>
-          <p className="mt-1 text-sm text-slate-600">
-            Fill this form and submit to register missing rows. The app will retry order import automatically.
-          </p>
-
-          <div className="mt-3 overflow-x-auto">
-            <table className="min-w-[1520px] text-sm">
-              <thead>
-                <tr className="border-b border-slate-200 text-left text-slate-500">
-                  <th className="px-2 py-2">CSV Row</th>
-                  <th className="px-2 py-2">Ordered Item</th>
-                  <th className="px-2 py-2">Manufacturer</th>
-                  <th className="px-2 py-2">Alias Supplier</th>
-                  <th className="px-2 py-2">Resolution</th>
-                  <th className="px-2 py-2">Category</th>
-                  <th className="px-2 py-2">URL</th>
-                  <th className="px-2 py-2">Description</th>
-                  <th className="px-2 py-2">Canonical Item (alias only)</th>
-                  <th className="px-2 py-2">Units/Order</th>
-                  <th className="px-2 py-2">-</th>
-                </tr>
-              </thead>
-              <tbody>
-                {missingRows.map((row, idx) => (
-                  <tr
-                    key={`${row.supplier}-${row.manufacturer_name}-${row.item_number}-${idx}`}
-                    className="border-b border-slate-100"
-                  >
-                    <td className="px-2 py-2">{row.row ?? "-"}</td>
-                    <td className="px-2 py-2">
-                      <input
-                        className="input"
-                        value={row.item_number}
-                        onChange={(e) => updateMissingRow(idx, { item_number: e.target.value })}
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      <input
-                        className="input"
-                        value={row.manufacturer_name}
-                        onChange={(e) => updateMissingRow(idx, { manufacturer_name: e.target.value })}
-                        disabled={row.resolution_type === "alias"}
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      <input
-                        className="input"
-                        value={row.supplier}
-                        onChange={(e) => updateMissingRow(idx, { supplier: e.target.value })}
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      <select
-                        className="input"
-                        value={row.resolution_type}
-                        onChange={(e) =>
-                          updateMissingRow(idx, {
-                            resolution_type: e.target.value as "new_item" | "alias",
-                          })
-                        }
-                      >
-                        <option value="new_item">new_item</option>
-                        <option value="alias">alias</option>
-                      </select>
-                    </td>
-                    <td className="px-2 py-2">
-                      <input
-                        className="input"
-                        value={row.category}
-                        onChange={(e) => updateMissingRow(idx, { category: e.target.value })}
-                        list="category-options"
-                        disabled={row.resolution_type === "alias"}
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      <input
-                        className="input"
-                        value={row.url}
-                        onChange={(e) => updateMissingRow(idx, { url: e.target.value })}
-                        disabled={row.resolution_type === "alias"}
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      <input
-                        className="input"
-                        value={row.description}
-                        onChange={(e) => updateMissingRow(idx, { description: e.target.value })}
-                        disabled={row.resolution_type === "alias"}
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      <select
-                        className="input"
-                        value={row.canonical_item_number}
-                        onChange={(e) =>
-                          updateMissingRow(idx, { canonical_item_number: e.target.value })
-                        }
-                        disabled={row.resolution_type !== "alias"}
-                      >
-                        <option value="">Select canonical item</option>
-                        {itemOptions.map((item) => (
-                          <option key={item.item_id} value={item.item_number}>
-                            {itemLabel(item)}
-                          </option>
-                        ))}
-                      </select>
-                    </td>
-                    <td className="px-2 py-2">
-                      <input
-                        className="input"
-                        type="number"
-                        min={1}
-                        step={1}
-                        value={row.units_per_order}
-                        onChange={(e) => updateMissingRow(idx, { units_per_order: e.target.value })}
-                        disabled={row.resolution_type !== "alias"}
-                      />
-                    </td>
-                    <td className="px-2 py-2">
-                      <button className="button-subtle" onClick={() => removeMissingRow(idx)} type="button">
-                        Del
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button className="button" disabled={submitting} onClick={registerMissingRows} type="button">
-              Register And Retry Import
-            </button>
-            <button className="button-subtle" onClick={() => navigate("/orders")} type="button">
-              Return To Orders
-            </button>
-          </div>
-          {missingMessage && <p className="mt-2 text-sm text-signal">{missingMessage}</p>}
-        </section>
-      )}
-
       <section>
 
         <div className="panel space-y-3 p-4">
@@ -1519,10 +1054,17 @@ export function ItemsPage() {
           <p className="mt-1">
             This path previews the CSV before import and is not limited to files generated by the missing-items workflow.
           </p>
+          <p>
+            Missing-item CSVs downloaded from Orders use this same import path after you fill in the required item or alias details.
+          </p>
           <p className="mt-2 font-semibold text-slate-900">CSV Format</p>
           <p className="mt-1">
             Required columns: <code>item_number</code>. Optional: <code>row_type</code> (
             <code>item</code>/<code>alias</code>, defaults to <code>item</code>).
+          </p>
+          <p>
+            Generated missing-item CSVs may use <code>resolution_type</code> (
+            <code>new_item</code>/<code>alias</code>) instead of <code>row_type</code>; both are accepted.
           </p>
           <p>
             Item rows use <code>manufacturer_name</code> (or <code>manufacturer</code>),{" "}
@@ -1768,53 +1310,6 @@ export function ItemsPage() {
               </tbody>
             </table>
           </div>
-        )}
-      </section>
-
-      <section className="panel p-4">
-        <h2 className="font-display text-lg font-semibold">Register Missing-Item Batch CSVs</h2>
-        <p className="mt-1 text-sm text-slate-600">
-          Use this only for missing-item registration CSVs generated by the Orders or missing-items workflow. The server stages them and runs the batch registration flow without requiring server-folder access.
-        </p>
-        <p className="mt-1 text-xs text-slate-500">
-          If you are importing a hand-made or ad hoc items CSV, use <span className="font-semibold">General Items CSV Import</span> above instead.
-        </p>
-        <form className="mt-3 space-y-3" onSubmit={uploadBatchCsvs}>
-          <input
-            className="input"
-            type="file"
-            accept=".csv,text/csv"
-            multiple
-            onChange={(event) => setBatchUploadFiles(Array.from(event.target.files ?? []))}
-          />
-          <div className="flex flex-wrap gap-3">
-            <button className="button" type="submit" disabled={registerPendingBusy || submitting}>
-              Upload And Register Batch
-            </button>
-            <span className="self-center text-xs text-slate-500">
-              {batchUploadFiles.length > 0
-                ? `${batchUploadFiles.length} file(s) selected`
-                : "Select missing-item registration CSV files exported from the missing-items workflow."}
-            </span>
-          </div>
-        </form>
-        <div className="mt-4 border-t border-slate-200 pt-4">
-          <p className="text-sm text-slate-600">
-            Advanced fallback: process generated missing-item CSVs that already exist on the server.
-          </p>
-          <div className="mt-3 flex gap-3">
-          <button
-            className="button"
-            type="button"
-            disabled={registerPendingBusy || submitting}
-            onClick={runRegisterPending}
-          >
-            Run Existing Imported Batch
-          </button>
-        </div>
-        </div>
-        {registerPendingMessage && (
-          <pre className="mt-3 whitespace-pre-wrap text-sm text-signal">{registerPendingMessage}</pre>
         )}
       </section>
 

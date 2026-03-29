@@ -8,6 +8,16 @@ Security and cost controls should be designed for the target GCP deployment, not
 
 ## 1. Security Priorities
 
+### Locked first-rollout decisions
+
+- Cloud Run uses Google Secret Manager as the canonical source for DB credentials and other sensitive settings.
+- Frontend and backend remain separate Cloud Run services, so backend CORS must allow only the chosen frontend origin set.
+- The backend remains a browser-reachable public HTTPS endpoint in the first rollout, using native Cloud Run `*.run.app` URLs unless custom domains are added later.
+- Mutation requests keep the temporary `X-User-Name` model in the first rollout even though the backend stays publicly reachable; that is accepted only as a temporary shortcut until stronger auth lands.
+- Stronger end-user authentication remains a follow-up hardening item, not a first-rollout prerequisite.
+- Admin-only scope initially covers user administration and future role/setting management; normal business mutations/import/export remain operator-capable.
+- Browser downloads remain backend-mediated through opaque download endpoints rather than direct GCS signed URLs.
+
 ### Current posture to treat as temporary
 
 - anonymous reads are allowed
@@ -36,7 +46,7 @@ Security and cost controls should be designed for the target GCP deployment, not
 
 - frontend-to-backend HTTPS only
 - explicit allowed origins
-- stronger user identity model for mutations
+- stronger user identity model for mutations after the first rollout boundary
 - documented admin/operator/viewer boundary before production launch
 - explicit audit expectations for imports, exports, and high-impact state changes
 
@@ -66,6 +76,13 @@ Recommended controls:
 - bound upload sizes intentionally
 - identify candidates for later async processing
 
+Locked first-rollout operating limit:
+
+- treat 32 MB as the operational request-size ceiling for CSV and ZIP uploads
+- keep those flows synchronous within that ceiling
+- target heavy synchronous requests to finish in about 60 seconds or less during normal operation
+- revisit async execution only if observed workloads exceed that limit or request duration becomes unacceptable
+
 ### GCS risk areas
 
 - staging objects can accumulate if failed jobs are not cleaned up
@@ -77,6 +94,13 @@ Recommended controls:
 - object lifecycle rules
 - retention classes by object purpose
 - explicit cleanup ownership in the application or bucket policy
+
+Locked first-rollout retention policy:
+
+- `staging`: 7 days
+- `exports`: 30 days
+- `artifacts`: 90 days
+- `archives`: no automatic deletion
 
 ## 3. Repository-Specific High-Risk Areas
 
@@ -102,6 +126,12 @@ They should be reviewed for:
 - Cloud SQL index support
 - request latency under concurrent access
 
+First-rollout response contract:
+
+- normal JSON planning responses stay synchronous
+- file-producing exports remain download-oriented backend endpoints
+- no new async-job or pagination contract is required unless production evidence shows the initial model is insufficient
+
 ### Migration/startup behavior
 
 Automatic migration at service startup is convenient locally but risky for autoscaled production services.
@@ -111,9 +141,12 @@ It should be treated as a rollout concern, not a request-serving concern.
 ## 4. Decisions to Carry Into Implementation
 
 - no new cloud design should depend on local durable disk
-- no production trust model should rely only on `X-User-Name`
+- no long-term production trust model should rely only on `X-User-Name`
 - no public contract should expose storage layout
 - no rollout plan should assume compatibility preservation is required
+- first rollout secrets come from Google Secret Manager
+- first rollout persistent GCS objects use one bucket per environment with prefix-based class separation
+- first rollout audit coverage records actor, timestamp, action type, primary target identifiers, and result/outcome for imports, exports, undo, and high-impact mutations
 
 ## 5. Minimum Monitoring Topics for Production Planning
 
@@ -123,3 +156,8 @@ It should be treated as a rollout concern, not a request-serving concern.
 - Cloud Run instance count and concurrency behavior
 - GCS object count and storage growth by prefix
 - API paths with the largest payloads and longest durations
+
+First-rollout planning assumption:
+
+- small-team workload, roughly under 10 concurrent active users
+- conservative backend Cloud Run concurrency target around 10 requests per instance

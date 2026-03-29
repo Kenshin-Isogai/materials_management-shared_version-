@@ -1,6 +1,6 @@
 # Source Current State
 
-Last updated: 2026-03-27 (JST)
+Last updated: 2026-03-28 (JST)
 
 ## 1. System Snapshot
 
@@ -10,7 +10,7 @@ Last updated: 2026-03-27 (JST)
   - Frontend: React + TypeScript + Vite + SWR
 - Runtime posture:
   - Current: Docker Compose deployment target for shared Windows Server plus local development override
-  - Direction: shared-server operation with anonymous reads and header-based named mutations, plus Cloud Run-safe backend startup
+  - Direction: shared-server operation with anonymous reads and header-based named mutations, plus Cloud Run-safe backend/frontend packaging
 
 ## 2. Repository Structure (active areas)
 
@@ -23,7 +23,9 @@ Last updated: 2026-03-27 (JST)
   - `tests/`: integration/service/path tests
 - `frontend/`
   - `src/pages/`: active pages wired into the router: Dashboard, Workspace, Items (Search), Locations, Projects, Procurement, Orders, Inventory (Movements), Reservations (Reserve), BOM, Snapshot, History, Master, Users. Unused page files retained but not routed: `PlanningPage.tsx`, `RfqPage.tsx`, `AssembliesPage.tsx`, `PurchaseCandidatesPage.tsx`.
-  - `src/lib/api.ts`: API client now defaults to `VITE_API_BASE` / `/api` and injects `X-User-Name` on mutations
+  - `src/lib/api.ts`: API client now normalizes `VITE_API_BASE`, supports absolute backend URLs for split Cloud Run services, and injects `X-User-Name` on mutations
+  - `nginx.conf`: cloud-first static frontend config that does not proxy `/api`
+  - `nginx.local-proxy.conf`: local Docker Compose nginx config that keeps same-origin `/api` proxying to the backend container
 - `documents/`
   - `technical_documentation.md`
   - `team_onboarding.md`
@@ -38,6 +40,16 @@ Last updated: 2026-03-27 (JST)
   - `PORT` overrides listener port automatically
   - Cloud Run mode defaults `APP_DATA_ROOT` under the temp directory when unset
   - Cloud Run mode skips legacy workspace/import folder migration on startup
+  - Cloud Run mode defaults `AUTO_MIGRATE_ON_STARTUP=0`; local runtime still defaults to startup migration unless explicitly disabled
+  - base Docker Compose now relies on backend startup migration rather than running `alembic upgrade head` inline in the backend container command
+  - DB pool behavior is controlled by `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT`, and `DB_POOL_RECYCLE_SECONDS`
+  - first-rollout Cloud Run guardrails are controlled by `MAX_UPLOAD_BYTES`, `HEAVY_REQUEST_TARGET_SECONDS`, and `CLOUD_RUN_CONCURRENCY_TARGET`
+  - browser CORS defaults are runtime-specific: localhost-friendly defaults locally, explicit `CORS_ALLOWED_ORIGINS` required for Cloud Run browser traffic
+  - deployment metadata/config now also exposes `INSTANCE_CONNECTION_NAME`, `BACKEND_PUBLIC_BASE_URL`, `FRONTEND_PUBLIC_BASE_URL`, `STORAGE_BACKEND`, `GCS_BUCKET`, and `GCS_OBJECT_PREFIX`
+  - generated artifact persistence now goes through a storage boundary (`backend/app/storage.py`), with current local refs stored as `local://generated_artifacts/...`
+  - the storage layer now supports `gcs://...` refs for durable Cloud Run storage and keeps `local://...` for local/shared-server operation
+  - default durable item/order archive moves now also route through that storage boundary; local disk remains the mechanism for temporary staging and a narrower set of local compatibility flows
+  - generated artifact retrieval no longer depends on legacy raw-path fallback
 
 ## 3. Backend State
 
@@ -46,6 +58,7 @@ Last updated: 2026-03-27 (JST)
 - API wrapper uses common response envelope:
   - success: `status=ok`
   - error: `status=error` with code/message/details
+- Request-size enforcement now rejects bodies larger than `MAX_UPLOAD_BYTES` with `413 REQUEST_TOO_LARGE`, aligning backend behavior with the first-rollout 32 MB upload ceiling.
 - Business rules are centralized in `backend/app/service.py` and shared by API and CLI.
 - Mutation requests now pass through `UserIdentityMiddleware`.
   - read methods stay anonymous
@@ -53,6 +66,7 @@ Last updated: 2026-03-27 (JST)
   - bootstrap exception: when there are zero active users, `POST /api/users` is allowed without a selected header user so the first browser user can be created
   - basic user endpoints now exist under `/api/users`
   - `GET /api/users` returns active picker rows; `GET /api/users?include_inactive=true` returns the full management list
+  - `/api/auth/capabilities` and `/api/health` now both describe this as a temporary rollout identity model
 - Planning snapshot hot paths now batch project/requirement loads, assembly component expansion (including legacy assembly-only project requirements), and per-item inventory totals; item planning context further narrows expansion to the requested item.
 - Current auth posture:
   - no enforced auth for PoC
@@ -94,9 +108,11 @@ Last updated: 2026-03-27 (JST)
 - Added `/users` as the dedicated shared-server user administration route.
   - supports browser-side create, edit, activate, and deactivate flows against the existing `/api/users` endpoints
   - the global header user picker now refreshes after user mutations and automatically falls back to the next active user if the selected one is deactivated
-- Shared-server batch workflows are now upload-first on the main Items and Orders pages.
-  - Items page now distinguishes `General Items CSV Import` from `Register Missing-Item Batch CSVs`, with the batch upload control posting multi-file form data to `POST /api/items/batch-upload`
+- Shared-server browser CSV workflows are now preview-first on the main Items and Orders pages.
+  - Items page uses one `General Items CSV Import` surface for regular item CSVs and order-generated missing-item CSVs
+  - generated missing-item CSVs are downloaded from Orders and then edited/re-imported through the normal Items preview/import flow
 - Orders manual CSV import and quotation maintenance now use external document URLs as the primary contract.
+  - `supplier` is required on every manual order CSV row
   - `quotation_document_url` is required for manual order CSV import
   - `purchase_order_document_url` is optional on orders
   - imported quotation/order document values are rendered as openable links in the Orders UI
@@ -109,6 +125,8 @@ Last updated: 2026-03-27 (JST)
   - backend exposes `/api/artifacts`, `/api/artifacts/{artifact_id}`, and `/api/artifacts/{artifact_id}/download`
   - Orders page surfaces download buttons for current missing-item register output and a recent generated-files list using filename, timestamp, and size instead of showing workspace-relative paths
   - artifact IDs are now opaque DB-registered values from `generated_artifacts`, not encoded workspace paths
+  - manual order-import responses no longer expose raw missing-item storage fields; the browser should consume `missing_artifact` only
+  - manual item-import archive metadata is also now cleaned before it leaves the API; internal cleanup/storage-ref fields stay server-side
 - Phase 6 cleanup is now applied on top of that compatibility boundary.
   - `quotations.pdf_link` is no longer part of the schema
   - `quotation_document_url` is the persisted quotation document field
@@ -169,7 +187,7 @@ Last updated: 2026-03-27 (JST)
   - `POST /api/items/import-preview` classifies duplicate item rows, alias create/update rows, and unresolved canonical alias rows before commit
   - preview confirmation can send per-row `canonical_item_number` / `units_per_order` overrides back through `POST /api/items/import`
   - the Items page can select multiple CSV files, preview them as one combined review set, then import them sequentially in one action
-  - successful or partially successful manual item CSV imports are archived into `imports/items/registered/<YYYY-MM>/` and folded into the monthly `items_YYYY-MM_NNN.csv` consolidation flow
+  - successful or partially successful manual item CSV imports are archived into `imports/items/registered/<YYYY-MM>/` as durable import history without a follow-up archive rescan
 - Missing-item batch registration now shares the same underlying item/alias write logic as manual item import after normalizing its generated CSV rows, reducing drift between the two item-registration paths while preserving batch-only unresolved-skip and file-move behavior.
 - Movements CSV import is now preview-first:
   - `POST /api/inventory/import-preview` validates operation/location rules, simulates inventory effects row-by-row, and flags unresolved item ids or stock shortages before commit
@@ -205,8 +223,10 @@ Last updated: 2026-03-27 (JST)
 - Backend now persists split/merge/partial-arrival order lineage in `order_lineage_events`; API exposes `POST /api/orders/merge` and `GET /api/orders/{order_id}/lineage` for durable traceability and future scale-out reporting.
 - Orders manual CSV import is now preview-first:
   - `POST /api/orders/import-preview` classifies each row as `exact`, `high_confidence`, `needs_review`, or `unresolved`
+  - supplier context is now row-driven from the CSV instead of a selected supplier outside the file
   - preview surfaces duplicate quotation conflicts before commit and returns ranked candidate matches
   - preview confirmation can send per-row canonical overrides plus optional supplier-alias saves back through `POST /api/orders/import`
+  - the Orders page can preview/import multiple CSV files in one UI pass by processing the selected files sequentially
 - Reservations CSV import is now preview-first:
   - `POST /api/reservations/import-preview` validates item/assembly targets, previews assembly expansion, and flags inventory shortages before commit
   - preview confirmation can send per-row `item_id` / `assembly_id` overrides back through `POST /api/reservations/import-csv`
@@ -276,7 +296,6 @@ Last updated: 2026-03-27 (JST)
 
 - Canonical order import folder layout is active:
   - staging roots:
-    - `imports/staging/items/<job-id>/unregistered/`
     - `imports/staging/orders/<job-id>/orders_batch.zip`
     - `imports/staging/orders/<job-id>/unregistered/csv_files/<supplier>/`
     - `imports/staging/orders/<job-id>/unregistered/pdf_files/<supplier>/`
@@ -284,7 +303,7 @@ Last updated: 2026-03-27 (JST)
   - `imports/orders/unregistered/pdf_files/<supplier>/`
   - `imports/orders/registered/csv_files/<supplier>/`
   - `imports/orders/registered/pdf_files/<supplier>/`
-- Items batch upload now stages browser-uploaded missing-item registration CSVs under `imports/staging/items/<job-id>/...` and then reuses the existing batch registration flow.
+- The active browser item-registration workflow no longer depends on a dedicated missing-item batch-upload UI or endpoint; generated missing-item CSVs are expected to come back through the normal Items preview/import path.
 - Batch-generated missing-item register CSVs now carry artifact metadata in API responses and can be re-listed/downloaded through the artifact endpoints without exposing server filesystem paths.
 - Unregistered batch order import writes missing-item rows into one consolidated register CSV per run under `imports/items/unregistered/`; source CSV/PDF files remain in place for unresolved quotations.
 - Consolidated missing-item registers de-duplicate repeated unresolved rows by `(supplier, manufacturer_name, item_number)` across all quotations in the same batch run.
@@ -294,11 +313,10 @@ Last updated: 2026-03-27 (JST)
 - Fully empty CSV rows are ignored during order import to avoid false validation failures from trailing blank lines.
 - Missing-item registration now rejects unresolved `new_item` rows with all metadata blank, preventing accidental `UNKNOWN` placeholder item creation.
 - Manual and unregistered batch order imports reject duplicate quotation re-import for the same supplier when existing orders already reference that quotation.
-- Missing-item batch registration now reads unregistered CSVs from `imports/items/unregistered/` and moves successfully processed files into `imports/items/registered/<YYYY-MM>/`; if a per-file failure occurs after the move but before the savepoint is released, the CSV is restored to the unregistered location and that file's DB work is rolled back.
-- After a fully successful batch registration, registered item CSVs in each `imports/items/registered/<YYYY-MM>/` subfolder are automatically consolidated into larger files named `items_YYYY-MM_NNN.csv` (e.g., `items_2026-03_001.csv`, max 5,000 rows each). Files matching the consolidated pattern are merged into subsequent passes; replacements are staged and swapped atomically before the original unconsolidated files are deleted, and header-only inputs are removed without producing an empty archive. Consolidated CSVs are read-only import-history archives (UI edits only affect the database).
+- Missing-item batch registration is upload-only in the public API. Successful uploads are archived into `imports/items/registered/<YYYY-MM>/`, but the application no longer rescans server-resident item batch folders or rewrites archive files after processing.
+- Archived order CSVs and archived item-registration CSVs are read-only historical records. Order updates, quotation updates, merges, splits, and deletes now rely on database state and lineage tables instead of mutating those archived files.
 - `missing_items_registration.csv` uses `supplier` for alias-scope resolution, but `new_item` rows may also specify `manufacturer_name` (or `manufacturer`) and default to `UNKNOWN` when blank; the Items-page missing-order resolver now exposes both manufacturer and alias-supplier columns so it matches Bulk Item Entry for new-item registration.
-- File-upload missing-item registration endpoint (`POST /api/register-missing`) accepts optional multipart form field `skip_unresolved=true` to skip unresolved `new_item` rows instead of failing the whole upload.
-- JSON missing-item registration endpoint (`/api/register-missing/rows`) accepts both `manufacturer_name` and `manufacturer` fields for `new_item` rows.
+- Bulk alias entry on the Items page now uses a dedicated alias upsert endpoint keyed by `supplier_name`, so the old `register-missing` compatibility endpoints are no longer part of the runtime API surface.
 - Missing-item registration payloads now also accept legacy `row_type` (`item`/`alias`) as an alias of `resolution_type` (`new_item`/`alias`); `item` is normalized to `new_item`.
 - Supplier resolution for order import and missing-item registration now falls back to case-insensitive lookup before creating a new supplier, preventing alias-scope mismatches from supplier name casing differences.
 - Order import alias resolution now falls back to case-insensitive `ordered_item_number` matching within a supplier when exact alias text does not match.

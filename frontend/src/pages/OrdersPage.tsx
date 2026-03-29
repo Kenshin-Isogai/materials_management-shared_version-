@@ -1,38 +1,20 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { FormEvent, useMemo, useRef, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import useSWR from "swr";
 import { CatalogPicker } from "../components/CatalogPicker";
 import { apiDownload, apiGet, apiGetAllPages, apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
 import { formatActionError, resolvePreviewSelection } from "../lib/previewState";
-import type {
-  CatalogSearchResult,
-  Item,
-  MissingItemResolverRow,
-  Order,
-  ProjectRow,
-  Quotation,
-} from "../lib/types";
-
-const PENDING_MISSING_ITEMS_KEY = "mm.pending_missing_items";
-const PENDING_ORDER_IMPORT_KEY = "mm.pending_order_import";
-
-type PendingOrderImport = {
-  supplier_name: string;
-  default_order_date: string;
-  file_name: string;
-  file_text: string;
-};
+import type { CatalogSearchResult, Item, MissingItemResolverRow, Order, ProjectRow, Quotation } from "../lib/types";
 
 function normalizeMissingRows(
-  rows: MissingItemResolverRow[] | undefined,
-  fallbackSupplier: string
+  rows: MissingItemResolverRow[] | undefined
 ): MissingItemResolverRow[] {
   return (rows ?? [])
     .filter((row) => String(row.item_number ?? "").trim())
     .map((row) => ({
       row: row.row,
       item_number: row.item_number.trim(),
-      supplier: String(row.supplier ?? fallbackSupplier).trim() || fallbackSupplier,
+      supplier: String(row.supplier ?? "").trim(),
       resolution_type: "new_item",
       category: row.category ?? "",
       url: row.url ?? "",
@@ -42,11 +24,61 @@ function normalizeMissingRows(
     }));
 }
 
+function downloadMissingRowsCsv(rows: MissingItemResolverRow[], filename: string) {
+  if (!rows.length) return;
+  const escapeCell = (value: string | null | undefined) => {
+    const text = String(value ?? "");
+    if (/[",\n\r]/.test(text)) {
+      return `"${text.split("\"").join("\"\"")}"`;
+    }
+    return text;
+  };
+  const header = [
+    "resolution_type",
+    "supplier",
+    "item_number",
+    "manufacturer_name",
+    "category",
+    "url",
+    "description",
+    "canonical_item_number",
+    "units_per_order",
+  ];
+  const lines = [
+    header.join(","),
+    ...rows.map((row) =>
+      [
+        row.resolution_type ?? "new_item",
+        row.supplier ?? "",
+        row.item_number ?? "",
+        row.manufacturer_name ?? "UNKNOWN",
+        row.category ?? "",
+        row.url ?? "",
+        row.description ?? "",
+        row.canonical_item_number ?? "",
+        row.units_per_order ?? "",
+      ]
+        .map(escapeCell)
+        .join(",")
+    ),
+  ];
+  const blob = new Blob(["\uFEFF", lines.join("\r\n")], {
+    type: "text/csv;charset=utf-8",
+  });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 type ImportResult = {
   status: string;
   imported_count?: number;
   missing_count?: number;
-  missing_csv_path?: string;
   missing_artifact?: GeneratedArtifact;
   saved_alias_count?: number;
   rows?: MissingItemResolverRow[];
@@ -81,6 +113,7 @@ type OrderImportPreviewMatch = {
 type OrderImportPreviewRow = {
   row: number;
   supplier_name: string;
+  supplier_id?: number | null;
   item_number: string;
   quantity: number;
   quotation_number: string;
@@ -95,6 +128,9 @@ type OrderImportPreviewRow = {
   candidates: OrderImportPreviewMatch[];
   warnings: string[];
   order_amount: number | null;
+  source_name?: string;
+  source_index?: number;
+  preview_key?: string;
 };
 
 type OrderImportPreview = {
@@ -103,6 +139,7 @@ type OrderImportPreview = {
     supplier_id: number | null;
     supplier_name: string;
     exists: boolean;
+    mode?: string;
   };
   thresholds: {
     auto_accept: number;
@@ -136,6 +173,62 @@ function previewMatchToCatalogResult(match: OrderImportPreviewMatch): CatalogSea
     display_label: match.display_label,
     summary: match.summary,
     match_source: match.match_source,
+  };
+}
+
+function orderPreviewRowKey(row: OrderImportPreviewRow): string {
+  return row.preview_key ?? `${row.source_name ?? "orders_import.csv"}:${row.row}`;
+}
+
+function mergeOrderImportPreviews(previews: OrderImportPreview[]): OrderImportPreview {
+  const rows: OrderImportPreviewRow[] = [];
+  const blockingErrors: string[] = [];
+  const duplicateQuotationNumbers = new Set<string>();
+  const summary = {
+    total_rows: 0,
+    exact: 0,
+    high_confidence: 0,
+    needs_review: 0,
+    unresolved: 0,
+  };
+
+  previews.forEach((preview, sourceIndex) => {
+    summary.total_rows += preview.summary.total_rows;
+    summary.exact += preview.summary.exact;
+    summary.high_confidence += preview.summary.high_confidence;
+    summary.needs_review += preview.summary.needs_review;
+    summary.unresolved += preview.summary.unresolved;
+    blockingErrors.push(...preview.blocking_errors);
+    preview.duplicate_quotation_numbers.forEach((value) => duplicateQuotationNumbers.add(value));
+    preview.rows.forEach((row) => {
+      rows.push({
+        ...row,
+        source_name: preview.source_name,
+        source_index: sourceIndex,
+        preview_key: `${sourceIndex}:${row.row}`,
+      });
+    });
+  });
+
+  return {
+    source_name:
+      previews.length === 1
+        ? previews[0].source_name
+        : `${previews.length} files`,
+    supplier: {
+      supplier_id: null,
+      supplier_name: "Per-row supplier",
+      exists: false,
+      mode: previews.length > 0 ? "per_row" : "empty",
+    },
+    thresholds: previews[0]?.thresholds ?? { auto_accept: 0, review: 0 },
+    summary,
+    blocking_errors: blockingErrors,
+    duplicate_quotation_numbers: Array.from(duplicateQuotationNumbers),
+    can_auto_accept:
+      previews.length > 0 &&
+      previews.every((preview) => preview.can_auto_accept),
+    rows,
   };
 }
 
@@ -195,18 +288,15 @@ function formatTimestamp(value: string): string {
 
 export function OrdersPage() {
   const navigate = useNavigate();
-  const location = useLocation();
-  const [supplier, setSupplier] = useState("");
-  const [supplierSelection, setSupplierSelection] = useState<CatalogSearchResult | null>(null);
   const [defaultDate, setDefaultDate] = useState("");
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [message, setMessage] = useState<string>("");
   const [latestGeneratedArtifact, setLatestGeneratedArtifact] = useState<GeneratedArtifact | null>(null);
   const [missingRows, setMissingRows] = useState<MissingItemResolverRow[]>([]);
   const [importPreview, setImportPreview] = useState<OrderImportPreview | null>(null);
-  const [previewSelections, setPreviewSelections] = useState<Record<number, CatalogSearchResult | null>>({});
-  const [previewUnits, setPreviewUnits] = useState<Record<number, string>>({});
-  const [previewAliasSaves, setPreviewAliasSaves] = useState<Record<number, boolean>>({});
+  const [previewSelections, setPreviewSelections] = useState<Record<string, CatalogSearchResult | null>>({});
+  const [previewUnits, setPreviewUnits] = useState<Record<string, string>>({});
+  const [previewAliasSaves, setPreviewAliasSaves] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(false);
   const [editingQuotationId, setEditingQuotationId] = useState<number | null>(null);
   const [editingQuotationDocumentUrl, setEditingQuotationDocumentUrl] = useState("");
@@ -421,33 +511,6 @@ export function OrdersPage() {
     return quotationSortDirection === "asc" ? "↑" : "↓";
   }
 
-  useEffect(() => {
-    const state = location.state as { autoMessage?: string } | null;
-    if (!state?.autoMessage) return;
-    setMessage(state.autoMessage);
-    navigate(location.pathname, { replace: true, state: null });
-  }, [location.pathname, location.state, navigate]);
-
-  async function rememberPendingOrderImport(sourceFile: File) {
-    const payload: PendingOrderImport = {
-      supplier_name: supplier.trim(),
-      default_order_date: defaultDate.trim(),
-      file_name: sourceFile.name || "order_import.csv",
-      file_text: await sourceFile.text(),
-    };
-    sessionStorage.setItem(PENDING_ORDER_IMPORT_KEY, JSON.stringify(payload));
-  }
-
-  function openMissingResolver(rows: MissingItemResolverRow[]) {
-    if (!rows.length) return;
-    sessionStorage.setItem(PENDING_MISSING_ITEMS_KEY, JSON.stringify(rows));
-    navigate("/items", {
-      state: {
-        pendingMissingRows: rows,
-      },
-    });
-  }
-
   function resetImportPreview() {
     setImportPreview(null);
     setPreviewSelections({});
@@ -456,15 +519,16 @@ export function OrdersPage() {
   }
 
   function applyImportPreview(preview: OrderImportPreview) {
-    const nextSelections: Record<number, CatalogSearchResult | null> = {};
-    const nextUnits: Record<number, string> = {};
-    const nextAliasSaves: Record<number, boolean> = {};
+    const nextSelections: Record<string, CatalogSearchResult | null> = {};
+    const nextUnits: Record<string, string> = {};
+    const nextAliasSaves: Record<string, boolean> = {};
     for (const row of preview.rows) {
-      nextSelections[row.row] = row.suggested_match
+      const key = orderPreviewRowKey(row);
+      nextSelections[key] = row.suggested_match
         ? previewMatchToCatalogResult(row.suggested_match)
         : null;
-      nextUnits[row.row] = String(row.suggested_match?.units_per_order ?? 1);
-      nextAliasSaves[row.row] = false;
+      nextUnits[key] = String(row.suggested_match?.units_per_order ?? 1);
+      nextAliasSaves[key] = false;
     }
     setImportPreview(preview);
     setPreviewSelections(nextSelections);
@@ -475,13 +539,13 @@ export function OrdersPage() {
   function selectedPreviewMatch(row: OrderImportPreviewRow): CatalogSearchResult | null {
     return resolvePreviewSelection(
       previewSelections,
-      row.row,
+      orderPreviewRowKey(row),
       row.suggested_match ? previewMatchToCatalogResult(row.suggested_match) : null
     );
   }
 
   function previewUnitsValue(row: OrderImportPreviewRow): string {
-    return previewUnits[row.row] ?? String(row.suggested_match?.units_per_order ?? 1);
+    return previewUnits[orderPreviewRowKey(row)] ?? String(row.suggested_match?.units_per_order ?? 1);
   }
 
   function canOfferAliasSave(
@@ -509,41 +573,28 @@ export function OrdersPage() {
       }));
   }
 
-  async function openPreviewMissingResolver() {
-    if (!file) return;
-    const unresolved = unresolvedPreviewRows();
-    if (!unresolved.length) return;
-    try {
-      await rememberPendingOrderImport(file);
-    } catch {
-      // Keep the resolver path available even if session storage write fails.
-    }
-    openMissingResolver(unresolved);
-  }
-
   async function previewImport(event: FormEvent) {
     event.preventDefault();
-    if (!file || !supplier.trim()) return;
+    if (!files.length) return;
     setLoading(true);
     setMessage("");
     setLatestGeneratedArtifact(null);
     setMissingRows([]);
     resetImportPreview();
     try {
-      const form = new FormData();
-      form.append("file", file);
-      if (supplierSelection) {
-        form.append("supplier_id", String(supplierSelection.entity_id));
-      } else {
-        form.append("supplier_name", supplier);
+      const previews: OrderImportPreview[] = [];
+      for (const file of files) {
+        const form = new FormData();
+        form.append("file", file);
+        if (defaultDate.trim()) form.append("default_order_date", defaultDate.trim());
+        previews.push(await apiSendForm<OrderImportPreview>("/orders/import-preview", form));
       }
-      if (defaultDate.trim()) form.append("default_order_date", defaultDate.trim());
-      const result = await apiSendForm<OrderImportPreview>("/orders/import-preview", form);
+      const result = mergeOrderImportPreviews(previews);
       applyImportPreview(result);
       setMessage(
         result.can_auto_accept
-          ? `Preview ready: ${result.summary.total_rows} row(s) are auto-acceptable.`
-          : `Preview ready: ${result.summary.total_rows} row(s), review=${result.summary.needs_review}, unresolved=${result.summary.unresolved}.`
+          ? `Preview ready: files=${files.length}, rows=${result.summary.total_rows} are auto-acceptable.`
+          : `Preview ready: files=${files.length}, rows=${result.summary.total_rows}, review=${result.summary.needs_review}, unresolved=${result.summary.unresolved}.`
       );
     } catch (error) {
       setMessage(formatActionError("Preview failed", error));
@@ -553,7 +604,7 @@ export function OrdersPage() {
   }
 
   async function confirmImportPreview() {
-    if (!file || !supplier.trim() || !importPreview) return;
+    if (!files.length || !importPreview) return;
     if (importPreview.blocking_errors.length > 0) {
       setMessage(importPreview.blocking_errors[0]);
       return;
@@ -567,91 +618,84 @@ export function OrdersPage() {
       return;
     }
 
-    const rowOverrides: Record<number, { item_id: number; units_per_order: number }> = {};
-    const aliasSaves: Array<{
-      ordered_item_number: string;
-      item_id: number;
-      units_per_order: number;
-    }> = [];
-
-    for (const row of importPreview.rows) {
-      const selection = selectedPreviewMatch(row);
-      if (!selection) continue;
-      const unitsValue = Number(previewUnitsValue(row));
-      if (!Number.isInteger(unitsValue) || unitsValue <= 0) {
-        setMessage(`Row ${row.row}: units/order must be an integer greater than 0.`);
-        return;
-      }
-
-      const suggested = row.suggested_match;
-      const requiresOverride =
-        row.status !== "exact" ||
-        suggested == null ||
-        suggested.item_id !== selection.entity_id ||
-        suggested.units_per_order !== unitsValue;
-
-      if (requiresOverride) {
-        rowOverrides[row.row] = {
-          item_id: selection.entity_id,
-          units_per_order: unitsValue,
-        };
-      }
-
-      if (previewAliasSaves[row.row] && canOfferAliasSave(row, selection)) {
-        aliasSaves.push({
-          ordered_item_number: row.item_number,
-          item_id: selection.entity_id,
-          units_per_order: unitsValue,
-        });
-      }
-    }
-
     setLoading(true);
     setMessage("");
     setMissingRows([]);
     try {
-      const form = new FormData();
-      form.append("file", file);
-      if (supplierSelection) {
-        form.append("supplier_id", String(supplierSelection.entity_id));
-      } else {
-        form.append("supplier_name", supplier);
-      }
-      if (defaultDate.trim()) form.append("default_order_date", defaultDate.trim());
-      if (Object.keys(rowOverrides).length > 0) {
-        form.append("row_overrides", JSON.stringify(rowOverrides));
-      }
-      if (aliasSaves.length > 0) {
-        form.append("alias_saves", JSON.stringify(aliasSaves));
-      }
+      let totalImportedCount = 0;
+      let totalSavedAliasCount = 0;
+      for (const [sourceIndex, file] of files.entries()) {
+        const rowOverrides: Record<number, { item_id: number; units_per_order: number }> = {};
+        const aliasSaves: Array<{
+          supplier_name: string;
+          ordered_item_number: string;
+          item_id: number;
+          units_per_order: number;
+        }> = [];
+        for (const row of importPreview.rows.filter((entry) => entry.source_index === sourceIndex)) {
+          const selection = selectedPreviewMatch(row);
+          if (!selection) continue;
+          const unitsValue = Number(previewUnitsValue(row));
+          if (!Number.isInteger(unitsValue) || unitsValue <= 0) {
+            setMessage(`Row ${row.row}: units/order must be an integer greater than 0.`);
+            return;
+          }
 
-      const result = await apiSendForm<ImportResult>("/orders/import", form);
-      if (result.status === "missing_items") {
-        const unresolved = normalizeMissingRows(result.rows, supplier.trim());
-        setMissingRows(unresolved);
-        setLatestGeneratedArtifact(result.missing_artifact ?? null);
-        try {
-          await rememberPendingOrderImport(file);
-        } catch {
-          // Keep working even if browser storage quota blocks auto-retry cache.
+          const suggested = row.suggested_match;
+          const requiresOverride =
+            row.status !== "exact" ||
+            suggested == null ||
+            suggested.item_id !== selection.entity_id ||
+            suggested.units_per_order !== unitsValue;
+
+          if (requiresOverride) {
+            rowOverrides[row.row] = {
+              item_id: selection.entity_id,
+              units_per_order: unitsValue,
+            };
+          }
+
+          if (previewAliasSaves[orderPreviewRowKey(row)] && canOfferAliasSave(row, selection)) {
+            aliasSaves.push({
+              supplier_name: row.supplier_name,
+              ordered_item_number: row.item_number,
+              item_id: selection.entity_id,
+              units_per_order: unitsValue,
+            });
+          }
         }
-        setMessage(
-          `Missing items detected (${result.missing_count}). Download the generated register CSV, then open the resolver in Items.`
-        );
-        openMissingResolver(unresolved);
-      } else {
-        resetImportPreview();
-        setLatestGeneratedArtifact(null);
-        setMissingRows([]);
-        sessionStorage.removeItem(PENDING_MISSING_ITEMS_KEY);
-        sessionStorage.removeItem(PENDING_ORDER_IMPORT_KEY);
-        const savedAliasCount = result.saved_alias_count ?? 0;
-        setMessage(
-          savedAliasCount > 0
-            ? `Imported ${result.imported_count ?? 0} rows and saved ${savedAliasCount} alias mapping(s).`
-            : `Imported ${result.imported_count ?? 0} rows.`
-        );
+
+        const form = new FormData();
+        form.append("file", file);
+        if (defaultDate.trim()) form.append("default_order_date", defaultDate.trim());
+        if (Object.keys(rowOverrides).length > 0) {
+          form.append("row_overrides", JSON.stringify(rowOverrides));
+        }
+        if (aliasSaves.length > 0) {
+          form.append("alias_saves", JSON.stringify(aliasSaves));
+        }
+
+        const result = await apiSendForm<ImportResult>("/orders/import", form);
+        if (result.status === "missing_items") {
+          const unresolved = normalizeMissingRows(result.rows);
+          setMissingRows(unresolved);
+          setLatestGeneratedArtifact(result.missing_artifact ?? null);
+          setMessage(
+            `Missing items detected (${result.missing_count}) in ${file.name}. Download the generated CSV, update it, then import it from Items.`
+          );
+          return;
+        }
+        totalImportedCount += result.imported_count ?? 0;
+        totalSavedAliasCount += result.saved_alias_count ?? 0;
       }
+      resetImportPreview();
+      setLatestGeneratedArtifact(null);
+      setMissingRows([]);
+      setMessage(
+        totalSavedAliasCount > 0
+          ? `Imported ${totalImportedCount} rows across ${files.length} file(s) and saved ${totalSavedAliasCount} alias mapping(s).`
+          : `Imported ${totalImportedCount} rows across ${files.length} file(s).`
+      );
       await Promise.all([mutateOrders(), mutateQuotations()]);
     } catch (error) {
       setMessage(formatActionError("Import failed", error));
@@ -824,7 +868,7 @@ export function OrdersPage() {
         <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
           <p className="font-semibold text-slate-900">CSV Format</p>
           <p className="mt-1">
-            Required columns: <code>item_number</code>, <code>quantity</code>,{" "}
+            Required columns: <code>supplier</code>, <code>item_number</code>, <code>quantity</code>,{" "}
             <code>quotation_number</code>, <code>issue_date</code>
           </p>
           <p>
@@ -851,40 +895,13 @@ export function OrdersPage() {
             <button
               className="button-subtle"
               type="button"
-              onClick={() => {
-                const query = supplier.trim()
-                  ? `?supplier_name=${encodeURIComponent(supplier.trim())}`
-                  : "";
-                downloadImportCsv(
-                  `/orders/import-reference${query}`,
-                  "orders_import_reference.csv"
-                );
-              }}
+              onClick={() => downloadImportCsv("/orders/import-reference", "orders_import_reference.csv")}
             >
               Download Reference CSV
             </button>
           </div>
         </div>
-        <form className="grid gap-3 md:grid-cols-4" onSubmit={previewImport}>
-          <CatalogPicker
-            allowedTypes={["supplier"]}
-            onChange={(value) => {
-              setSupplierSelection(value);
-              setSupplier(value?.value_text ?? "");
-              resetImportPreview();
-            }}
-            onQueryChange={(value) => {
-              setSupplier(value);
-              if (supplierSelection && value !== supplierSelection.value_text) {
-                setSupplierSelection(null);
-              }
-              resetImportPreview();
-            }}
-            placeholder="Type or search supplier"
-            recentKey="orders-import-supplier"
-            seedQuery={supplier}
-            value={supplierSelection}
-          />
+        <form className="grid gap-3 md:grid-cols-3" onSubmit={previewImport}>
           <input
             className="input"
             type="date"
@@ -898,8 +915,9 @@ export function OrdersPage() {
             className="input"
             type="file"
             accept=".csv,text/csv"
+            multiple
             onChange={(e) => {
-              setFile(e.target.files?.[0] ?? null);
+              setFiles(Array.from(e.target.files ?? []));
               resetImportPreview();
             }}
             required
@@ -908,6 +926,11 @@ export function OrdersPage() {
             Preview Import
           </button>
         </form>
+        <p className="mt-2 text-xs text-slate-500">
+          {files.length > 0
+            ? `${files.length} file(s) selected`
+            : "Select one or more order CSV files. Supplier must be present in every row."}
+        </p>
         {message && (
           <div className="mt-3 space-y-2">
             <p className="text-sm text-signal">{message}</p>
@@ -928,9 +951,7 @@ export function OrdersPage() {
               <div>
                 <p className="text-sm font-semibold text-slate-900">Import Preview</p>
                 <p className="mt-1 text-xs text-slate-600">
-                  Supplier context:{" "}
-                  <strong>{importPreview.supplier.supplier_name}</strong>
-                  {importPreview.supplier.exists ? " (existing supplier)" : " (new supplier on commit)"}
+                  Combined preview across {files.length} file(s). Supplier is resolved per row from the CSV content.
                 </p>
               </div>
               <div className="flex flex-wrap gap-2 text-xs">
@@ -962,12 +983,20 @@ export function OrdersPage() {
                 <button
                   className="button-subtle"
                   type="button"
-                  onClick={() => void openPreviewMissingResolver()}
+                  onClick={() =>
+                    downloadMissingRowsCsv(
+                      unresolvedPreviewRows(),
+                      "orders_preview_missing_items.csv"
+                    )
+                  }
                 >
-                  Open Missing Resolver In Items
+                  Download Missing Items CSV
+                </button>
+                <button className="button-subtle" type="button" onClick={() => navigate("/items")}>
+                  Open Items Page
                 </button>
                 <p className="self-center text-xs text-slate-500">
-                  Use this only when the required canonical item is not in the catalog yet.
+                  Use this when the required canonical item is not in the catalog yet.
                 </p>
               </div>
             )}
@@ -989,13 +1018,13 @@ export function OrdersPage() {
                     const selection = selectedPreviewMatch(row);
                     const canSaveAlias = canOfferAliasSave(row, selection);
                     return (
-                      <tr key={row.row} className="border-b border-slate-100 align-top">
+                      <tr key={orderPreviewRowKey(row)} className="border-b border-slate-100 align-top">
                         <td className="px-2 py-3 font-semibold text-slate-700">#{row.row}</td>
                         <td className="px-2 py-3">
                           <div className="space-y-1">
                             <p className="font-semibold text-slate-900">{row.item_number}</p>
                             <p className="text-xs text-slate-500">
-                              qty {row.quantity} | quotation {row.quotation_number}
+                              {row.source_name ? `${row.source_name} | ` : ""}{row.supplier_name} | qty {row.quantity} | quotation {row.quotation_number}
                             </p>
                             <p className="text-xs text-slate-500">
                               order {row.order_date}
@@ -1055,7 +1084,7 @@ export function OrdersPage() {
                               onChange={(value) =>
                                 setPreviewSelections((prev) => ({
                                   ...prev,
-                                  [row.row]: value,
+                                  [orderPreviewRowKey(row)]: value,
                                 }))
                               }
                               placeholder="Search canonical item"
@@ -1071,7 +1100,7 @@ export function OrdersPage() {
                                 onChange={(event) =>
                                   setPreviewUnits((prev) => ({
                                     ...prev,
-                                    [row.row]: event.target.value,
+                                    [orderPreviewRowKey(row)]: event.target.value,
                                   }))
                                 }
                               />
@@ -1082,11 +1111,11 @@ export function OrdersPage() {
                             {canSaveAlias && (
                               <label className="flex items-center gap-2 text-xs text-slate-600">
                                 <input
-                                  checked={previewAliasSaves[row.row] ?? false}
+                                  checked={previewAliasSaves[orderPreviewRowKey(row)] ?? false}
                                   onChange={(event) =>
                                     setPreviewAliasSaves((prev) => ({
                                       ...prev,
-                                      [row.row]: event.target.checked,
+                                      [orderPreviewRowKey(row)]: event.target.checked,
                                     }))
                                   }
                                   type="checkbox"
@@ -1131,13 +1160,20 @@ export function OrdersPage() {
             <p className="mb-2 text-sm font-semibold text-amber-900">
               Unresolved item numbers in this upload
             </p>
-            <button
-              className="button-subtle mb-2"
-              type="button"
-              onClick={() => openMissingResolver(missingRows)}
-            >
-              Open Resolver In Items
-            </button>
+            <div className="mb-2 flex flex-wrap gap-2">
+              {latestGeneratedArtifact && (
+                <button
+                  className="button-subtle"
+                  type="button"
+                  onClick={() => downloadGeneratedArtifact(latestGeneratedArtifact)}
+                >
+                  Download Generated CSV
+                </button>
+              )}
+              <button className="button-subtle" type="button" onClick={() => navigate("/items")}>
+                Open Items Page
+              </button>
+            </div>
             <div className="overflow-x-auto">
               <table className="min-w-[460px] text-sm">
                 <thead>
@@ -1151,7 +1187,7 @@ export function OrdersPage() {
                   {missingRows.map((row, idx) => (
                     <tr key={`${row.item_number}-${idx}`} className="border-b border-amber-100">
                       <td className="px-2 py-2">{row.row ?? "-"}</td>
-                      <td className="px-2 py-2">{row.supplier ?? supplier}</td>
+                      <td className="px-2 py-2">{row.supplier ?? "-"}</td>
                       <td className="px-2 py-2 font-semibold">{row.item_number}</td>
                     </tr>
                   ))}

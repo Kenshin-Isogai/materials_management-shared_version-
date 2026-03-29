@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import csv
+import importlib
 import json
+import os
 from io import BytesIO, StringIO
 from pathlib import Path
 import zipfile
@@ -15,6 +18,60 @@ from fastapi.testclient import TestClient
 from .conftest import _reset_database
 
 FUTURE_TARGET_DATE = "2999-12-31"
+
+
+class _FakeBlob:
+    def __init__(self, objects: dict[str, bytes], timestamps: dict[str, object], name: str):
+        self._objects = objects
+        self._timestamps = timestamps
+        self.name = name
+
+    def exists(self) -> bool:
+        return self.name in self._objects
+
+    def upload_from_string(self, content: bytes) -> None:
+        self._objects[self.name] = bytes(content)
+        self._timestamps[self.name] = today_jst()
+
+    def download_as_bytes(self) -> bytes:
+        return self._objects[self.name]
+
+    def delete(self) -> None:
+        self._objects.pop(self.name, None)
+        self._timestamps.pop(self.name, None)
+
+    @property
+    def size(self) -> int:
+        return len(self._objects[self.name])
+
+    @property
+    def updated(self):
+        from datetime import datetime
+
+        return datetime(2026, 3, 28, 12, 0, 0)
+
+
+class _FakeBucket:
+    def __init__(self, objects: dict[str, bytes], timestamps: dict[str, object]):
+        self._objects = objects
+        self._timestamps = timestamps
+
+    def blob(self, name: str) -> _FakeBlob:
+        return _FakeBlob(self._objects, self._timestamps, name)
+
+    def get_blob(self, name: str) -> _FakeBlob | None:
+        if name not in self._objects:
+            return None
+        return _FakeBlob(self._objects, self._timestamps, name)
+
+
+class _FakeStorageClient:
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.timestamps: dict[str, object] = {}
+
+    def bucket(self, _name: str) -> _FakeBucket:
+        return _FakeBucket(self.objects, self.timestamps)
 
 
 def read_csv_response(response):
@@ -48,6 +105,46 @@ def test_health_endpoint(client):
     assert payload["data"]["runtime_target"] in {"local", "cloud_run"}
     assert isinstance(payload["data"]["cloud_run_mode"], bool)
     assert isinstance(payload["data"]["app_data_root"], str)
+    assert payload["data"]["migration_strategy"] in {"startup", "external"}
+    assert isinstance(payload["data"]["cors_allowed_origins"], list)
+    assert payload["data"]["db_pool"]["pool_size"] >= 1
+    assert payload["data"]["upload_limits"]["max_upload_bytes"] == 32 * 1024 * 1024
+    assert payload["data"]["operating_targets"]["heavy_request_target_seconds"] == 60
+    assert payload["data"]["operating_targets"]["cloud_run_concurrency_target"] == 10
+    assert payload["data"]["cloud_sql"]["strategy"] == "connector_unix_socket"
+    assert "storage" in payload["data"]
+    assert payload["data"]["temporary_identity_model"]["mode"] == "x-user-name"
+    assert payload["data"]["temporary_identity_model"]["temporary"] is True
+
+
+def test_health_endpoint_uses_effective_database_url_for_unix_socket_reporting():
+    original_env = os.environ.copy()
+    try:
+        os.environ["AUTO_MIGRATE_ON_STARTUP"] = "0"
+        os.environ["DATABASE_URL"] = (
+            "postgresql+psycopg://user:pass@/materials?host=/cloudsql/project:region:instance"
+        )
+
+        import app.config as config_module
+        import app.api as api_module
+
+        importlib.reload(config_module)
+        importlib.reload(api_module)
+
+        app = api_module.create_app(database_url="postgresql+psycopg://user:pass@localhost/materials")
+        with TestClient(app) as test_client:
+            response = test_client.get("/api/health")
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["data"]["cloud_sql"]["database_url_uses_unix_socket"] is False
+    finally:
+        os.environ.clear()
+        os.environ.update(original_env)
+        import app.config as config_module
+        import app.api as api_module
+        importlib.reload(config_module)
+        importlib.reload(api_module)
 
 
 def test_inventory_snapshot_endpoint_supports_net_available_basis(client):
@@ -431,11 +528,125 @@ def test_auth_capabilities_endpoint_defaults_and_header(client):
     assert payload["auth_enforced"] is False
     assert payload["planned_roles"] == ["admin", "operator", "viewer"]
     assert payload["effective_role"] == "operator"
+    assert payload["mutation_identity"]["mode"] == "x-user-name"
+    assert payload["mutation_identity"]["temporary"] is True
+    assert payload["mutation_identity"]["stronger_auth_required"] is True
+    assert "/api/users" in payload["mutation_identity"]["admin_only_scope"]
 
     header_response = client.get("/api/auth/capabilities", headers={"X-User-Role": "Viewer"})
     assert header_response.status_code == 200
     header_payload = header_response.json()["data"]
     assert header_payload["effective_role"] == "viewer"
+
+
+def test_request_size_limit_rejects_oversized_upload(database_url: str):
+    original_env = os.environ.copy()
+    try:
+        os.environ["MAX_UPLOAD_BYTES"] = "32"
+        import app.config as config_module
+        import app.api as api_module
+
+        config = importlib.reload(config_module)
+        api = importlib.reload(api_module)
+
+        _reset_database(database_url)
+        init_db(database_url)
+        seed_conn = get_connection(database_url)
+        try:
+            service.create_user(
+                seed_conn,
+                {
+                    "username": "pytest",
+                    "display_name": "Pytest User",
+                    "role": "admin",
+                    "is_active": True,
+                },
+            )
+            seed_conn.commit()
+        finally:
+            seed_conn.close()
+
+        app = api.create_app(database_url=database_url)
+        with TestClient(app) as test_client:
+            test_client.headers.update({"X-User-Name": "pytest"})
+            response = test_client.post(
+                "/api/items/import",
+                files={"file": ("oversized.csv", b"x" * 64, "text/csv")},
+            )
+
+        assert response.status_code == 413
+        payload = response.json()
+        assert payload["status"] == "error"
+        assert payload["error"]["code"] == "REQUEST_TOO_LARGE"
+        assert payload["error"]["details"]["max_upload_bytes"] == 32
+    finally:
+        os.environ.clear()
+        os.environ.update(original_env)
+        import app.config as config_module
+        import app.api as api_module
+        importlib.reload(config_module)
+        importlib.reload(api_module)
+
+
+def test_request_size_limit_rejects_streaming_body_without_content_length():
+    original_env = os.environ.copy()
+    try:
+        os.environ["AUTO_MIGRATE_ON_STARTUP"] = "0"
+        os.environ["MAX_UPLOAD_BYTES"] = "4"
+
+        import app.api as api_module
+        import app.config as config_module
+
+        importlib.reload(config_module)
+        importlib.reload(api_module)
+
+        app = api_module.create_app(database_url="postgresql+psycopg://user:pass@localhost/materials")
+        middleware = api_module.RequestSizeLimitMiddleware(app)
+        chunks = iter(
+            [
+                {"type": "http.request", "body": b"abc", "more_body": True},
+                {"type": "http.request", "body": b"de", "more_body": False},
+            ]
+        )
+
+        async def receive():
+            return next(chunks)
+
+        request = api_module.Request(
+            {
+                "type": "http",
+                "http_version": "1.1",
+                "method": "POST",
+                "path": "/api/items/import",
+                "raw_path": b"/api/items/import",
+                "scheme": "http",
+                "query_string": b"",
+                "headers": [],
+                "client": ("testclient", 50000),
+                "server": ("testserver", 80),
+                "app": app,
+            },
+            receive=receive,
+        )
+
+        async def call_next(inner_request):
+            await inner_request.body()
+            return api_module.JSONResponse({"status": "ok"})
+
+        response = asyncio.run(middleware.dispatch(request, call_next))
+
+        assert response.status_code == 413
+        payload = json.loads(response.body)
+        assert payload["status"] == "error"
+        assert payload["error"]["code"] == "REQUEST_TOO_LARGE"
+        assert payload["error"]["details"]["max_upload_bytes"] == 4
+    finally:
+        os.environ.clear()
+        os.environ.update(original_env)
+        import app.config as config_module
+        import app.api as api_module
+        importlib.reload(config_module)
+        importlib.reload(api_module)
 
 
 def test_users_endpoint_allows_anonymous_read(client):
@@ -678,7 +889,7 @@ def test_reservation_partial_release_and_consume_endpoints(client):
     assert over_payload["status"] == "error"
     assert over_payload["error"]["code"] == "INVALID_RESERVATION_QUANTITY"
 
-def test_order_import_returns_missing_item_details(client):
+def test_order_import_returns_missing_item_details(client, database_url):
     output = StringIO()
     writer = csv.DictWriter(
         output,
@@ -716,6 +927,8 @@ def test_order_import_returns_missing_item_details(client):
     assert data["rows"][0]["row"] == 2
     assert data["rows"][0]["supplier"] == "SupplierMissing"
     assert data["rows"][0]["item_number"] == "MISSING-ITEM-001"
+    assert "missing_csv_path" not in data
+    assert "missing_storage_ref" not in data
     artifact = data["missing_artifact"]
     assert artifact["artifact_type"] == "missing_items_register"
     assert artifact["detail_path"] == f"/api/artifacts/{artifact['artifact_id']}"
@@ -724,6 +937,85 @@ def test_order_import_returns_missing_item_details(client):
     download = client.get(f"/api/artifacts/{artifact['artifact_id']}/download")
     assert download.status_code == 200
     assert "MISSING-ITEM-001" in download.text
+
+    conn = get_connection(database_url)
+    try:
+        row = conn.execute(
+            "SELECT storage_path FROM generated_artifacts WHERE artifact_id = ?",
+            (artifact["artifact_id"],),
+        ).fetchone()
+        assert row is not None
+        assert str(row["storage_path"]).startswith("local://generated_artifacts/")
+    finally:
+        conn.close()
+
+
+def test_orders_import_template_includes_supplier_column(client):
+    response = client.get("/api/orders/import-template")
+    assert response.status_code == 200
+
+    fieldnames, _rows = read_csv_response(response)
+    assert fieldnames[0] == "supplier"
+
+
+def test_order_import_preview_and_import_accept_supplier_from_csv_rows(client):
+    client.post("/api/manufacturers", json={"name": "API-ROW-SUPPLIER-MFG"})
+    client.post(
+        "/api/items",
+        json={
+            "item_number": "API-ROW-SUPPLIER-ITEM",
+            "manufacturer_name": "API-ROW-SUPPLIER-MFG",
+            "category": "Lens",
+        },
+    )
+
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "supplier",
+            "item_number",
+            "quantity",
+            "quotation_number",
+            "issue_date",
+            "quotation_document_url",
+            "order_date",
+            "expected_arrival",
+        ],
+    )
+    writer.writeheader()
+    writer.writerow(
+        {
+            "supplier": "SupplierRowOnly",
+            "item_number": "API-ROW-SUPPLIER-ITEM",
+            "quantity": "2",
+            "quotation_number": "Q-ROW-SUPPLIER-001",
+            "issue_date": "2026-02-21",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-ROW-SUPPLIER-001",
+            "order_date": "2026-02-22",
+            "expected_arrival": "2026-03-01",
+        }
+    )
+    payload_bytes = output.getvalue().encode("utf-8")
+
+    preview = client.post(
+        "/api/orders/import-preview",
+        files={"file": ("orders.csv", payload_bytes, "text/csv")},
+    )
+    assert preview.status_code == 200
+    preview_data = preview.json()["data"]
+    assert preview_data["rows"][0]["supplier_name"] == "SupplierRowOnly"
+    assert preview_data["supplier"]["mode"] in {"single", "per_row"}
+
+    imported = client.post(
+        "/api/orders/import",
+        files={"file": ("orders.csv", payload_bytes, "text/csv")},
+    )
+    assert imported.status_code == 200
+    imported_data = imported.json()["data"]
+    assert imported_data["status"] == "ok"
+    orders = client.get("/api/orders").json()["data"]
+    assert any(row["supplier_name"] == "SupplierRowOnly" for row in orders)
 
 def test_order_import_requires_quotation_document_url_instead_of_pdf_link(client):
     client.post("/api/manufacturers", json={"name": "API-MANUAL-MFG"})
@@ -905,6 +1197,7 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
             "quantity",
             "quotation_number",
             "issue_date",
+            "quotation_document_url",
             "order_date",
             "expected_arrival",
             "pdf_link",
@@ -917,6 +1210,7 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
             "quantity": "1",
             "quotation_number": "Q-DUP-PREVIEW",
             "issue_date": "2026-02-21",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-DUP-PREVIEW",
             "order_date": "2026-02-22",
             "expected_arrival": "2026-03-01",
             "pdf_link": "",
@@ -937,6 +1231,7 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
             "quantity",
             "quotation_number",
             "issue_date",
+            "quotation_document_url",
             "order_date",
             "expected_arrival",
             "pdf_link",
@@ -949,6 +1244,7 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
             "quantity": "2",
             "quotation_number": "Q-DUP-PREVIEW",
             "issue_date": "2026-02-21",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-DUP-PREVIEW",
             "order_date": "2026-02-22",
             "expected_arrival": "2026-03-01",
             "pdf_link": "Q-DUP-PREVIEW.pdf",
@@ -960,6 +1256,7 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
             "quantity": "1",
             "quotation_number": "Q-REVIEW-PREVIEW",
             "issue_date": "2026-02-21",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-REVIEW-PREVIEW",
             "order_date": "2026-02-22",
             "expected_arrival": "2026-03-01",
             "pdf_link": "",
@@ -971,6 +1268,7 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
             "quantity": "1",
             "quotation_number": "Q-UNRESOLVED-PREVIEW",
             "issue_date": "2026-02-21",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-UNRESOLVED-PREVIEW",
             "order_date": "2026-02-22",
             "expected_arrival": "2026-03-01",
             "pdf_link": "",
@@ -1556,96 +1854,37 @@ def test_items_import_endpoint_archives_uploaded_csv_into_registered_month_folde
     assert response.status_code == 200
     payload = response.json()["data"]
     assert payload["status"] == "ok"
-    assert payload["archive"]["consolidation"]["consolidated"] == 1
+    assert "archive_storage_ref" not in payload["archive"]
+    assert "cleanup_unreg_file" not in payload["archive"]
+    assert payload["archive"]["archived_filename"] == "items_archive.csv"
+    assert payload["archive"]["consolidation"]["disabled"] is True
 
     month_dir = workspace_roots["items_registered_root"] / today_jst()[:7]
-    archived = month_dir / f"items_{today_jst()[:7]}_001.csv"
+    archived = month_dir / "items_archive.csv"
     assert archived.exists()
 
     rows = service._load_csv_rows_from_path(archived)
     assert len(rows) == 1
     assert rows[0]["item_number"] == "CSV-ARCHIVE-001"
-    assert not (month_dir / "items_archive.csv").exists()
 
 
-def test_items_batch_upload_endpoint_stages_and_registers_csvs(client, workspace_roots: dict[str, Path]):
-    batch_one = make_csv_bytes(
-        ["supplier", "item_number", "resolution_type", "category", "url", "description"],
-        [
-            {
-                "supplier": "Upload Supplier A",
-                "item_number": "UPLOAD-BATCH-ITEM-001",
-                "resolution_type": "new_item",
-                "category": "Lens",
-                "url": "",
-                "description": "first upload batch row",
-            }
-        ],
-    )
-    batch_two = make_csv_bytes(
-        ["supplier", "item_number", "resolution_type", "category", "url", "description"],
-        [
-            {
-                "supplier": "Upload Supplier B",
-                "item_number": "UPLOAD-BATCH-ITEM-002",
-                "resolution_type": "new_item",
-                "category": "Mirror",
-                "url": "",
-                "description": "second upload batch row",
-            }
-        ],
-    )
-
+def test_items_batch_upload_endpoint_is_removed(client):
     response = client.post(
         "/api/items/batch-upload",
-        files=[
-            ("files", ("upload_batch_a.csv", batch_one, "text/csv")),
-            ("files", ("upload_batch_b.csv", batch_two, "text/csv")),
-        ],
+        files=[("files", ("removed.csv", b"item_number\nREMOVED\n", "text/csv"))],
         data={"continue_on_error": "true"},
     )
 
-    assert response.status_code == 200
-    payload = response.json()["data"]
-    assert payload["status"] == "ok"
-    assert payload["succeeded"] == 2
-    assert payload["upload_job_id"].startswith("items_")
-    assert len(payload["uploaded_files"]) == 2
-
-    month_dir = workspace_roots["items_registered_root"] / today_jst()[:7]
-    archived_files = sorted(month_dir.glob("*.csv"))
-    assert archived_files
-    archived_text = "\n".join(path.read_text(encoding="utf-8") for path in archived_files)
-    assert "UPLOAD-BATCH-ITEM-001" in archived_text
-    assert "UPLOAD-BATCH-ITEM-002" in archived_text
+    assert response.status_code == 405
 
 
-def test_items_batch_upload_endpoint_accepts_non_ascii_csv_filename(client):
-    batch = make_csv_bytes(
-        ["supplier", "item_number", "resolution_type", "category", "url", "description"],
-        [
-            {
-                "supplier": "Upload Supplier Localized",
-                "item_number": "UPLOAD-BATCH-ITEM-LOCALIZED",
-                "resolution_type": "new_item",
-                "category": "Lens",
-                "url": "",
-                "description": "localized filename upload",
-            }
-        ],
-    )
-
+def test_items_register_unregistered_batch_endpoint_is_removed(client):
     response = client.post(
-        "/api/items/batch-upload",
-        files=[("files", ("見積.csv", batch, "text/csv"))],
-        data={"continue_on_error": "true"},
+        "/api/items/register-unregistered-batch",
+        json={"continue_on_error": True},
     )
 
-    assert response.status_code == 200
-    payload = response.json()["data"]
-    assert payload["status"] == "ok"
-    assert payload["succeeded"] == 1
-    assert any(str(path).endswith(".csv") for path in payload["uploaded_files"])
+    assert response.status_code == 405
 
 
 def test_items_import_preview_endpoint_classifies_duplicate_and_alias_resolution(client):
@@ -2191,165 +2430,54 @@ def test_bulk_update_item_metadata_endpoint_partial_on_missing_item(client):
     assert len(rows) == 1
     assert rows[0]["description"] == "ok-update"
 
-def test_register_missing_rows_endpoint(client):
-    response = client.post(
-        "/api/register-missing/rows",
+def test_alias_upsert_by_supplier_name_endpoint(client):
+    client.post("/api/manufacturers", json={"name": "ALIAS-UPSERT-MFG"})
+    canonical = client.post(
+        "/api/items",
         json={
-            "rows": [
-                {
-                    "supplier": "SupplierResolver",
-                    "item_number": "MISS-ITEM-NEW",
-                    "manufacturer_name": "RESOLVER-MFG",
-                    "resolution_type": "new_item",
-                    "category": "Lens",
-                    "description": "from resolver",
-                }
-            ]
+            "item_number": "ALIAS-UPSERT-CANONICAL",
+            "manufacturer_name": "ALIAS-UPSERT-MFG",
+            "category": "Lens",
+        },
+    ).json()["data"]
+
+    response = client.post(
+        "/api/aliases/upsert",
+        json={
+            "supplier_name": "SupplierResolver",
+            "ordered_item_number": "MISS-ITEM-ALIAS",
+            "canonical_item_number": canonical["item_number"],
+            "units_per_order": 2,
         },
     )
     assert response.status_code == 200
     data = response.json()["data"]
-    assert data["created_items"] == 1
+    assert data["supplier_name"] == "SupplierResolver"
+    assert data["ordered_item_number"] == "MISS-ITEM-ALIAS"
+    assert data["canonical_item_number"] == canonical["item_number"]
+    assert data["units_per_order"] == 2
 
-    items = client.get("/api/items?q=MISS-ITEM-NEW&per_page=50")
-    assert items.status_code == 200
-    rows = items.json()["data"]
-    assert len(rows) == 1
-    assert rows[0]["item_number"] == "MISS-ITEM-NEW"
-    assert rows[0]["manufacturer_name"] == "RESOLVER-MFG"
-
-def test_register_missing_rows_endpoint_accepts_manufacturer_alias_field(client):
-    response = client.post(
-        "/api/register-missing/rows",
-        json={
-            "rows": [
-                {
-                    "supplier": "SupplierResolver",
-                    "item_number": "MISS-ITEM-NEW-ALIAS",
-                    "manufacturer": "RESOLVER-MFG-ALIAS",
-                    "resolution_type": "new_item",
-                    "category": "Lens",
-                    "description": "from resolver alias",
-                }
-            ]
-        },
+    suppliers = client.get("/api/suppliers")
+    supplier = next(
+        row for row in suppliers.json()["data"] if row["name"] == "SupplierResolver"
     )
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["created_items"] == 1
-
-    items = client.get("/api/items?q=MISS-ITEM-NEW-ALIAS&per_page=50")
-    assert items.status_code == 200
-    rows = items.json()["data"]
-    assert len(rows) == 1
-    assert rows[0]["manufacturer_name"] == "RESOLVER-MFG-ALIAS"
+    aliases = client.get(f"/api/suppliers/{supplier['supplier_id']}/aliases").json()["data"]
+    assert len(aliases) == 1
+    assert aliases[0]["ordered_item_number"] == "MISS-ITEM-ALIAS"
 
 
-def test_register_missing_rows_endpoint_accepts_legacy_row_type_item(client):
-    response = client.post(
+def test_register_missing_endpoints_are_removed(client):
+    rows_response = client.post(
         "/api/register-missing/rows",
-        json={
-            "rows": [
-                {
-                    "supplier": "SupplierResolver",
-                    "item_number": "MISS-ITEM-ROW-TYPE",
-                    "row_type": "item",
-                    "manufacturer_name": "ROW-TYPE-MFG",
-                    "category": "Lens",
-                    "description": "legacy row_type mapping",
-                }
-            ]
-        },
+        json={"rows": []},
     )
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["created_items"] == 1
+    assert rows_response.status_code == 404
 
-    items = client.get("/api/items?q=MISS-ITEM-ROW-TYPE&per_page=50")
-    assert items.status_code == 200
-    rows = items.json()["data"]
-    assert len(rows) == 1
-    assert rows[0]["manufacturer_name"] == "ROW-TYPE-MFG"
-
-def test_register_missing_rows_endpoint_rejects_unresolved_new_item(client):
-    response = client.post(
-        "/api/register-missing/rows",
-        json={
-            "rows": [
-                {
-                    "supplier": "SupplierResolver",
-                    "item_number": "MISS-ITEM-UNRESOLVED",
-                    "resolution_type": "new_item",
-                    "category": "",
-                    "url": "",
-                    "description": "",
-                }
-            ]
-        },
-    )
-    assert response.status_code == 422
-    payload = response.json()
-    assert payload["status"] == "error"
-    assert payload["error"]["code"] == "MISSING_ITEM_UNRESOLVED"
-
-def test_register_missing_upload_endpoint_rejects_unresolved_new_item_by_default(client):
-    response = client.post(
+    upload_response = client.post(
         "/api/register-missing",
-        files={
-            "file": (
-                "missing_items_registration.csv",
-                make_csv_bytes(
-                    ["supplier", "item_number", "resolution_type", "category", "url", "description"],
-                    [
-                        {
-                            "supplier": "SupplierResolver",
-                            "item_number": "MISS-ITEM-UPLOAD-UNRESOLVED",
-                            "resolution_type": "new_item",
-                            "category": "",
-                            "url": "",
-                            "description": "",
-                        }
-                    ],
-                ),
-                "text/csv",
-            )
-        },
+        files={"file": ("removed.csv", b"item_number\nREMOVED\n", "text/csv")},
     )
-    assert response.status_code == 422
-    payload = response.json()
-    assert payload["status"] == "error"
-    assert payload["error"]["code"] == "MISSING_ITEM_UNRESOLVED"
-
-def test_register_missing_upload_endpoint_accepts_skip_unresolved_form_flag(client):
-    response = client.post(
-        "/api/register-missing",
-        files={
-            "file": (
-                "missing_items_registration.csv",
-                make_csv_bytes(
-                    ["supplier", "item_number", "resolution_type", "category", "url", "description"],
-                    [
-                        {
-                            "supplier": "SupplierResolver",
-                            "item_number": "MISS-ITEM-UPLOAD-SKIP",
-                            "resolution_type": "new_item",
-                            "category": "",
-                            "url": "",
-                            "description": "",
-                        }
-                    ],
-                ),
-                "text/csv",
-            )
-        },
-        data={"skip_unresolved": "true"},
-    )
-    assert response.status_code == 200
-    data = response.json()["data"]
-    assert data["created_items"] == 0
-    assert data["created_aliases"] == 0
-    assert data["skipped_unresolved"] == 1
-    assert data["is_completely_unresolved"] is True
+    assert upload_response.status_code == 404
 
 def test_delete_order_endpoint(client):
     client.post("/api/manufacturers", json={"name": "API-DEL-ORDER-MFG"})
