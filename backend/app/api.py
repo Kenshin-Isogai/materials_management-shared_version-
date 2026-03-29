@@ -35,6 +35,7 @@ from .config import (
     INSTANCE_CONNECTION_NAME,
     MAX_UPLOAD_BYTES,
     LOG_LEVEL,
+    OIDC_PROVIDER,
     get_diagnostics_auth_role,
     RBAC_MODE_DRY_RUN,
     RBAC_MODE_ENFORCED,
@@ -673,6 +674,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
     def get_auth_capabilities(request: Request):
         user = getattr(request.state, "user", None)
         identity = getattr(request.state, "identity", None)
+        identity_provider = identity.get("provider") if isinstance(identity, dict) else None
         return ok(
             {
                 **authorization_mode_summary(),
@@ -681,7 +683,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
                 "current_identity": identity,
                 "mutation_identity": {
                     "mode": "bearer_jwt",
-                    "provider": "oidc",
+                    "provider": identity_provider or OIDC_PROVIDER,
                     "temporary": False,
                     "stronger_auth_required": False,
                 },
@@ -710,7 +712,12 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
     def get_current_user(request: Request):
         user = getattr(request.state, "user", None)
         if user is None:
-            raise AppError(code="USER_REQUIRED", message="No active user selected", status_code=403)
+            raise AppError(
+                code="USER_REQUIRED",
+                message="An active user mapped from a bearer token is required",
+                status_code=403,
+                details={"requires": "Authorization: Bearer <JWT> mapped to an active user"},
+            )
         return ok(user)
 
     @app.get("/api/users/{user_id}")

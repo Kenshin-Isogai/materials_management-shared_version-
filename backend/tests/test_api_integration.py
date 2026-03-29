@@ -14,6 +14,7 @@ from app.api import create_app
 from app.db import get_connection, init_db
 from app.utils import today_jst
 from fastapi.testclient import TestClient
+import jwt
 
 from .conftest import _reset_database, auth_headers_for_user
 
@@ -600,9 +601,12 @@ def test_auth_capabilities_endpoint_defaults_and_identity(client):
     assert payload["current_user"]["username"] == "pytest"
     assert payload["current_identity"]["email"] == "pytest@example.test"
     assert payload["mutation_identity"]["mode"] == "bearer_jwt"
+    assert payload["mutation_identity"]["provider"] == "test-oidc"
     assert payload["mutation_identity"]["temporary"] is False
     assert payload["mutation_identity"]["stronger_auth_required"] is False
     assert "GET /api/users" in payload["endpoint_policy"]["admin"]
+    assert "/api/auth/capabilities" in payload["endpoint_policy"]["public"]
+    assert "/api/health" in payload["endpoint_policy"]["public"]
 
 
 def test_request_size_limit_rejects_oversized_upload(database_url: str):
@@ -815,6 +819,39 @@ def test_users_me_endpoint_requires_bearer_token_on_read_request(client):
     assert payload["error"]["code"] == "AUTH_REQUIRED"
 
 
+def test_users_me_endpoint_reports_bearer_token_requirement_in_dry_run_mode(database_url: str):
+    original_env = os.environ.copy()
+    try:
+        os.environ["AUTH_MODE"] = "oidc_dry_run"
+        os.environ["RBAC_MODE"] = "rbac_dry_run"
+        import app.api as api_module
+        import app.config as config_module
+
+        importlib.reload(config_module)
+        importlib.reload(api_module)
+
+        _reset_database(database_url)
+        init_db(database_url)
+        app = api_module.create_app(database_url=database_url)
+        with TestClient(app) as test_client:
+            response = test_client.get("/api/users/me")
+
+        assert response.status_code == 403
+        payload = response.json()
+        assert payload["status"] == "error"
+        assert payload["error"]["code"] == "USER_REQUIRED"
+        assert payload["error"]["message"] == "An active user mapped from a bearer token is required"
+        assert payload["error"]["details"]["requires"] == "Authorization: Bearer <JWT> mapped to an active user"
+    finally:
+        os.environ.clear()
+        os.environ.update(original_env)
+        import app.api as api_module
+        import app.config as config_module
+
+        importlib.reload(config_module)
+        importlib.reload(api_module)
+
+
 def test_users_me_endpoint_resolves_request_user_from_bearer_token(client):
     response = client.get("/api/users/me")
 
@@ -920,6 +957,68 @@ def test_jwks_verifier_mode_accepts_oidc_bearer_tokens(database_url: str, monkey
         importlib.reload(config_module)
         importlib.reload(auth_module)
         importlib.reload(api_module)
+
+
+def test_cors_preflight_bypasses_auth_and_role_enforcement(client):
+    client.headers.pop("Authorization", None)
+
+    response = client.options(
+        "/api/users",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+def test_shared_secret_verifier_rejects_email_without_true_verified_claim(database_url: str):
+    _reset_database(database_url)
+    init_db(database_url)
+    seed_conn = get_connection(database_url)
+    try:
+        service.create_user(
+            seed_conn,
+            {
+                "username": "email-verified-user",
+                "display_name": "Email Verified User",
+                "email": "email-verified-user@example.test",
+                "external_subject": "sub-email-verified-user",
+                "identity_provider": "test-oidc",
+                "hosted_domain": "example.test",
+                "role": "admin",
+                "is_active": True,
+            },
+        )
+        seed_conn.commit()
+    finally:
+        seed_conn.close()
+
+    token = jwt.encode(
+        {
+            "sub": "sub-email-verified-user",
+            "email": "email-verified-user@example.test",
+            "hd": "example.test",
+            "iss": os.environ["OIDC_EXPECTED_ISSUER"],
+            "aud": os.environ["OIDC_EXPECTED_AUDIENCE"],
+        },
+        os.environ["JWT_SHARED_SECRET"],
+        algorithm="HS256",
+    )
+    app = create_app(database_url=database_url)
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/users/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 401
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["error"]["code"] == "INVALID_TOKEN"
+    assert payload["error"]["message"] == "Verified email claim is required when email is present"
 
 
 def test_cloud_run_diagnostics_default_to_admin_access(database_url: str):

@@ -2,6 +2,14 @@
 
 ### Changed
 
+- Addressed review follow-ups on the OIDC auth slice.
+  - renamed the OIDC user-identity Alembic file to `009_oidc_user_identity.py` so the filename sequence matches the revision id
+  - `/api/auth/capabilities` now reports the resolved/configured identity provider and keeps diagnostics paths listed under the role that actually grants access
+  - `/api/users/me` now reports bearer-token user-context requirements instead of the retired selected-user wording
+  - CORS preflight `OPTIONS` requests now bypass auth/RBAC checks instead of inheriting the target endpoint role
+  - JWT email verification now requires `email_verified` to be explicitly `true` when an email claim is present and verification is enabled
+  - cleaned up Google Identity script error listeners on unmount and kept the basic Playwright layout smoke test runnable without an E2E bearer token
+
 - Closed the remaining repo-side trust-boundary slice for browser auth and diagnostics.
   - frontend header now supports Google Identity sign-in via `VITE_GOOGLE_CLIENT_ID` and keeps manual Bearer token entry as a fallback
   - backend bearer verification now supports `JWT_VERIFIER=jwks` with `OIDC_JWKS_URL` for deployed OIDC/JWKS verification

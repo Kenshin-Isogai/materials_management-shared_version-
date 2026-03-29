@@ -113,16 +113,18 @@ export function AppShell() {
       });
 
     script.dataset.googleIdentityScript = "true";
-    script.addEventListener("load", renderGoogleButton);
-    script.addEventListener("error", () => {
+    const handleScriptError = () => {
       if (active) setGoogleStatus("error");
-    });
+    };
+    script.addEventListener("load", renderGoogleButton);
+    script.addEventListener("error", handleScriptError);
     if (!existingScript) {
       document.head.appendChild(script);
     }
     return () => {
       active = false;
       script.removeEventListener("load", renderGoogleButton);
+      script.removeEventListener("error", handleScriptError);
     };
   }, []);
 

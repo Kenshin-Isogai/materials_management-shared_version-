@@ -100,7 +100,7 @@ def role_satisfies(actual_role: str | None, required_role: str) -> bool:
 
 def normalize_http_method(method: str) -> str:
     normalized = method.upper()
-    if normalized in {"HEAD", "OPTIONS"}:
+    if normalized == "HEAD":
         return "GET"
     return normalized
 
@@ -108,6 +108,8 @@ def normalize_http_method(method: str) -> str:
 def required_role_for_request(request: Request) -> str | None:
     path = request.url.path
     method = normalize_http_method(request.method)
+    if request.method.upper() == "OPTIONS":
+        return None
     if path in {"/healthz", "/readyz"}:
         return None
     if method == "GET" and path in {"/api/health", "/api/auth/capabilities"}:
@@ -132,38 +134,53 @@ def required_role_for_request(request: Request) -> str | None:
 def endpoint_policy_summary() -> dict[str, list[str]]:
     diagnostics_role = get_diagnostics_auth_role()
     public_paths = ["/healthz", "/readyz"]
+    diagnostics_paths = ["/api/health", "/api/auth/capabilities"]
+    viewer_paths = [
+        "default: GET /api/** except public, operator-only exports/downloads, and admin users surfaces",
+        "/api/users/me",
+    ]
+    operator_paths = [
+        "default: non-GET /api/** except admin users surfaces",
+        "/api/artifacts/**",
+        "/api/**/import-template",
+        "/api/**/import-reference",
+        "/api/**/import-jobs/**",
+        "/api/workspace/planning-export",
+        "/api/workspace/planning-export-multi",
+        "/api/procurement-batches/{batch_id}/export.csv",
+    ]
+    admin_paths = [
+        "GET /api/users",
+        "POST /api/users",
+        "GET /api/users/{user_id}",
+        "PUT /api/users/{user_id}",
+        "DELETE /api/users/{user_id}",
+    ]
     if diagnostics_role == DIAGNOSTICS_AUTH_ROLE_PUBLIC:
-        public_paths.extend(["/api/health", "/api/auth/capabilities"])
+        public_paths.extend(diagnostics_paths)
+    elif diagnostics_role == "viewer":
+        viewer_paths.extend(diagnostics_paths)
+    elif diagnostics_role == "operator":
+        operator_paths.extend(diagnostics_paths)
+    else:
+        admin_paths.extend(diagnostics_paths)
     return {
         "public": sorted(public_paths),
-        "viewer": [
-            "default: GET /api/** except public, operator-only exports/downloads, and admin users surfaces",
-            *([] if diagnostics_role == DIAGNOSTICS_AUTH_ROLE_PUBLIC else [f"{diagnostics_role.upper()}: /api/health"]),
-            *(
-                []
-                if diagnostics_role == DIAGNOSTICS_AUTH_ROLE_PUBLIC
-                else [f"{diagnostics_role.upper()}: /api/auth/capabilities"]
-            ),
-            "/api/users/me",
-        ],
-        "operator": [
-            "default: non-GET /api/** except admin users surfaces",
-            "/api/artifacts/**",
-            "/api/**/import-template",
-            "/api/**/import-reference",
-            "/api/**/import-jobs/**",
-            "/api/workspace/planning-export",
-            "/api/workspace/planning-export-multi",
-            "/api/procurement-batches/{batch_id}/export.csv",
-        ],
-        "admin": [
-            "GET /api/users",
-            "POST /api/users",
-            "GET /api/users/{user_id}",
-            "PUT /api/users/{user_id}",
-            "DELETE /api/users/{user_id}",
-        ],
+        "viewer": viewer_paths,
+        "operator": operator_paths,
+        "admin": admin_paths,
     }
+
+
+def _validated_email_claim(payload: dict[str, Any]) -> str | None:
+    email = _normalized_optional_text(payload.get("email"), lower=True)
+    if email and OIDC_REQUIRE_EMAIL_VERIFIED and payload.get("email_verified") is not True:
+        raise AppError(
+            code="INVALID_TOKEN",
+            message="Verified email claim is required when email is present",
+            status_code=401,
+        )
+    return email
 
 
 class SharedSecretJwtVerifier:
@@ -191,14 +208,8 @@ class SharedSecretJwtVerifier:
         subject = str(payload.get("sub") or "").strip()
         if not subject:
             raise AppError(code="INVALID_TOKEN", message="JWT subject claim is required", status_code=401)
-        email = _normalized_optional_text(payload.get("email"), lower=True)
+        email = _validated_email_claim(payload)
         hosted_domain = _normalized_optional_text(payload.get("hd"), lower=True)
-        if email and OIDC_REQUIRE_EMAIL_VERIFIED and payload.get("email_verified") is False:
-            raise AppError(
-                code="INVALID_TOKEN",
-                message="Verified email claim is required when email is present",
-                status_code=401,
-            )
         if OIDC_ALLOWED_HOSTED_DOMAINS and hosted_domain not in OIDC_ALLOWED_HOSTED_DOMAINS:
             raise AppError(
                 code="INVALID_TOKEN",
@@ -267,14 +278,8 @@ class JwksJwtVerifier:
         subject = str(payload.get("sub") or "").strip()
         if not subject:
             raise AppError(code="INVALID_TOKEN", message="JWT subject claim is required", status_code=401)
-        email = _normalized_optional_text(payload.get("email"), lower=True)
+        email = _validated_email_claim(payload)
         hosted_domain = _normalized_optional_text(payload.get("hd"), lower=True)
-        if email and OIDC_REQUIRE_EMAIL_VERIFIED and payload.get("email_verified") is False:
-            raise AppError(
-                code="INVALID_TOKEN",
-                message="Verified email claim is required when email is present",
-                status_code=401,
-            )
         if OIDC_ALLOWED_HOSTED_DOMAINS and hosted_domain not in OIDC_ALLOWED_HOSTED_DOMAINS:
             raise AppError(
                 code="INVALID_TOKEN",
