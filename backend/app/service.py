@@ -479,11 +479,23 @@ def has_active_users(conn: sqlite3.Connection) -> bool:
     return bool(row[0]) if row is not None else False
 
 
+def _require_valid_role(role: str) -> str:
+    """
+    Ensure that the given role is non-empty and one of the supported roles.
+    """
+    role = require_non_empty(role, "role")
+    if role not in {"admin", "operator", "viewer"}:
+        # Keep roles consistent with what the authorization layer expects.
+        raise AppError("INVALID_ROLE", f"Invalid role: {role}")
+    return role
+
+
 def create_user(conn: sqlite3.Connection, data: dict[str, Any]) -> dict[str, Any]:
     username = require_non_empty(str(data.get("username") or ""), "username")
     display_name = require_non_empty(str(data.get("display_name") or ""), "display_name")
     email, external_subject, identity_provider, hosted_domain = _normalize_user_identity_fields(data)
-    role = require_non_empty(str(data.get("role") or "operator"), "role")
+    raw_role = str(data.get("role") or "operator")
+    role = _require_valid_role(raw_role)
     is_active = bool(data.get("is_active", True))
     created_at = now_jst_iso()
     cursor = conn.execute(
