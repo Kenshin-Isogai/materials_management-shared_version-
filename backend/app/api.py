@@ -197,6 +197,13 @@ def file_attachment(filename: str, content: bytes) -> Response:
     )
 
 
+def _without_missing_item_locations(data: dict[str, Any]) -> dict[str, Any]:
+    sanitized = dict(data)
+    sanitized.pop("missing_csv_path", None)
+    sanitized.pop("missing_storage_ref", None)
+    return sanitized
+
+
 def _parse_optional_json_form(value: str | None, field_name: str) -> Any | None:
     if value is None or not str(value).strip():
         return None
@@ -211,15 +218,10 @@ def _parse_optional_json_form(value: str | None, field_name: str) -> Any | None:
 
 
 def _public_order_import_result(result: dict[str, Any]) -> dict[str, Any]:
-    payload = dict(result)
-    payload.pop("missing_csv_path", None)
-    payload.pop("missing_storage_ref", None)
+    payload = _without_missing_item_locations(result)
     import_result = payload.get("import_result")
     if isinstance(import_result, dict):
-        nested_payload = dict(import_result)
-        nested_payload.pop("missing_csv_path", None)
-        nested_payload.pop("missing_storage_ref", None)
-        payload["import_result"] = nested_payload
+        payload["import_result"] = _without_missing_item_locations(import_result)
     return payload
 
 

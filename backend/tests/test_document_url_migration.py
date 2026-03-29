@@ -354,7 +354,7 @@ def test_order_import_job_undo_and_redo_flow(client):
 
 
 def test_order_import_job_redo_hides_nested_missing_item_paths(client, monkeypatch):
-    def _fake_redo_orders_import_job(_conn, import_job_id: int):
+    def _fake_redo_orders_import_job(conn, import_job_id: int):
         return {
             "source_job_id": import_job_id,
             "redo_job_id": import_job_id + 1,

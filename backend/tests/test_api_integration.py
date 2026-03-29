@@ -169,7 +169,8 @@ def test_readiness_endpoint_reports_unavailable_database():
         assert payload["error"]["code"] == "NOT_READY"
         assert payload["error"]["details"]["checks"]["database"]["ready"] is False
         assert payload["error"]["details"]["checks"]["database"]["error_code"] == "DATABASE_UNAVAILABLE"
-        assert "error" not in payload["error"]["details"]["checks"]["database"]
+        assert "type" not in payload["error"]["details"]["checks"]["database"]
+        assert "message" not in payload["error"]["details"]["checks"]["database"]
     finally:
         os.environ.clear()
         os.environ.update(original_env)
