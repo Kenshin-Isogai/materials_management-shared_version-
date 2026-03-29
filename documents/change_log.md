@@ -43,6 +43,13 @@
   - Added stateful CRUD tests verifying full lifecycles for Users, Projects, Items (CSV import), and Orders (CSV import).
   - Configured `afterAll` cleanup hooks for stateful tests to maintain database cleanliness.
   - Added `@types/node` and `tsconfig.e2e.json` to support Node.js APIs (e.g., `Buffer`) in tests.
+- Isolated Playwright from the normal local Docker stack.
+  - added `run-e2e.ps1` so Playwright runs against a dedicated Compose project on `http://127.0.0.1:8088` and always tears it down with `down -v`
+  - `docker-compose.yml` now uses `NGINX_HOST_PORT` for the local frontend publish port, letting the isolated E2E stack bind `8088` without taking over the normal `:80` slot
+  - `frontend/playwright.config.ts` now honors `PLAYWRIGHT_BASE_URL` and bootstraps an `e2e.admin` user through `frontend/e2e/global.setup.ts`
+  - fixed the projects CRUD cleanup path so edited E2E project names are still deleted when the suite finishes
+- Added an explicit local reset-on-start workflow.
+  - `start-app.ps1 -ResetData` now clears the normal Docker Compose volumes before bringing the shared local stack back up
 
 ### Tests
 
@@ -57,7 +64,7 @@
   - `docker compose -f docker-compose.test.yml up -d db-test`
 - Frontend:
   - `npm run build`
-  - `npx playwright test`
+  - `.\run-e2e.ps1`
  - Docker:
    - `docker compose -f docker-compose.yml up -d --build`
    - validated `http://127.0.0.1/` and `http://127.0.0.1/api/health`

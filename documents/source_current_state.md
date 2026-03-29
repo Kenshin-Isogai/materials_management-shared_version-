@@ -331,6 +331,7 @@ Last updated: 2026-03-29 (JST)
 - Order import alias resolution now falls back to case-insensitive `ordered_item_number` matching within a supplier when exact alias text does not match.
 - Order import alias resolution also normalizes item-number variants (NFKC, dash variants like `-`/`−`, and whitespace removal) before final alias lookup to prevent false missing-items caused by visually similar SKU text.
 - Backend test fixtures now isolate workspace import/export roots under per-test temporary directories, preventing API/order-import test runs from creating stray CSV artifacts inside the repository `imports/items/unregistered/` folder.
+- Frontend Playwright runs now use an isolated Docker Compose project via `run-e2e.ps1`, with a separate `8088` ingress and `down -v` teardown so E2E-created DB rows and runtime import/artifact files do not persist into the normal local UI environment.
 
 ## 6. Quality State
 

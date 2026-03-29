@@ -55,7 +55,7 @@ services:
     volumes:
       - ./frontend/nginx.local-proxy.conf:/etc/nginx/conf.d/default.conf:ro
     ports:
-      - "80:80"
+      - "${NGINX_HOST_PORT:-80}:80"
 
 volumes:
   pgdata:

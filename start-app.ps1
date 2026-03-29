@@ -1,6 +1,7 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
     [switch]$IncludeDevOverride,
+    [switch]$ResetData,
     [switch]$NoBuild
 )
 
@@ -32,6 +33,17 @@ if ($IncludeDevOverride) {
         throw "Requested -IncludeDevOverride, but docker-compose.override.yml was not found."
     }
     $composeArgs += @("-f", $devCompose)
+}
+
+if ($ResetData) {
+    $resetArgs = @("down", "-v", "--remove-orphans")
+    Write-Step "Resetting Docker volumes before startup..."
+    if ($PSCmdlet.ShouldProcess("docker compose", (($composeArgs + $resetArgs) -join " "))) {
+        & docker @composeArgs @resetArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw "docker compose down failed with exit code $LASTEXITCODE."
+        }
+    }
 }
 
 $upArgs = @("up", "-d")

@@ -2,22 +2,30 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Projects Stateful CRUD', () => {
   const testProjectName = `E2E Test Project ${Date.now()}`;
-  let selectedUsername = 'test_runner';
+  const editedProjectName = `${testProjectName} Edited`;
+  let currentProjectName = testProjectName;
+  let selectedUsername = 'e2e.admin';
 
   test.afterAll(async ({ request }) => {
-    try {
-      const res = await request.get('/api/projects');
-      if (res.ok()) {
-        const data = await res.json();
-        const projects = data.data || [];
-        const testProject = projects.find((p: any) => p.name && p.name.includes(testProjectName));
-        if (testProject) {
-          await request.delete(`/api/projects/${testProject.project_id}`, {
-            headers: { 'X-User-Name': selectedUsername }
-          });
-        }
-      }
-    } catch (e) {}
+    const res = await request.get('/api/projects');
+    expect(res.ok()).toBeTruthy();
+
+    const data = await res.json();
+    const projects = Array.isArray(data?.data)
+      ? (data.data as Array<{ project_id: number; name?: string | null }>)
+      : [];
+    const candidateNames = new Set([testProjectName, editedProjectName, currentProjectName]);
+    const testProject = projects.find(
+      (project) => typeof project.name === 'string' && candidateNames.has(project.name)
+    );
+    if (!testProject) {
+      return;
+    }
+
+    const deleteResponse = await request.delete(`/api/projects/${testProject.project_id}`, {
+      headers: { 'X-User-Name': selectedUsername }
+    });
+    expect(deleteResponse.ok()).toBeTruthy();
   });
 
   test('Create, Edit, and Manage Project', async ({ page }) => {
@@ -52,10 +60,11 @@ test.describe('Projects Stateful CRUD', () => {
     await expect(saveBtn).toBeVisible({ timeout: 5000 });
 
     // Update name
-    await nameInput.fill(testProjectName + " Edited");
+    await nameInput.fill(editedProjectName);
     await saveBtn.click();
+    currentProjectName = editedProjectName;
 
     // Verify updated name
-    await expect(page.locator('tr', { hasText: testProjectName + " Edited" }).first()).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('tr', { hasText: editedProjectName }).first()).toBeVisible({ timeout: 10000 });
   });
 });

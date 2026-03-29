@@ -15,7 +15,7 @@ import { test, expect } from '@playwright/test';
  */
 test.describe('Items Stateful CRUD (CSV import → edit → delete)', () => {
   const e2eItemNumber = `E2E-ITEM-${Date.now()}`;
-  let selectedUsername = 'shared.operator';
+  let selectedUsername = 'e2e.admin';
 
   test.afterAll(async ({ request }) => {
     try {
@@ -150,7 +150,7 @@ test.describe('Items Stateful CRUD (CSV import → edit → delete)', () => {
 test.describe('Orders Stateful CRUD (CSV import → delete quotation)', () => {
   const e2eQuotationNumber = `E2E-QUO-${Date.now()}`;
   const e2eItemNumber = `E2E-ORD-ITEM-${Date.now()}`;
-  let selectedUsername = 'shared.operator';
+  let selectedUsername = 'e2e.admin';
   let createdItemId: number | null = null;
 
   test.beforeAll(async ({ request }) => {

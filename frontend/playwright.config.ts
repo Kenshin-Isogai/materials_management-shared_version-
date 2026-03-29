@@ -1,7 +1,10 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const baseURL = process.env.PLAYWRIGHT_BASE_URL?.trim() || 'http://127.0.0.1';
+
 export default defineConfig({
   testDir: './e2e',
+  globalSetup: './e2e/global.setup.ts',
   timeout: 30 * 1000,
   expect: {
     timeout: 5000
@@ -12,7 +15,7 @@ export default defineConfig({
   workers: 1, // 1 worker for stable sequential CRUD testing
   reporter: 'list',
   use: {
-    baseURL: 'http://127.0.0.1',
+    baseURL,
     trace: 'on-first-retry',
     viewport: { width: 1280, height: 720 },
   },

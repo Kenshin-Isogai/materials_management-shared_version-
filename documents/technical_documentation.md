@@ -586,7 +586,7 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 - Minimum gate:
   - run backend full tests (`uv run python -m pytest`)
   - run frontend build check when frontend changed (`npm run build`)
-  - run frontend E2E tests via Playwright (`npx playwright test`)
+  - run frontend E2E tests via the isolated Docker wrapper (`.\run-e2e.ps1`)
   - run manual smoke checks for touched flows
 - Keep docs in the same change set as behavior updates.
 - For release history, maintain changelog/migration notes once GitHub repository workflow is established.
@@ -599,10 +599,10 @@ End-to-End tests are implemented using Playwright to verify the full-stack behav
 - **Configuration**: `frontend/playwright.config.ts` and `frontend/tsconfig.e2e.json`
 - **Execution**:
   ```powershell
-  cd frontend
-  npx playwright test
+  .\run-e2e.ps1
   ```
-- **Stateful Tests**: Tests in `05-users-crud.spec.ts`, `06-projects-crud.spec.ts`, and `07-items-orders-csv-crud.spec.ts` perform real database mutations. They include `afterAll` hooks to attempt API-level cleanup, but should ideally be run against a dedicated test environment or with the understanding that they modify the current database state.
+- **Runtime Isolation**: `run-e2e.ps1` starts a dedicated Docker Compose project using the normal compose file with `NGINX_HOST_PORT=8088`, bootstraps an `e2e.admin` user in Playwright global setup, then always tears the project down with `down -v` so PostgreSQL and appdata artifacts do not leak into the normal local stack.
+- **Stateful Tests**: Tests in `05-users-crud.spec.ts`, `06-projects-crud.spec.ts`, and `07-items-orders-csv-crud.spec.ts` still perform real mutations, but they now target the isolated E2E runtime instead of the default shared local stack. The specs retain API cleanup hooks as a secondary safety net.
 - **Reporting**: Playwright HTML reports can be viewed after a failure using `npx playwright show-report`.
 
 ## Recommended update workflow

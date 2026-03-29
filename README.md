@@ -106,8 +106,15 @@ cd frontend
 npm install
 $env:VITE_API_BASE = "http://127.0.0.1:8000/api"
 npm run dev
-npx playwright test (to run automated UI tests)
 ```
+
+Automated UI tests should use the isolated Docker workflow from the repo root so test data does not leak into the normal local stack:
+
+```powershell
+.\run-e2e.ps1
+```
+
+This wrapper sets `NGINX_HOST_PORT=8088` for the E2E stack, so Playwright does not need the normal local `:80` frontend binding.
 
 ## Cloud Run Runtime Notes
 
@@ -159,8 +166,19 @@ $env:PYTHONPATH = "backend"
 uv run --project backend python -m pytest --import-mode=importlib
 cd ..\frontend
 npm run test
-npx playwright test
 npm run build
+```
+
+Run Playwright from the repo root with the isolated Docker stack:
+
+```powershell
+.\run-e2e.ps1
+```
+
+To fully reinitialize the normal local Docker app state before starting it again, use:
+
+```powershell
+.\start-app.ps1 -ResetData
 ```
 
 For targeted backend slices from the repo root, keep the same `TEST_DATABASE_URL` / `PYTHONPATH` setup and run `uv run --project backend python -m pytest --import-mode=importlib backend/tests/...`.
