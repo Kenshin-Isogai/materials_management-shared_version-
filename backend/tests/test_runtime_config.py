@@ -41,7 +41,7 @@ def test_cloud_run_runtime_defaults_to_tmp_app_data_root_and_port():
         _reload_config()
 
 
-def test_cloud_run_runtime_skips_legacy_workspace_migration(tmp_path: Path):
+def test_workspace_layout_no_longer_migrates_legacy_workspace_paths(tmp_path: Path):
     original_env = os.environ.copy()
     try:
         workspace_root = tmp_path / "workspace"
@@ -50,7 +50,6 @@ def test_cloud_run_runtime_skips_legacy_workspace_migration(tmp_path: Path):
         legacy_quotations.mkdir(parents=True, exist_ok=True)
         (legacy_quotations / "Q-001.pdf").write_bytes(b"%PDF-1.4 test")
 
-        os.environ["APP_RUNTIME_TARGET"] = "cloud_run"
         os.environ["APP_DATA_ROOT"] = str(app_data_root)
 
         config = _reload_config()

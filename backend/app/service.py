@@ -131,6 +131,13 @@ def _stored_object_from_path(path: Path) -> StoredObject:
     )
 
 
+def _safe_stat_storage_ref(storage_ref: str) -> StoredObject | None:
+    try:
+        return stat_storage_ref(storage_ref)
+    except AppError:
+        return None
+
+
 def _register_generated_artifact(
     conn: sqlite3.Connection,
     stored: StoredObject,
@@ -256,11 +263,8 @@ def get_generated_artifact(conn: sqlite3.Connection, artifact_id: str) -> dict[s
             status_code=404,
         )
     storage_ref = str(row["storage_path"])
-    if stat_storage_ref(storage_ref) is not None:
+    if _safe_stat_storage_ref(storage_ref) is not None:
         return _artifact_payload_from_row(row)
-    legacy_path = Path(storage_ref)
-    if legacy_path.exists() and legacy_path.is_file():
-        return _register_generated_artifact(conn, _stored_object_from_path(legacy_path))
     raise AppError(
         code="ARTIFACT_NOT_FOUND",
         message=f"Generated artifact '{artifact_id}' not found",
@@ -289,11 +293,9 @@ def list_generated_artifacts(conn: sqlite3.Connection, *, artifact_type: str | N
     sql += " ORDER BY created_at DESC, artifact_id DESC"
     for row in conn.execute(sql, params).fetchall():
         storage_ref = str(row["storage_path"])
-        stored = stat_storage_ref(storage_ref)
+        stored = _safe_stat_storage_ref(storage_ref)
         if stored is None:
-            legacy_path = Path(storage_ref)
-            if not legacy_path.exists() or not legacy_path.is_file():
-                continue
+            continue
         rows.append(_artifact_payload_from_row(row))
     return rows
 
@@ -307,12 +309,9 @@ def get_generated_artifact_download(conn: sqlite3.Connection, artifact_id: str) 
             status_code=404,
         )
     storage_ref = str(row["storage_path"])
-    stored = stat_storage_ref(storage_ref)
+    stored = _safe_stat_storage_ref(storage_ref)
     if stored is not None:
         return read_storage_bytes(storage_ref)
-    legacy_path = Path(storage_ref)
-    if legacy_path.exists() and legacy_path.is_file():
-        return str(row["filename"]), legacy_path.read_bytes()
     raise AppError(
         code="ARTIFACT_NOT_FOUND",
         message=f"Generated artifact '{artifact_id}' not found",

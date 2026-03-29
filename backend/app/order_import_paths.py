@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import ORDERS_IMPORT_REGISTERED_ROOT, ORDERS_IMPORT_UNREGISTERED_ROOT, WORKSPACE_ROOT
+from .config import ORDERS_IMPORT_REGISTERED_ROOT, ORDERS_IMPORT_UNREGISTERED_ROOT
 from .errors import AppError
 
 CSV_FILES_DIR = "csv_files"
@@ -45,13 +45,6 @@ def ensure_roots(roots: OrderImportRoots) -> None:
         roots.registered_pdf_root,
     ):
         path.mkdir(parents=True, exist_ok=True)
-
-
-def safe_workspace_relative(path: Path) -> str:
-    try:
-        return path.resolve().relative_to(WORKSPACE_ROOT).as_posix()
-    except ValueError:
-        return path.resolve().as_posix()
 
 
 def supplier_from_unregistered_csv_path(
@@ -102,47 +95,6 @@ def supplier_from_unregistered_csv_path(
     )
 
 
-def validate_retry_unregistered_csv_path(csv_path: str | Path, *, roots: OrderImportRoots) -> Path:
-    path = Path(csv_path)
-    if not path.exists():
-        raise AppError(
-            code="UNREGISTERED_CSV_NOT_FOUND",
-            message=f"CSV not found: {path}",
-            status_code=404,
-        )
-    resolved = path.resolve()
-    unreg = roots.unregistered_root.resolve()
-    try:
-        resolved.relative_to(unreg)
-    except ValueError as exc:
-        raise AppError(
-            code="INVALID_UNREGISTERED_PATH",
-            message=f"{resolved} is not under {unreg}",
-            status_code=422,
-        ) from exc
-    if resolved.suffix.lower() != ".csv":
-        raise AppError(
-            code="INVALID_CSV",
-            message=f"File must be CSV: {resolved}",
-            status_code=422,
-        )
-    if resolved.name.endswith("_missing_items_registration.csv"):
-        raise AppError(
-            code="INVALID_CSV",
-            message=f"Retry target must be order CSV, not missing-items CSV: {resolved.name}",
-            status_code=422,
-        )
-    return resolved
-
-
-def iter_unregistered_order_csvs(roots: OrderImportRoots) -> list[Path]:
-    return sorted(
-        [
-            p
-            for p in roots.unregistered_csv_root.rglob("*.csv")
-            if not p.name.endswith("_missing_items_registration.csv")
-        ]
-    )
 
 
 def registered_csv_supplier_dir(roots: OrderImportRoots, supplier_name: str) -> Path:

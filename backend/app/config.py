@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import os
-import shutil
-import stat
 import tempfile
 from pathlib import Path
 
@@ -140,49 +138,7 @@ def get_cors_allowed_origins() -> list[str]:
     origins = [value.strip() for value in raw.split(",") if value.strip()]
     return origins
 
-
-def _remove_readonly(func, path, _exc_info):  # type: ignore[no-untyped-def]
-    os.chmod(path, stat.S_IWRITE)
-    func(path)
-
-
 def ensure_workspace_layout() -> None:
-    if not is_cloud_run_runtime():
-        legacy_workspace_root = WORKSPACE_ROOT
-        legacy_imports_root = legacy_workspace_root / "imports"
-        legacy_items_root = legacy_imports_root / "items"
-        legacy_orders_root = legacy_imports_root / "orders"
-
-        legacy_pending = legacy_items_root / "pending"
-        legacy_processed = legacy_items_root / "processed"
-        if legacy_pending.is_dir() and not ITEMS_IMPORT_UNREGISTERED_ROOT.exists():
-            ITEMS_IMPORT_ROOT.mkdir(parents=True, exist_ok=True)
-            legacy_pending.rename(ITEMS_IMPORT_UNREGISTERED_ROOT)
-        if legacy_processed.is_dir() and not ITEMS_IMPORT_REGISTERED_ROOT.exists():
-            ITEMS_IMPORT_ROOT.mkdir(parents=True, exist_ok=True)
-            legacy_processed.rename(ITEMS_IMPORT_REGISTERED_ROOT)
-
-        legacy_quotations = legacy_workspace_root / "quotations"
-        if legacy_quotations.is_dir() and not ORDERS_IMPORT_ROOT.exists():
-            IMPORTS_ROOT.mkdir(parents=True, exist_ok=True)
-            try:
-                shutil.copytree(str(legacy_quotations), str(ORDERS_IMPORT_ROOT))
-                shutil.rmtree(str(legacy_quotations), onerror=_remove_readonly)
-            except OSError:
-                pass
-
-        # Preserve historical repo-local imports when APP_DATA_ROOT now points elsewhere.
-        if legacy_orders_root.is_dir() and not ORDERS_IMPORT_ROOT.exists():
-            try:
-                shutil.copytree(str(legacy_orders_root), str(ORDERS_IMPORT_ROOT))
-            except OSError:
-                pass
-        if legacy_items_root.is_dir() and not ITEMS_IMPORT_ROOT.exists():
-            try:
-                shutil.copytree(str(legacy_items_root), str(ITEMS_IMPORT_ROOT))
-            except OSError:
-                pass
-
     for path in (
         APP_DATA_ROOT,
         GENERATED_ARTIFACTS_ROOT,

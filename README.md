@@ -31,6 +31,7 @@ For Cloud Run deployment posture, the backend now supports:
 - default ephemeral app-data root under `/tmp` when `APP_DATA_ROOT` is not set
 - startup that skips legacy repo/workspace folder migration in Cloud Run mode
 - startup migration disabled by default in Cloud Run mode
+- frontend nginx image no longer assumes a backend container-side `/api` proxy in the Cloud Run-target image
 - environment-driven DB pool settings (`DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT`, `DB_POOL_RECYCLE_SECONDS`)
 - environment-driven upload/concurrency guardrails (`MAX_UPLOAD_BYTES`, `HEAVY_REQUEST_TARGET_SECONDS`, `CLOUD_RUN_CONCURRENCY_TARGET`)
 - explicit cloud deployment metadata for Cloud SQL and storage (`INSTANCE_CONNECTION_NAME`, `STORAGE_BACKEND`, `GCS_BUCKET`, `GCS_OBJECT_PREFIX`, `BACKEND_PUBLIC_BASE_URL`, `FRONTEND_PUBLIC_BASE_URL`)
@@ -78,6 +79,8 @@ Stop the stack with:
 - API: `http://127.0.0.1/api`
 - Swagger: `http://127.0.0.1/docs`
 
+The Docker Compose stack keeps the local `/api` path by mounting `frontend/nginx.local-proxy.conf`, while the built frontend image keeps `frontend/nginx.conf` as the cloud-first no-proxy default.
+
 4. Stop:
 
 ```powershell
@@ -111,6 +114,7 @@ npm run dev
 - Set `DATABASE_URL` from Secret Manager / Cloud SQL connection config
 - Set `INSTANCE_CONNECTION_NAME` for the target Cloud SQL instance and keep `DATABASE_URL` on the Cloud SQL Unix-socket form
 - Set `VITE_API_BASE` to the backend Cloud Run public `/api` URL for split-service deployment
+- The built frontend image no longer proxies `/api` to an internal backend container by default; browser API traffic should come from `VITE_API_BASE`
 - Set `BACKEND_PUBLIC_BASE_URL` and `FRONTEND_PUBLIC_BASE_URL` if you want the runtime health surface to report the intended public URLs explicitly
 - Set `CORS_ALLOWED_ORIGINS` to the frontend Cloud Run origin explicitly
 - Keep `MAX_UPLOAD_BYTES=33554432` unless you intentionally revise the first-rollout 32 MB ceiling
@@ -120,6 +124,7 @@ npm run dev
 - If `APP_DATA_ROOT` is omitted, the backend now defaults to an ephemeral temp directory suitable for Cloud Run
 - Cloud Run startup no longer copies legacy `quotations/` or repo-local `imports/` folders into runtime storage
 - Cloud Run should run Alembic as a deployment step; request-serving startup should keep `AUTO_MIGRATE_ON_STARTUP=0`
+- local Docker Compose now relies on normal backend startup migration (`AUTO_MIGRATE_ON_STARTUP=1` by default in compose) instead of embedding `alembic upgrade head` into the container command
 - manual order-import missing-item outputs are now exposed through artifact metadata/download endpoints rather than raw path fields
 - Legacy ZIP/PDF compatibility import remains a local/shared-server workflow, not the target Cloud Run path
 - Concrete first-rollout deploy steps are documented in [documents/gcp_cloud_run_rollout/cloud_run_deployment_runbook.md](documents/gcp_cloud_run_rollout/cloud_run_deployment_runbook.md)

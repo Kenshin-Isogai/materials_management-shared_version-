@@ -10,7 +10,7 @@ Last updated: 2026-03-28 (JST)
   - Frontend: React + TypeScript + Vite + SWR
 - Runtime posture:
   - Current: Docker Compose deployment target for shared Windows Server plus local development override
-  - Direction: shared-server operation with anonymous reads and header-based named mutations, plus Cloud Run-safe backend startup
+  - Direction: shared-server operation with anonymous reads and header-based named mutations, plus Cloud Run-safe backend/frontend packaging
 
 ## 2. Repository Structure (active areas)
 
@@ -24,6 +24,8 @@ Last updated: 2026-03-28 (JST)
 - `frontend/`
   - `src/pages/`: active pages wired into the router: Dashboard, Workspace, Items (Search), Locations, Projects, Procurement, Orders, Inventory (Movements), Reservations (Reserve), BOM, Snapshot, History, Master, Users. Unused page files retained but not routed: `PlanningPage.tsx`, `RfqPage.tsx`, `AssembliesPage.tsx`, `PurchaseCandidatesPage.tsx`.
   - `src/lib/api.ts`: API client now normalizes `VITE_API_BASE`, supports absolute backend URLs for split Cloud Run services, and injects `X-User-Name` on mutations
+  - `nginx.conf`: cloud-first static frontend config that does not proxy `/api`
+  - `nginx.local-proxy.conf`: local Docker Compose nginx config that keeps same-origin `/api` proxying to the backend container
 - `documents/`
   - `technical_documentation.md`
   - `team_onboarding.md`
@@ -39,13 +41,15 @@ Last updated: 2026-03-28 (JST)
   - Cloud Run mode defaults `APP_DATA_ROOT` under the temp directory when unset
   - Cloud Run mode skips legacy workspace/import folder migration on startup
   - Cloud Run mode defaults `AUTO_MIGRATE_ON_STARTUP=0`; local runtime still defaults to startup migration unless explicitly disabled
+  - base Docker Compose now relies on backend startup migration rather than running `alembic upgrade head` inline in the backend container command
   - DB pool behavior is controlled by `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT`, and `DB_POOL_RECYCLE_SECONDS`
   - first-rollout Cloud Run guardrails are controlled by `MAX_UPLOAD_BYTES`, `HEAVY_REQUEST_TARGET_SECONDS`, and `CLOUD_RUN_CONCURRENCY_TARGET`
   - browser CORS defaults are runtime-specific: localhost-friendly defaults locally, explicit `CORS_ALLOWED_ORIGINS` required for Cloud Run browser traffic
   - deployment metadata/config now also exposes `INSTANCE_CONNECTION_NAME`, `BACKEND_PUBLIC_BASE_URL`, `FRONTEND_PUBLIC_BASE_URL`, `STORAGE_BACKEND`, `GCS_BUCKET`, and `GCS_OBJECT_PREFIX`
   - generated artifact persistence now goes through a storage boundary (`backend/app/storage.py`), with current local refs stored as `local://generated_artifacts/...`
   - the storage layer now supports `gcs://...` refs for durable Cloud Run storage and keeps `local://...` for local/shared-server operation
-  - default durable item/order archive moves now also route through that storage boundary; local disk remains the mechanism for temporary staging and compatibility directory scans
+  - default durable item/order archive moves now also route through that storage boundary; local disk remains the mechanism for temporary staging and a narrower set of local compatibility flows
+  - generated artifact retrieval no longer depends on legacy raw-path fallback
 
 ## 3. Backend State
 

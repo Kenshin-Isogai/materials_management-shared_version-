@@ -63,7 +63,6 @@ def workspace_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str
     monkeypatch.setattr(service, "ITEMS_IMPORT_REGISTERED_ROOT", items_registered_root)
     monkeypatch.setattr(service, "ITEMS_IMPORT_STAGING_ROOT", items_staging_root)
 
-    monkeypatch.setattr(order_import_paths, "WORKSPACE_ROOT", workspace_root)
     monkeypatch.setattr(order_import_paths, "ORDERS_IMPORT_UNREGISTERED_ROOT", orders_unregistered_root)
     monkeypatch.setattr(order_import_paths, "ORDERS_IMPORT_REGISTERED_ROOT", orders_registered_root)
 

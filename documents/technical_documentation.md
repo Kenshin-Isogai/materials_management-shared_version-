@@ -11,7 +11,7 @@ This document explains the implemented architecture of the Materials Management 
 - Runtime mode is now explicit.
   - local/shared-server Docker mode: `APP_RUNTIME_TARGET=local`
   - Cloud Run mode: `APP_RUNTIME_TARGET=cloud_run` or implicit Cloud Run `K_SERVICE`
-  - Cloud Run mode defaults runtime file roots under the OS temp directory and skips legacy workspace folder migration
+  - Cloud Run mode defaults runtime file roots under the OS temp directory and no longer performs historical workspace folder migration
   - Cloud Run mode defaults `AUTO_MIGRATE_ON_STARTUP` to off, so Alembic can run as a deployment step instead of on autoscaled request-serving startup
   - DB engine tuning is environment-driven through `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT`, and `DB_POOL_RECYCLE_SECONDS`
   - first-rollout request guardrails are environment-driven through `MAX_UPLOAD_BYTES` (default 32 MB), `HEAVY_REQUEST_TARGET_SECONDS` (default 60), and `CLOUD_RUN_CONCURRENCY_TARGET` (default 10)
@@ -21,7 +21,8 @@ This document explains the implemented architecture of the Materials Management 
   - Cloud Run defaults to no allowed browser origins until `CORS_ALLOWED_ORIGINS` is set explicitly
 - Docker deployment stack:
   - `docker-compose.yml` (production), `docker-compose.override.yml` (local dev), `docker-compose.test.yml` (test DB)
-  - `backend/Dockerfile`, `frontend/Dockerfile`, `frontend/nginx.conf`
+  - `backend/Dockerfile`, `frontend/Dockerfile`, `frontend/nginx.conf`, `frontend/nginx.local-proxy.conf`
+  - the built frontend image keeps a cloud-first nginx config that does not proxy `/api`; local Docker Compose mounts `frontend/nginx.local-proxy.conf` to preserve same-origin `/api` access
 - Header-based user identification for mutation requests:
   - anonymous reads remain allowed
   - mutation requests require `X-User-Name`
@@ -49,6 +50,7 @@ This document explains the implemented architecture of the Materials Management 
   - current implementation persists generated artifacts under a local storage reference (`local://generated_artifacts/...`) so the API no longer depends on browser-visible workspace paths
   - storage now supports both `local://...` and `gcs://...` refs; Cloud Run durable storage can use `STORAGE_BACKEND=gcs` with `GCS_BUCKET` and `GCS_OBJECT_PREFIX`
   - the Orders UI now treats artifact entries as download-only records and no longer displays workspace-relative paths
+  - generated artifact lookups now require storage-backed refs; raw filesystem artifact paths are no longer part of the active runtime contract
 - Manual Items CSV import archives now use the same storage boundary for their archive reference metadata, and the registered-month folder is treated as read-only history instead of a consolidation work queue.
 - Default durable move targets for registered item CSVs and registered order CSV/PDF files now also route through the storage layer, while request-scoped staging remains local-path based.
 - Retired order-batch compatibility internals have been removed.
@@ -136,8 +138,8 @@ flowchart LR
         FE[React Frontend\nfrontend/src]
     end
 
-    FE -->|HTTP JSON /api| NGINX[nginx reverse proxy\nfrontend/nginx.conf]
-    NGINX -->|proxy_pass| API[FastAPI Adapter\nbackend/app/api.py]
+    FE -->|HTTP JSON| NGINX[nginx static frontend\nfrontend/nginx.conf]
+    FE -->|HTTP JSON /api| API[FastAPI Adapter\nbackend/app/api.py]
 
     API --> SVC[Domain Service Layer\nbackend/app/service.py]
 
@@ -156,11 +158,12 @@ flowchart LR
 2. Current-state table + event log model.
    `inventory_ledger` gives fast current stock lookup, while `transaction_log` enables traceability and undo.
 3. Filesystem-aware order ingestion.
-    Orders are imported from CSV/PDF folders, then moved to canonical registered paths to preserve auditability.
-   Legacy CSV `pdf_link` text is now treated as compatibility-import input only, not as persisted quotation metadata.
-   Imported order CSVs are historical artifacts only; order and quotation edits now use database state as the source of truth and do not rescan or rewrite archived CSV content.
-   Shared-server upload adapters are now limited to request-scoped temporary files where needed; the Items missing-item batch path processes uploaded CSV bytes directly.
-   Generated artifact retrieval is now routed through a storage boundary so the public API can use opaque artifact IDs instead of raw file locations.
+     Orders are imported from CSV/PDF folders, then moved to canonical registered paths to preserve auditability.
+    Legacy CSV `pdf_link` text is now treated as compatibility-import input only, not as persisted quotation metadata.
+    Imported order CSVs are historical artifacts only; order and quotation edits now use database state as the source of truth and do not rescan or rewrite archived CSV content.
+    Shared-server upload adapters are now limited to request-scoped temporary files where needed; the Items missing-item batch path processes uploaded CSV bytes directly.
+    Generated artifact retrieval is now routed through a storage boundary so the public API can use opaque artifact IDs instead of raw file locations.
+    Cloud Run mode no longer trusts legacy raw-path artifact fallback.
 4. Reversible and inspectable bulk imports.
    Item imports store job and row-level effects (`import_jobs`, `import_job_effects`) so undo/redo can be state-checked and safe.
    Manual order CSV imports now also write `import_jobs` / `import_job_effects` records (`import_type='orders'`) so missing-item outcomes and created-order rows are inspectable without relying on folder state.

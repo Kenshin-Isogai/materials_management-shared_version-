@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 from io import StringIO
 
-
 def _make_orders_csv(rows: list[dict[str, str]]) -> bytes:
     output = StringIO()
     writer = csv.DictWriter(

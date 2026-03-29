@@ -1,3 +1,36 @@
+## 2026-03-29
+
+### Changed
+
+- Continued the Cloud Run cleanup on the frontend/backend runtime contract.
+  - `frontend/nginx.conf` is now cloud-first and no longer proxies `/api` to `backend:8000`
+  - added `frontend/nginx.local-proxy.conf` so local Docker Compose can keep same-origin `/api` behavior without preserving that proxy assumption in the built image
+  - `docker-compose.yml` now mounts that local proxy config explicitly for the shared-server stack
+- Separated local backend startup from the old inline migration command pattern.
+  - base Docker Compose now relies on normal backend startup migration via `AUTO_MIGRATE_ON_STARTUP=1` instead of embedding `uv run alembic upgrade head` in the container command
+  - this keeps local convenience behavior while making the container startup contract closer to Cloud Run
+- Hardened generated artifact lookup against Cloud Run local-path compatibility fallback.
+  - `backend/app/service.py` now ignores legacy raw filesystem artifact paths when runtime posture is Cloud Run
+  - local/shared-server runtime still keeps that fallback for older local artifacts
+- Removed unused order-import directory-scan helpers from the active code path.
+  - `backend/app/order_import_paths.py` now keeps only the path helpers still used by active import flows
+  - backend tests and fixtures were updated to match the reduced helper surface
+- Removed the last runtime support for historical workspace and raw-path artifact migration behavior.
+  - `backend/app/config.py` no longer migrates `quotations/`, `pending/`, or `processed/` legacy folders during startup
+  - `backend/app/service.py` now expects generated artifacts to resolve through storage-backed refs only
+
+### Tests
+
+- Backend:
+  - `uv run python -m pytest tests/test_runtime_config.py tests/test_order_import_paths.py`
+  - `uv run --project backend python -m pytest --import-mode=importlib backend/tests/test_document_url_migration.py`
+  - `docker compose -f docker-compose.test.yml up -d db-test`
+- Frontend:
+  - `npm run build`
+ - Docker:
+   - `docker compose -f docker-compose.yml up -d --build`
+   - validated `http://127.0.0.1/` and `http://127.0.0.1/api/health`
+
 ## 2026-03-28
 
 ### Changed
