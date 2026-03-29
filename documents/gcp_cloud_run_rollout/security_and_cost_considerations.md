@@ -11,23 +11,24 @@ This document focuses on operating the target GCP deployment safely.
 ### Current posture to treat as temporary
 
 - anonymous reads are allowed
-- mutation requests rely on `X-User-Name`
-- RBAC exists as a planned direction rather than an enforced production boundary
+- browser/API mutations now rely on verified Bearer JWT identity
+- RBAC scaffolding exists in the repository, but live production posture still depends on enforced deployment settings and cloud validation
 - the backend remains browser-reachable in the first rollout model
 
 ### Main conclusion
 
-The current codebase is cloud-aware, but its security posture is still transitional.
+The current codebase is cloud-aware and the repo-side trust boundary is now materially hardened.
 
-Treat the current mutation identity model as a short-lived rollout compromise, not as a stable production design.
+Treat manual token pasting as a local/test fallback only. The intended production browser path is Google Identity sign-in plus deployed JWKS verification.
 
 ### Immediate hardening targets
 
-1. Replace header-only mutation identity with stronger auth.
-2. Restrict diagnostic/admin endpoint exposure.
-3. Keep CORS explicit to the real frontend origin set only.
-4. Source all secrets from Secret Manager.
-5. Preserve audit visibility for imports, exports, undo, and high-impact mutations.
+1. Roll out real Google/OIDC client, issuer, audience, and JWKS settings in cloud environments.
+2. Keep manual token entry limited to local/test fallback use.
+3. Keep diagnostic/admin endpoint exposure restricted in cloud environments.
+4. Keep CORS explicit to the real frontend origin set only.
+5. Source all secrets from Secret Manager.
+6. Preserve audit visibility for imports, exports, undo, and high-impact mutations.
 
 ## 2. Robustness and recoverability
 
@@ -42,7 +43,7 @@ Treat the current mutation identity model as a short-lived rollout compromise, n
 
 ### Current gaps
 
-- stronger auth is not yet implemented
+- repository-side bearer-token auth, Google Identity UI, JWKS verification, and audit logging now exist; live cloud validation still remains
 - live cloud validation is still pending
 - Cloud SQL backup/PITR policy is documented, but real per-environment enablement is still pending
 - GCS lifecycle/versioning policy is documented, but real per-environment enablement is still pending

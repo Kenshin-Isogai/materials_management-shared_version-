@@ -1,35 +1,29 @@
 import { test, expect } from '@playwright/test';
+import { E2E_BEARER_TOKEN, authHeaders, installAccessToken } from './auth';
 
 test.describe('Users Stateful CRUD', () => {
   const testUsername = `e2e.user.${Date.now()}`;
   const testDisplayName = `E2E User ${Date.now()}`;
   let createdUserId: string | null = null;
 
+  test.beforeEach(async ({ page }) => {
+    test.skip(!E2E_BEARER_TOKEN, 'Set PLAYWRIGHT_E2E_BEARER_TOKEN before running Playwright E2E tests.');
+    await installAccessToken(page);
+  });
+
   test.afterAll(async ({ request }) => {
-    // Attempt API cleanup if we got an ID, using a dummy X-User-Name that has access
-    // The frontend users endpoint allows DELETE. If it succeeds, great. 
-    // If not, we rely on the UI deactivation below.
+    if (!E2E_BEARER_TOKEN) {
+      return;
+    }
     if (createdUserId) {
       await request.delete(`/api/users/${createdUserId}`, {
-        headers: {
-          'X-User-Name': testUsername // As the user itself or admin
-        }
+        headers: authHeaders(),
       }).catch(() => {});
     }
   });
 
   test('Create, Edit, and Deactivate User', async ({ page, request }) => {
     await page.goto('/');
-    
-    // Pick an existing user if available to enable mutations
-    const userSelect = page.locator('select').first();
-    const optionsCount = await userSelect.locator('option').count();
-    let bootstrapMode = false;
-    if (optionsCount > 1) {
-      await userSelect.selectOption({ index: 1 });
-    } else {
-      bootstrapMode = true;
-    }
 
     await page.goto('/users');
 
@@ -41,6 +35,14 @@ test.describe('Users Stateful CRUD', () => {
     // The user should appear in the list
     const userRow = page.locator('tr', { hasText: testUsername }).first();
     await expect(userRow).toBeVisible({ timeout: 10000 });
+    const usersResponse = await request.get('/api/users?include_inactive=true', { headers: authHeaders() });
+    const usersPayload = await usersResponse.json();
+    const createdUser = usersPayload.data?.find(
+      (user: { user_id: number; username: string }) => user.username === testUsername
+    );
+    if (createdUser) {
+      createdUserId = String(createdUser.user_id);
+    }
 
     // Look for ID in DOM or just proceed
     // We can extract user ID if needed, but let's just use the UI to Edit

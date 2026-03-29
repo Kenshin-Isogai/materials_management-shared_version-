@@ -355,18 +355,44 @@ class ApiPayload(BaseModel):
 class UserCreate(BaseModel):
     username: str = Field(min_length=1)
     display_name: str = Field(min_length=1)
+    email: str | None = None
+    external_subject: str | None = None
+    identity_provider: str | None = None
+    hosted_domain: str | None = None
     role: str = "operator"
     is_active: bool = True
+
+    @model_validator(mode="after")
+    def validate_identity_fields(self) -> "UserCreate":
+        if bool(self.external_subject) != bool(self.identity_provider):
+            raise ValueError("identity_provider and external_subject must be set together")
+        return self
 
 
 class UserUpdate(BaseModel):
     username: str | None = None
     display_name: str | None = None
+    email: str | None = None
+    external_subject: str | None = None
+    identity_provider: str | None = None
+    hosted_domain: str | None = None
     role: str | None = None
     is_active: bool | None = None
 
     @model_validator(mode="after")
     def validate_non_empty_payload(self) -> "UserUpdate":
-        if not ({"username", "display_name", "role", "is_active"} & set(self.__pydantic_fields_set__)):
+        if not (
+            {
+                "username",
+                "display_name",
+                "email",
+                "external_subject",
+                "identity_provider",
+                "hosted_domain",
+                "role",
+                "is_active",
+            }
+            & set(self.__pydantic_fields_set__)
+        ):
             raise ValueError("at least one user field is required")
         return self

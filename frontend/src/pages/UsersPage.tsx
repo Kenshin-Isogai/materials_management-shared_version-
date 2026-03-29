@@ -18,6 +18,10 @@ export function UsersPage() {
   const [createForm, setCreateForm] = useState({
     username: "",
     display_name: "",
+    email: "",
+    external_subject: "",
+    identity_provider: "test-oidc",
+    hosted_domain: "",
     role: "operator" as UserRole,
     is_active: true,
   });
@@ -76,6 +80,12 @@ export function UsersPage() {
           body: JSON.stringify({
             username: createForm.username.trim(),
             display_name: createForm.display_name.trim(),
+            email: createForm.email.trim() || null,
+            external_subject: createForm.external_subject.trim() || null,
+            identity_provider: createForm.external_subject.trim()
+              ? createForm.identity_provider.trim() || null
+              : null,
+            hosted_domain: createForm.hosted_domain.trim() || null,
             role: createForm.role,
             is_active: createForm.is_active,
           }),
@@ -87,6 +97,10 @@ export function UsersPage() {
       setCreateForm({
         username: "",
         display_name: "",
+        email: "",
+        external_subject: "",
+        identity_provider: "test-oidc",
+        hosted_domain: "",
         role: "operator",
         is_active: true,
       });
@@ -197,11 +211,11 @@ export function UsersPage() {
           <div>
             <h2 className="font-display text-xl font-semibold">Create User</h2>
             <p className="mt-1 text-sm text-slate-600">
-              New users become available in the header picker immediately after creation.
+              Map app users to OIDC claims so Bearer tokens resolve cleanly in the browser and on Cloud Run.
             </p>
             {!hasActiveUsers ? (
               <p className="mt-2 text-sm text-amber-700">
-                No active user exists yet. Creating the first active user is allowed without selecting one in the header.
+                No active user exists yet. Creating the first active user is allowed without a Bearer token bootstrap.
               </p>
             ) : null}
           </div>
@@ -229,6 +243,54 @@ export function UsersPage() {
               }
               placeholder="Shared Operator"
               required
+            />
+          </label>
+
+          <label className="block space-y-2 text-sm">
+            <span className="font-semibold text-slate-700">Email</span>
+            <input
+              className="input"
+              value={createForm.email}
+              onChange={(event) =>
+                setCreateForm((current) => ({ ...current, email: event.target.value }))
+              }
+              placeholder="operator@example.com"
+            />
+          </label>
+
+          <label className="block space-y-2 text-sm">
+            <span className="font-semibold text-slate-700">Identity provider</span>
+            <input
+              className="input"
+              value={createForm.identity_provider}
+              onChange={(event) =>
+                setCreateForm((current) => ({ ...current, identity_provider: event.target.value }))
+              }
+              placeholder="google"
+            />
+          </label>
+
+          <label className="block space-y-2 text-sm">
+            <span className="font-semibold text-slate-700">External subject</span>
+            <input
+              className="input"
+              value={createForm.external_subject}
+              onChange={(event) =>
+                setCreateForm((current) => ({ ...current, external_subject: event.target.value }))
+              }
+              placeholder="google-oauth2|1234567890"
+            />
+          </label>
+
+          <label className="block space-y-2 text-sm">
+            <span className="font-semibold text-slate-700">Hosted domain</span>
+            <input
+              className="input"
+              value={createForm.hosted_domain}
+              onChange={(event) =>
+                setCreateForm((current) => ({ ...current, hosted_domain: event.target.value }))
+              }
+              placeholder="example.com"
             />
           </label>
 
@@ -273,8 +335,8 @@ export function UsersPage() {
             <div>
               <h2 className="font-display text-xl font-semibold">User Directory</h2>
               <p className="mt-1 text-sm text-slate-600">
-                Active users remain selectable for mutations. Inactive users stay visible here for reactivation.
-              </p>
+                 Active users keep their OIDC mapping and stay visible here for review or reactivation.
+               </p>
             </div>
             <button
               className="button-subtle"
@@ -305,6 +367,8 @@ export function UsersPage() {
                 <tr className="text-left text-slate-500">
                   <th className="px-3 py-2">Username</th>
                   <th className="px-3 py-2">Display name</th>
+                  <th className="px-3 py-2">Email</th>
+                  <th className="px-3 py-2">OIDC mapping</th>
                   <th className="px-3 py-2">Role</th>
                   <th className="px-3 py-2">Status</th>
                   <th className="px-3 py-2">Updated</th>
@@ -330,6 +394,18 @@ export function UsersPage() {
                           />
                         ) : (
                           <span>{user.display_name}</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-3 text-slate-600">{user.email || "-"}</td>
+                      <td className="px-3 py-3 text-xs text-slate-600">
+                        {user.identity_provider && user.external_subject ? (
+                          <div className="space-y-1">
+                            <div className="font-mono">{user.identity_provider}</div>
+                            <div className="font-mono">{user.external_subject}</div>
+                            <div>{user.hosted_domain || "-"}</div>
+                          </div>
+                        ) : (
+                          <span>-</span>
                         )}
                       </td>
                       <td className="px-3 py-3">

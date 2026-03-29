@@ -15,10 +15,10 @@ The repository already contains most of the code-level changes needed for:
 - PostgreSQL on Cloud SQL
 - durable application-managed objects on GCS
 
-The main remaining work is operational rather than structural:
+The main remaining work is now the live-production layer on top of an already-hardened repository:
 
-- stronger production authentication
 - real GCP resource wiring and live validation
+- cloud-side Google/OIDC client and issuer rollout
 - backup/restore and rollback procedure ownership
 - production monitoring, alerting, and routine change management
 
@@ -31,7 +31,8 @@ The main remaining work is operational rather than structural:
 - persistent application-managed files use GCS
 - Cloud SQL uses the connector / Unix socket model
 - the first rollout keeps nginx in the frontend container
-- `X-User-Name` remains temporary and must not be mistaken for the final auth boundary
+- repository auth now assumes Bearer JWT identity and already includes Google Identity UI, JWKS-backed verification, diagnostics gating, and structured domain audit logs
+- order import no longer accepts legacy `pdf_link`; `quotation_document_url` is now the only supported contract
 
 ## Reading order
 
@@ -55,7 +56,7 @@ Use these only as supporting references:
 - `cloud_run_deployment_runbook.md`: deployment, update, rollback, and recovery workflow
 - `security_and_cost_considerations.md`: security, robustness, and cost guardrails
 - `implementation_plan.md`: remaining hardening workstreams
-- `implementation_slices.md`: compressed execution order for the remaining work
+- `implementation_slices.md`: compressed execution order split between repo-side follow-up and post-project work
 - `task_breakdown_by_file.md`: repository surfaces that still matter if further hardening code changes are needed
 
 ## Scope rule

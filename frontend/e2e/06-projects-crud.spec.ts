@@ -1,12 +1,20 @@
 import { test, expect } from '@playwright/test';
+import { E2E_BEARER_TOKEN, authHeaders, installAccessToken } from './auth';
 
 test.describe('Projects Stateful CRUD', () => {
   const testProjectName = `E2E Test Project ${Date.now()}`;
   const editedProjectName = `${testProjectName} Edited`;
   let currentProjectName = testProjectName;
-  let selectedUsername = 'e2e.admin';
+
+  test.beforeEach(async ({ page }) => {
+    test.skip(!E2E_BEARER_TOKEN, 'Set PLAYWRIGHT_E2E_BEARER_TOKEN before running Playwright E2E tests.');
+    await installAccessToken(page);
+  });
 
   test.afterAll(async ({ request }) => {
+    if (!E2E_BEARER_TOKEN) {
+      return;
+    }
     const res = await request.get('/api/projects');
     expect(res.ok()).toBeTruthy();
 
@@ -23,21 +31,12 @@ test.describe('Projects Stateful CRUD', () => {
     }
 
     const deleteResponse = await request.delete(`/api/projects/${testProject.project_id}`, {
-      headers: { 'X-User-Name': selectedUsername }
+      headers: authHeaders()
     });
     expect(deleteResponse.ok()).toBeTruthy();
   });
 
   test('Create, Edit, and Manage Project', async ({ page }) => {
-    await page.goto('/');
-    const userSelect = page.locator('select').first();
-    const optionsCount = await userSelect.locator('option').count();
-    if (optionsCount > 1) {
-      const userValue = await userSelect.locator('option').nth(1).getAttribute('value');
-      if (userValue) selectedUsername = userValue;
-      await userSelect.selectOption({ index: 1 });
-    }
-
     await page.goto('/projects');
 
     // 1. Create Project

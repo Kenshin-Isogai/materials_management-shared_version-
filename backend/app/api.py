@@ -4,13 +4,14 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import json
 import logging
+import re
 from time import perf_counter
 from typing import Any
 from uuid import uuid4
 
 from pathlib import Path
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
@@ -19,9 +20,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from .config import (
     APP_PORT,
     APP_DATA_ROOT,
-    AUTH_MODE_DRY_RUN,
-    AUTH_MODE_ENFORCED,
     AUTH_MODE_NONE,
+    AUTH_MODE_OIDC_DRY_RUN,
+    AUTH_MODE_OIDC_ENFORCED,
     AUTO_MIGRATE_ON_STARTUP,
     BACKEND_PUBLIC_BASE_URL,
     CLOUD_RUN_CONCURRENCY_TARGET,
@@ -34,13 +35,31 @@ from .config import (
     INSTANCE_CONNECTION_NAME,
     MAX_UPLOAD_BYTES,
     LOG_LEVEL,
+    OIDC_PROVIDER,
+    get_diagnostics_auth_role,
+    RBAC_MODE_DRY_RUN,
+    RBAC_MODE_ENFORCED,
     STRUCTURED_LOGGING,
     get_auth_mode,
     get_cors_allowed_origins,
     get_recovery_policy_summary,
+    get_rbac_mode,
     get_runtime_target,
     is_cloud_run_runtime,
     uses_cloud_sql_unix_socket,
+)
+from .auth import (
+    auth_allows_dry_run,
+    auth_is_enforced,
+    authorization_mode_summary,
+    build_identity_resolver,
+    endpoint_policy_summary,
+    map_identity_to_user,
+    rbac_allows_dry_run,
+    rbac_is_enforced,
+    request_user_role,
+    required_role_for_request,
+    role_satisfies,
 )
 from .db import get_connection, init_db
 from .errors import AppError
@@ -86,8 +105,16 @@ from .schemas import (
 
 
 LOGGER = logging.getLogger("materials.api")
-_VALID_ROLES = {"admin", "operator", "viewer"}
-_ROLE_PRIORITY = {"viewer": 1, "operator": 2, "admin": 3}
+_AUDITED_EXPORT_PATTERNS = (
+    re.compile(r"^/api/artifacts/[^/]+/download$"),
+    re.compile(r"^/api/workspace/planning-export(?:-multi)?$"),
+    re.compile(r"^/api/procurement-batches/[^/]+/export\.csv$"),
+)
+_AUDIT_EXCLUDED_NON_GET_PATTERNS = (
+    re.compile(r"^/api/.+/preview(?:/.*)?$"),
+    re.compile(r"^/api/projects/requirements/preview/unresolved-items\.csv$"),
+    re.compile(r"^/api/bom/analyze$"),
+)
 
 
 class _StructuredLogFormatter(logging.Formatter):
@@ -122,35 +149,6 @@ def _configure_logging() -> None:
 
 def _log_event(level: int, message: str, **structured_fields: Any) -> None:
     LOGGER.log(level, message, extra={"structured_fields": structured_fields})
-
-
-def _normalize_role(value: str | None) -> str | None:
-    if value is None:
-        return None
-    normalized = value.strip().lower()
-    if not normalized:
-        return None
-    if normalized not in _VALID_ROLES:
-        raise AppError(
-            code="INVALID_ROLE_HEADER",
-            message="X-User-Role must be one of admin, operator, or viewer",
-            status_code=422,
-        )
-    return normalized
-
-
-def _request_user_role(request: Request) -> str | None:
-    user = getattr(request.state, "user", None)
-    if not isinstance(user, dict):
-        return None
-    role = user.get("role")
-    return str(role).strip().lower() if role else None
-
-
-def _role_satisfies(actual_role: str | None, required_role: str) -> bool:
-    if actual_role is None:
-        return False
-    return _ROLE_PRIORITY.get(actual_role, 0) >= _ROLE_PRIORITY[required_role]
 
 
 def _db_ready(database_url: str | None) -> tuple[bool, str | None]:
@@ -257,46 +255,6 @@ def _db_dep(app: FastAPI):
 
     return _get_db
 
-
-def _optional_role_dep():
-    def _get_role(x_user_role: str | None = Header(default=None, alias="X-User-Role")) -> str | None:
-        return _normalize_role(x_user_role)
-
-    return _get_role
-
-
-def _admin_role_dep():
-    def _require_admin(request: Request):
-        auth_mode = get_auth_mode()
-        if auth_mode == AUTH_MODE_NONE or getattr(request.state, "bootstrap_allowed", False):
-            return
-        actual_role = _request_user_role(request)
-        if _role_satisfies(actual_role, "admin"):
-            return
-        details = {
-            "required_role": "admin",
-            "actual_role": actual_role,
-            "auth_mode": auth_mode,
-            "path": request.url.path,
-        }
-        if auth_mode == AUTH_MODE_DRY_RUN:
-            _log_event(
-                logging.WARNING,
-                "RBAC dry-run would deny request",
-                event="authorization.dry_run_denied",
-                **details,
-            )
-            return
-        raise AppError(
-            code="FORBIDDEN",
-            message="Admin role is required for this endpoint",
-            status_code=403,
-            details=details,
-        )
-
-    return Depends(_require_admin)
-
-
 def cleanup_unreg_file_with_retry(path_str: str) -> None:
     import time
     from pathlib import Path
@@ -310,64 +268,171 @@ def cleanup_unreg_file_with_retry(path_str: str) -> None:
         except OSError:
             pass
 
-
-def _is_read_only_request(request: Request) -> bool:
-    return request.method in {"GET", "HEAD", "OPTIONS"} or request.url.path == "/api/health"
-
-
 def _allows_first_user_bootstrap(request: Request) -> bool:
     return request.method == "POST" and request.url.path == "/api/users"
 
 
-class UserIdentityMiddleware(BaseHTTPMiddleware):
+def _app_error_response(exc: AppError) -> JSONResponse:
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "status": "error",
+            "error": {
+                "code": exc.code,
+                "message": exc.message,
+                "details": exc.details,
+            },
+        },
+    )
+
+
+def _should_emit_domain_audit(request: Request, response: Response) -> bool:
+    path = request.url.path
+    method = request.method.upper()
+    if not path.startswith("/api/"):
+        return False
+    if response.status_code >= 400:
+        return False
+    if method == "GET":
+        return any(pattern.match(path) for pattern in _AUDITED_EXPORT_PATTERNS)
+    return not any(pattern.match(path) for pattern in _AUDIT_EXCLUDED_NON_GET_PATTERNS)
+
+
+def _emit_domain_audit_event(request: Request, response: Response) -> None:
+    user = getattr(request.state, "user", None)
+    identity = getattr(request.state, "identity", None)
+    _log_event(
+        logging.INFO,
+        "Domain audit event",
+        event="domain.audit",
+        request_id=getattr(request.state, "request_id", None),
+        method=request.method,
+        path=request.url.path,
+        query=str(request.url.query),
+        status_code=response.status_code,
+        actor_username=None if not isinstance(user, dict) else user.get("username"),
+        actor_role=request_user_role(request),
+        actor_user_id=None if not isinstance(user, dict) else user.get("user_id"),
+        identity_subject=None if not isinstance(identity, dict) else identity.get("subject"),
+        identity_email=None if not isinstance(identity, dict) else identity.get("email"),
+        identity_provider=None if not isinstance(identity, dict) else identity.get("provider"),
+    )
+
+
+class RequestIdentityMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
+        request.state.identity = None
         request.state.user = None
         request.state.bootstrap_allowed = False
-        username = (request.headers.get("X-User-Name") or "").strip()
-        if _is_read_only_request(request) and not username:
-            return await call_next(request)
-
-        if not username:
-            if _allows_first_user_bootstrap(request):
-                conn = get_connection(request.app.state.database_url)
-                try:
-                    if not service.has_active_users(conn):
-                        request.state.bootstrap_allowed = True
-                        return await call_next(request)
-                finally:
-                    conn.close()
-            return JSONResponse(
-                status_code=403,
-                content={
-                    "status": "error",
-                    "error": {
-                        "code": "USER_REQUIRED",
-                        "message": "X-User-Name header is required for mutation requests",
-                        "details": None,
-                    },
-                },
-            )
-
-        conn = get_connection(request.app.state.database_url)
+        required_role = required_role_for_request(request)
+        if _allows_first_user_bootstrap(request):
+            conn = get_connection(request.app.state.database_url)
+            try:
+                if not service.has_active_users(conn):
+                    request.state.bootstrap_allowed = True
+                    return await call_next(request)
+            finally:
+                conn.close()
+        resolver = getattr(request.app.state, "identity_resolver", None)
         try:
-            user = service.get_active_user_by_username(conn, username)
-        finally:
-            conn.close()
-
-        if user is None:
-            return JSONResponse(
-                status_code=403,
-                content={
-                    "status": "error",
-                    "error": {
-                        "code": "USER_NOT_FOUND",
-                        "message": f"User '{username}' is not registered or inactive",
-                        "details": None,
+            identity = None if resolver is None else resolver.resolve(request)
+        except AppError as exc:
+            if required_role is not None and auth_allows_dry_run():
+                _log_event(
+                    logging.WARNING,
+                    "Auth dry-run would reject request",
+                    event="authentication.dry_run_denied",
+                    path=request.url.path,
+                    method=request.method,
+                    error_code=exc.code,
+                    error_details=exc.details,
+                )
+                return await call_next(request)
+            return _app_error_response(exc)
+        if identity is not None:
+            request.state.identity = identity.as_dict()
+            try:
+                user = map_identity_to_user(request.app.state.database_url, identity)
+            except AppError as exc:
+                if required_role is not None and auth_allows_dry_run():
+                    _log_event(
+                        logging.WARNING,
+                        "Auth dry-run would reject mapped identity",
+                        event="authentication.dry_run_denied",
+                        path=request.url.path,
+                        method=request.method,
+                        error_code=exc.code,
+                        error_details=exc.details,
+                        identity_subject=identity.subject,
+                        identity_provider=identity.provider,
+                    )
+                    return await call_next(request)
+                return _app_error_response(exc)
+            if user is None:
+                missing_user_error = AppError(
+                    code="USER_NOT_FOUND",
+                    message="JWT identity is not mapped to an active user",
+                    status_code=403,
+                    details={
+                        "email": identity.email,
+                        "subject": identity.subject,
+                        "provider": identity.provider,
+                        "hosted_domain": identity.hosted_domain,
                     },
-                },
-            )
+                )
+                if required_role is not None and auth_allows_dry_run():
+                    _log_event(
+                        logging.WARNING,
+                        "Auth dry-run would reject unmapped identity",
+                        event="authentication.dry_run_denied",
+                        path=request.url.path,
+                        method=request.method,
+                        error_code=missing_user_error.code,
+                        error_details=missing_user_error.details,
+                    )
+                    return await call_next(request)
+                return _app_error_response(missing_user_error)
+            request.state.user = user
 
-        request.state.user = user
+        if required_role is not None and not getattr(request.state, "bootstrap_allowed", False):
+            user = getattr(request.state, "user", None)
+            if user is None:
+                if auth_is_enforced():
+                    return _app_error_response(
+                        AppError(code="AUTH_REQUIRED", message="Bearer token is required", status_code=401)
+                    )
+                if auth_allows_dry_run():
+                    _log_event(
+                        logging.WARNING,
+                        "Auth dry-run would require bearer token",
+                        event="authentication.dry_run_denied",
+                        path=request.url.path,
+                        method=request.method,
+                        required_role=required_role,
+                    )
+            elif required_role != "viewer" and not role_satisfies(request_user_role(request), required_role):
+                details = {
+                    "required_role": required_role,
+                    "actual_role": request_user_role(request),
+                    "path": request.url.path,
+                    "rbac_mode": get_rbac_mode(),
+                }
+                if rbac_allows_dry_run():
+                    _log_event(
+                        logging.WARNING,
+                        "RBAC dry-run would deny request",
+                        event="authorization.dry_run_denied",
+                        **details,
+                    )
+                elif rbac_is_enforced():
+                    return _app_error_response(
+                        AppError(
+                            code="FORBIDDEN",
+                            message=f"{required_role.capitalize()} role is required for this endpoint",
+                            status_code=403,
+                            details=details,
+                        )
+                    )
         return await call_next(request)
 
 
@@ -391,7 +456,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                 query=str(request.url.query),
                 duration_ms=duration_ms,
                 user=getattr(getattr(request.state, "user", None), "get", lambda *_: None)("username"),
-                role=_request_user_role(request),
+                role=request_user_role(request),
                 exception_type=exc.__class__.__name__,
             )
             raise
@@ -415,9 +480,12 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             status_code=status_code,
             duration_ms=duration_ms,
             user=None if not isinstance(user, dict) else user.get("username"),
-            role=_request_user_role(request),
+            role=request_user_role(request),
             auth_mode=get_auth_mode(),
+            rbac_mode=get_rbac_mode(),
         )
+        if _should_emit_domain_audit(request, response):
+            _emit_domain_audit_event(request, response)
         return response
 
 
@@ -487,6 +555,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         lifespan=lifespan,
     )
     app.state.database_url = database_url or db_path
+    app.state.identity_resolver = None if get_auth_mode() == AUTH_MODE_NONE else build_identity_resolver()
 
     app.add_middleware(
         CORSMiddleware,
@@ -496,22 +565,12 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         allow_headers=["*"],
     )
     app.add_middleware(RequestSizeLimitMiddleware)
-    app.add_middleware(UserIdentityMiddleware)
+    app.add_middleware(RequestIdentityMiddleware)
     app.add_middleware(RequestLoggingMiddleware)
 
     @app.exception_handler(AppError)
     async def app_error_handler(_, exc: AppError):
-        return JSONResponse(
-            status_code=exc.status_code,
-            content={
-                "status": "error",
-                "error": {
-                    "code": exc.code,
-                    "message": exc.message,
-                    "details": exc.details,
-                },
-            },
-        )
+        return _app_error_response(exc)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(_, exc: RequestValidationError):
@@ -528,8 +587,6 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         )
 
     db = Depends(_db_dep(app))
-    role = Depends(_optional_role_dep())
-    admin_only = _admin_role_dep()
 
     @app.get("/healthz")
     def liveness_probe():
@@ -603,41 +660,34 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
                     "backend_public_base_url": BACKEND_PUBLIC_BASE_URL or None,
                     "frontend_public_base_url": FRONTEND_PUBLIC_BASE_URL or None,
                 },
-                "temporary_identity_model": {
-                    "mode": "x-user-name",
-                    "temporary": True,
-                    "stronger_auth_required": True,
+                "temporary_identity_model": None,
+                "auth": authorization_mode_summary(),
+                "diagnostics": {
+                    "auth_role": get_diagnostics_auth_role(),
+                    "public_probe_paths": ["/healthz", "/readyz"],
+                    "api_diagnostic_paths": ["/api/health", "/api/auth/capabilities"],
                 },
             }
         )
 
     @app.get("/api/auth/capabilities")
-    def get_auth_capabilities(request: Request, current_role: str | None = role):
-        auth_mode = get_auth_mode()
-        planned_roles = ["admin", "operator", "viewer"]
-        effective_role = _request_user_role(request) or current_role or "operator"
+    def get_auth_capabilities(request: Request):
+        user = getattr(request.state, "user", None)
+        identity = getattr(request.state, "identity", None)
+        identity_provider = identity.get("provider") if isinstance(identity, dict) else None
         return ok(
             {
-                "auth_mode": auth_mode,
-                "auth_enforced": auth_mode == AUTH_MODE_ENFORCED,
-                "auth_dry_run": auth_mode == AUTH_MODE_DRY_RUN,
-                "planned_roles": planned_roles,
-                "effective_role": effective_role,
+                **authorization_mode_summary(),
+                "effective_role": request_user_role(request),
+                "current_user": None if not isinstance(user, dict) else user,
+                "current_identity": identity,
                 "mutation_identity": {
-                    "mode": "x-user-name",
-                    "temporary": True,
-                    "stronger_auth_required": True,
-                    "admin_only_scope": [
-                        "/api/users",
-                        "future role/setting management",
-                    ],
-                    "operator_scope": "normal business mutations, imports, exports, and planning workflows",
+                    "mode": "bearer_jwt",
+                    "provider": identity_provider or OIDC_PROVIDER,
+                    "temporary": False,
+                    "stronger_auth_required": False,
                 },
-                "endpoint_policy": {
-                    "health": "anonymous",
-                    "auth_capabilities": "anonymous",
-                    "users": "admin_when_rbac_enabled",
-                },
+                "endpoint_policy": endpoint_policy_summary(),
             }
         )
 
@@ -655,34 +705,39 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         return file_attachment(filename, content)
 
     @app.get("/api/users")
-    def get_users(include_inactive: bool = False, _=admin_only, conn= db):
+    def get_users(include_inactive: bool = False, conn= db):
         return ok(service.list_users(conn, include_inactive=include_inactive))
 
     @app.get("/api/users/me")
     def get_current_user(request: Request):
         user = getattr(request.state, "user", None)
         if user is None:
-            raise AppError(code="USER_REQUIRED", message="No active user selected", status_code=403)
+            raise AppError(
+                code="USER_REQUIRED",
+                message="An active user mapped from a bearer token is required",
+                status_code=403,
+                details={"requires": "Authorization: Bearer <JWT> mapped to an active user"},
+            )
         return ok(user)
 
     @app.get("/api/users/{user_id}")
-    def get_user(user_id: int, _=admin_only, conn= db):
+    def get_user(user_id: int, conn= db):
         return ok(service.get_user(conn, user_id))
 
     @app.post("/api/users")
-    def post_user(body: UserCreate, _=admin_only, conn= db):
+    def post_user(body: UserCreate, conn= db):
         result = service.create_user(conn, body.model_dump())
         conn.commit()
         return ok(result)
 
     @app.put("/api/users/{user_id}")
-    def put_user(user_id: int, body: UserUpdate, _=admin_only, conn= db):
+    def put_user(user_id: int, body: UserUpdate, conn= db):
         result = service.update_user(conn, user_id, body.model_dump(exclude_unset=True))
         conn.commit()
         return ok(result)
 
     @app.delete("/api/users/{user_id}")
-    def delete_user(user_id: int, _=admin_only, conn= db):
+    def delete_user(user_id: int, conn= db):
         result = service.deactivate_user(conn, user_id)
         conn.commit()
         return ok(result)

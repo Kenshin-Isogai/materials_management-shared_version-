@@ -16,7 +16,8 @@ It covers:
 - frontend/backend split-service contract is unchanged
 - `dev`, `staging`, and `prod` environments are treated as separate deployment targets
 - backend startup migrations remain disabled in Cloud Run request-serving startup
-- the team understands that `X-User-Name` is still temporary unless stronger auth has already landed
+- the team understands that repository auth now expects Bearer JWTs and that live Google Identity/JWKS validation still needs cloud-side rollout work
+- manual token entry in the current frontend is a repo-side transitional workflow, not the intended long-term production login UX
 
 ## Canonical backend environment contract
 
@@ -122,7 +123,7 @@ Use the same path for bug fixes, small features, and dependency updates:
    - `GET /api/health`
    - frontend load
    - one read flow
-   - one mutation with an active user
+   - one mutation with an active mapped user and bearer token
    - one artifact or archive flow if the change touches file handling
 4. Run the same image pair in `staging`.
 5. If schema changes exist, run migration in a controlled step before full production traffic shift.
@@ -244,8 +245,8 @@ Treat the repo-side PITR preparation as complete only when a future live-cloud d
 
 - open the frontend
 - verify read/list pages load
-- select or create an active user
-- execute at least one mutation using `X-User-Name`
+- authenticate with the currently supported bearer-token path (and later replace this with Google Identity sign-in validation)
+- execute at least one mutation using `Authorization: Bearer <JWT>`
 - execute one artifact-producing flow
 - execute one durable archive or import-history flow
 
@@ -261,7 +262,7 @@ Treat the repo-side PITR preparation as complete only when a future live-cloud d
 
 ## Important warnings
 
-- `X-User-Name` remains temporary and is not a long-term production trust boundary
+- repository auth now expects bearer tokens, but production readiness still depends on live Google Identity/JWKS rollout and cloud validation
 - the backend remains browser-reachable in the first rollout unless a stronger edge design is introduced
 - increase concurrency only after observing Cloud SQL connection behavior
 - no production plan should assume that Cloud Run revision rollback alone solves DB-level mistakes

@@ -3,9 +3,17 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import jwt
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
+
+os.environ.setdefault("AUTH_MODE", "oidc_enforced")
+os.environ.setdefault("RBAC_MODE", "rbac_enforced")
+os.environ.setdefault("JWT_SHARED_SECRET", "pytest-shared-secret-for-oidc-tests-32b")
+os.environ.setdefault("OIDC_PROVIDER", "test-oidc")
+os.environ.setdefault("OIDC_EXPECTED_ISSUER", "https://issuer.example.test")
+os.environ.setdefault("OIDC_EXPECTED_AUDIENCE", "materials-management-tests")
 
 from app import config, order_import_paths, service, storage
 from app.api import create_app
@@ -93,6 +101,36 @@ def _reset_database(database_url: str) -> None:
     engine.dispose()
 
 
+def _make_bearer_token(
+    *,
+    sub: str,
+    email: str,
+    hd: str = "example.test",
+    iss: str | None = None,
+    aud: str | None = None,
+) -> str:
+    payload = {
+        "sub": sub,
+        "email": email,
+        "email_verified": True,
+        "hd": hd,
+        "iss": iss or os.environ["OIDC_EXPECTED_ISSUER"],
+        "aud": aud or os.environ["OIDC_EXPECTED_AUDIENCE"],
+    }
+    return jwt.encode(payload, os.environ["JWT_SHARED_SECRET"], algorithm="HS256")
+
+
+def auth_headers_for_user(
+    *,
+    sub: str,
+    email: str,
+    hd: str = "example.test",
+    iss: str | None = None,
+    aud: str | None = None,
+) -> dict[str, str]:
+    return {"Authorization": f"Bearer {_make_bearer_token(sub=sub, email=email, hd=hd, iss=iss, aud=aud)}"}
+
+
 @pytest.fixture
 def conn(database_url: str, workspace_roots: dict[str, Path]):
     _reset_database(database_url)
@@ -115,6 +153,10 @@ def client(database_url: str, workspace_roots: dict[str, Path]):
             {
                 "username": "pytest",
                 "display_name": "Pytest User",
+                "email": "pytest@example.test",
+                "external_subject": "sub-pytest",
+                "identity_provider": "test-oidc",
+                "hosted_domain": "example.test",
                 "role": "admin",
                 "is_active": True,
             },
@@ -124,5 +166,5 @@ def client(database_url: str, workspace_roots: dict[str, Path]):
         seed_conn.close()
     app = create_app(database_url=database_url)
     with TestClient(app) as test_client:
-        test_client.headers.update({"X-User-Name": "pytest"})
+        test_client.headers.update(auth_headers_for_user(sub="sub-pytest", email="pytest@example.test"))
         yield test_client

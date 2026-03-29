@@ -12,8 +12,11 @@ Most migration-oriented file-by-file cleanup has already been completed and is i
 |---|---|
 | `backend\app\api.py` | Health/auth signaling, middleware posture, and request guardrails |
 | `backend\app\config.py` | Runtime target, DB pool, CORS, upload, and storage settings |
+| `backend\app\auth.py` | Bearer-token identity resolution, JWT verification hooks, and endpoint role policy |
 | `backend\app\storage.py` | Durable object boundary for GCS-backed operation |
 | `backend\app\db.py` | engine configuration and migration/bootstrap behavior |
+| `frontend\src\components\AppShell.tsx` | Current token-entry UX that should later be replaced with Google Identity login |
+| `frontend\src\lib\api.ts` | Browser token storage and Authorization header injection |
 | `backend\Dockerfile` | backend process model and Cloud Run image behavior |
 | `frontend\Dockerfile` | build-time API base handling |
 | `frontend\nginx.conf` | static delivery contract for the Cloud Run frontend image |
@@ -41,6 +44,8 @@ Most migration-oriented file-by-file cleanup has already been completed and is i
 The most likely remaining code work would be in these areas:
 
 - stronger production authentication
+- replacing manual token entry with Google Identity sign-in
+- JWKS/OIDC-backed deployed verification
 - restricting diagnostic/admin endpoint exposure
-- improving order-import recoverability
+- extending domain audit logging
 - extending operational telemetry

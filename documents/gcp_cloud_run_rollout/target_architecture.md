@@ -164,14 +164,14 @@ The backend should assume:
 - direct API health checks
 - possibly internal service-to-service calls later
 
-This requires explicit CORS, explicit secret management, and an authentication strategy that is stronger than the current mutation header model.
+This requires explicit CORS, explicit secret management, and an authentication strategy that is stronger than anonymous or manually managed browser identity.
 
-For the first rollout, the mutation trust boundary remains temporary:
+For the current repository state, the trust boundary is split into "implemented now" and "finish before serious production use":
 
 - reads may remain broadly available according to the current application contract
-- mutation requests still rely on `X-User-Name`
-- the backend may still be a public HTTPS browser endpoint, so that temporary model is explicitly accepted only as a short-lived rollout compromise
-- stronger end-user authentication remains a follow-up requirement rather than part of the first rollout completion bar
+- browser/API requests use Bearer JWT identity with app-user mapping from OIDC claims
+- the frontend still uses manual token entry today; a real Google Identity sign-in flow remains follow-up work
+- deployed environments still need JWKS/OIDC-backed verification and live cloud validation before this should be treated as stable production posture
 
 ## Initial operational guardrails
 

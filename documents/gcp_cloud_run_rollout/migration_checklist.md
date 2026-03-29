@@ -19,10 +19,11 @@
 
 ## 2. Production security boundary
 
-- [x] The temporary `X-User-Name` mutation model is explicitly documented as temporary
+- [x] Repository auth now uses Bearer JWT / OIDC-oriented identity plumbing instead of the temporary header bridge
 - [x] Secret Manager is the intended source of cloud secrets
-- [~] Stronger production authentication is partially implemented (`/api/users*` can now be admin-gated when RBAC is enabled, but the rollout still relies on temporary header-based identity)
-- [~] Production access policy for health/admin/diagnostic endpoints is partially finalized (`/healthz`, `/readyz`, `/api/health`, and `/api/auth/capabilities` remain anonymous; `/api/users*` is admin-only once RBAC is enforced)
+- [~] Stronger production authentication is partially implemented (repo-side Google Identity sign-in, bearer auth, RBAC, and JWKS-backed verification are now in place, but live cloud rollout still needs real Google/OIDC configuration and validation)
+- [x] Production access policy for health/admin/diagnostic endpoints is repo-defined (`/healthz` and `/readyz` stay public; `/api/health` and `/api/auth/capabilities` are controlled by `DIAGNOSTICS_AUTH_ROLE`, defaulting to `admin` in Cloud Run)
+- [x] Domain audit logging for high-impact mutations is emitted through structured `domain.audit` application logs
 
 ## 3. Change management and rollback
 
@@ -62,7 +63,7 @@
 
 Do not treat the rollout as operationally ready until all items below are complete:
 
-- stronger auth is either implemented or explicitly risk-accepted with owner and expiry
+- live Google Identity/JWKS rollout is complete or the temporary bearer-token posture is explicitly risk-accepted with owner and expiry
 - live cloud validation is complete
 - backup/restore path is documented and enabled
 - rollback path is rehearsed

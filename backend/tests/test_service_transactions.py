@@ -142,6 +142,27 @@ def test_order_import_job_rolls_back_partial_changes_on_unexpected_error(conn, m
     ).fetchone()
     assert rolled_back is None
 
+
+def test_update_user_rejects_invalid_role(conn):
+    user = service.create_user(
+        conn,
+        {
+            "username": "role-check-user",
+            "display_name": "Role Check User",
+            "email": "role-check-user@example.test",
+            "external_subject": "sub-role-check-user",
+            "identity_provider": "test-oidc",
+            "hosted_domain": "example.test",
+            "role": "operator",
+            "is_active": True,
+        },
+    )
+
+    with pytest.raises(AppError) as exc_info:
+        service.update_user(conn, user["user_id"], {"role": "superadmin"})
+
+    assert exc_info.value.code == "INVALID_ROLE"
+
 def test_reservation_release_roundtrip(conn):
     item = _create_basic_item(conn, item_number="ITEM-RES-001")
     service.adjust_inventory(
@@ -393,7 +414,7 @@ def test_import_orders_missing_items_csv_includes_manufacturer_column(conn, tmp_
             "issue_date": "2026-03-02",
             "order_date": "2026-03-02",
             "expected_arrival": "",
-            "pdf_link": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
         }
     ]
 
@@ -443,7 +464,7 @@ def test_import_orders_resolves_alias_with_case_insensitive_supplier_name(conn):
                 "issue_date": "2026-03-02",
                 "order_date": "2026-03-02",
                 "expected_arrival": "",
-                "pdf_link": "",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
             }
         ],
     )
@@ -522,7 +543,7 @@ def test_import_orders_resolves_alias_with_dash_variant_item_number(conn):
                 "issue_date": "2026-03-02",
                 "order_date": "2026-03-02",
                 "expected_arrival": "",
-                "pdf_link": "",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
             }
         ],
     )
@@ -552,10 +573,9 @@ def test_update_and_delete_quotation_use_db_as_source_of_truth(conn, tmp_path: P
                 "quantity",
                 "quotation_number",
                 "issue_date",
-                "quotation_document_url",
                 "order_date",
                 "expected_arrival",
-                "pdf_link",
+                "quotation_document_url",
             ],
         )
         writer.writeheader()
@@ -563,13 +583,12 @@ def test_update_and_delete_quotation_use_db_as_source_of_truth(conn, tmp_path: P
             {
                 "supplier": "SupplierSync",
                 "item_number": item["item_number"],
-                    "quantity": "3",
-                    "quotation_number": "Q-SYNC-001",
-                    "issue_date": "2026-03-01",
-                    "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-SYNC-001",
-                    "order_date": "2026-03-01",
-                    "expected_arrival": "2026-03-10",
-                    "pdf_link": "",
+                "quantity": "3",
+                "quotation_number": "Q-SYNC-001",
+                "issue_date": "2026-03-01",
+                "order_date": "2026-03-01",
+                "expected_arrival": "2026-03-10",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-SYNC-001.pdf",
             }
         )
 
@@ -601,7 +620,7 @@ def test_update_and_delete_quotation_use_db_as_source_of_truth(conn, tmp_path: P
     with csv_path.open("r", encoding="utf-8", newline="") as fp:
         rows = list(csv.DictReader(fp))
     assert rows[0]["issue_date"] == "2026-03-01"
-    assert rows[0]["quotation_document_url"] == "https://example.sharepoint.com/sites/procurement/Q-SYNC-001"
+    assert rows[0]["quotation_document_url"] == "https://example.sharepoint.com/sites/procurement/Q-SYNC-001.pdf"
 
     delete_result = service.delete_quotation(conn, int(order["quotation_id"]))
     assert delete_result["deleted"] is True
@@ -632,10 +651,9 @@ def test_update_and_delete_order_leave_archived_csv_unchanged(conn, tmp_path: Pa
                 "quantity",
                 "quotation_number",
                 "issue_date",
-                "quotation_document_url",
                 "order_date",
                 "expected_arrival",
-                "pdf_link",
+                "quotation_document_url",
             ],
         )
         writer.writeheader()
@@ -646,10 +664,9 @@ def test_update_and_delete_order_leave_archived_csv_unchanged(conn, tmp_path: Pa
                 "quantity": "3",
                 "quotation_number": "Q-DUP-001",
                 "issue_date": "2026-04-01",
-                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-DUP-001",
                 "order_date": "2026-04-01",
                 "expected_arrival": "2026-04-10",
-                "pdf_link": "",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-DUP-001.pdf",
             }
         )
         writer.writerow(
@@ -659,10 +676,9 @@ def test_update_and_delete_order_leave_archived_csv_unchanged(conn, tmp_path: Pa
                 "quantity": "5",
                 "quotation_number": "Q-DUP-001",
                 "issue_date": "2026-04-01",
-                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-DUP-001",
                 "order_date": "2026-04-01",
                 "expected_arrival": "2026-04-11",
-                "pdf_link": "",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-DUP-001.pdf",
             }
         )
 
@@ -715,10 +731,9 @@ def test_update_order_can_split_partial_eta_without_archive_sync(conn, tmp_path:
                 "quantity",
                 "quotation_number",
                 "issue_date",
-                "quotation_document_url",
                 "order_date",
                 "expected_arrival",
-                "pdf_link",
+                "quotation_document_url",
             ],
         )
         writer.writeheader()
@@ -729,10 +744,9 @@ def test_update_order_can_split_partial_eta_without_archive_sync(conn, tmp_path:
                 "quantity": "50",
                 "quotation_number": "Q-SPLIT-001",
                 "issue_date": "2026-04-01",
-                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-SPLIT-001",
                 "order_date": "2026-04-01",
                 "expected_arrival": "2026-04-10",
-                "pdf_link": "",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-SPLIT-001.pdf",
             }
         )
 
@@ -809,7 +823,7 @@ def test_update_order_rejects_manual_project_reassignment_for_ordered_rfq_link(c
                 "issue_date": "2026-03-01",
                 "order_date": "2026-03-02",
                 "expected_arrival": FUTURE_TARGET_DATE,
-                "pdf_link": "",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
             }
         ],
         source_name="rfq_order_guard.csv",
@@ -857,10 +871,9 @@ def test_merge_open_orders_records_lineage_without_archive_sync(conn, tmp_path: 
                 "quantity",
                 "quotation_number",
                 "issue_date",
-                "quotation_document_url",
                 "order_date",
                 "expected_arrival",
-                "pdf_link",
+                "quotation_document_url",
             ],
         )
         writer.writeheader()
@@ -868,26 +881,24 @@ def test_merge_open_orders_records_lineage_without_archive_sync(conn, tmp_path: 
             {
                 "supplier": "SupplierMerge",
                 "item_number": item["item_number"],
-                    "quantity": "20",
-                    "quotation_number": "Q-MERGE-001",
-                    "issue_date": "2026-05-01",
-                    "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-MERGE-001",
-                    "order_date": "2026-05-01",
-                    "expected_arrival": "2026-05-20",
-                    "pdf_link": "",
+                "quantity": "20",
+                "quotation_number": "Q-MERGE-001",
+                "issue_date": "2026-05-01",
+                "order_date": "2026-05-01",
+                "expected_arrival": "2026-05-20",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-MERGE-001.pdf",
             }
         )
         writer.writerow(
             {
                 "supplier": "SupplierMerge",
                 "item_number": item["item_number"],
-                    "quantity": "30",
-                    "quotation_number": "Q-MERGE-001",
-                    "issue_date": "2026-05-01",
-                    "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-MERGE-001",
-                    "order_date": "2026-05-01",
-                    "expected_arrival": "2026-05-25",
-                    "pdf_link": "",
+                "quantity": "30",
+                "quotation_number": "Q-MERGE-001",
+                "issue_date": "2026-05-01",
+                "order_date": "2026-05-01",
+                "expected_arrival": "2026-05-25",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-MERGE-001.pdf",
             }
         )
 
@@ -951,16 +962,15 @@ def test_merge_open_orders_nonfirst_sibling_keeps_archived_csv_unchanged(conn, t
                 "quantity",
                 "quotation_number",
                 "issue_date",
-                "quotation_document_url",
                 "order_date",
                 "expected_arrival",
-                "pdf_link",
+                "quotation_document_url",
             ],
         )
         writer.writeheader()
-        writer.writerow({"supplier": "SupplierMergeOrder", "item_number": item["item_number"], "quantity": "10", "quotation_number": "Q-MERGE-ORDER-001", "issue_date": "2026-06-01", "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-MERGE-ORDER-001", "order_date": "2026-06-01", "expected_arrival": "2026-06-10", "pdf_link": ""})
-        writer.writerow({"supplier": "SupplierMergeOrder", "item_number": item["item_number"], "quantity": "20", "quotation_number": "Q-MERGE-ORDER-001", "issue_date": "2026-06-01", "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-MERGE-ORDER-001", "order_date": "2026-06-01", "expected_arrival": "2026-06-20", "pdf_link": ""})
-        writer.writerow({"supplier": "SupplierMergeOrder", "item_number": item["item_number"], "quantity": "30", "quotation_number": "Q-MERGE-ORDER-001", "issue_date": "2026-06-01", "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-MERGE-ORDER-001", "order_date": "2026-06-01", "expected_arrival": "2026-06-30", "pdf_link": ""})
+        writer.writerow({"supplier": "SupplierMergeOrder", "item_number": item["item_number"], "quantity": "10", "quotation_number": "Q-MERGE-ORDER-001", "issue_date": "2026-06-01", "order_date": "2026-06-01", "expected_arrival": "2026-06-10", "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-MERGE-ORDER-001.pdf"})
+        writer.writerow({"supplier": "SupplierMergeOrder", "item_number": item["item_number"], "quantity": "20", "quotation_number": "Q-MERGE-ORDER-001", "issue_date": "2026-06-01", "order_date": "2026-06-01", "expected_arrival": "2026-06-20", "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-MERGE-ORDER-001.pdf"})
+        writer.writerow({"supplier": "SupplierMergeOrder", "item_number": item["item_number"], "quantity": "30", "quotation_number": "Q-MERGE-ORDER-001", "issue_date": "2026-06-01", "order_date": "2026-06-01", "expected_arrival": "2026-06-30", "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-MERGE-ORDER-001.pdf"})
 
     import_result = service.import_orders_from_csv_path(conn, supplier_name="SupplierMergeOrder", csv_path=csv_path)
     assert import_result["status"] == "ok"
@@ -1013,16 +1023,15 @@ def test_split_order_keeps_archived_csv_unchanged(conn, tmp_path: Path, monkeypa
                 "quantity",
                 "quotation_number",
                 "issue_date",
-                "quotation_document_url",
                 "order_date",
                 "expected_arrival",
-                "pdf_link",
+                "quotation_document_url",
             ],
         )
         writer.writeheader()
-        writer.writerow({"supplier": "SupplierSplitOrder", "item_number": item["item_number"], "quantity": "10", "quotation_number": "Q-SPLIT-ORDER-001", "issue_date": "2026-08-01", "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-SPLIT-ORDER-001", "order_date": "2026-08-01", "expected_arrival": "2026-08-10", "pdf_link": ""})
-        writer.writerow({"supplier": "SupplierSplitOrder", "item_number": item["item_number"], "quantity": "10", "quotation_number": "Q-SPLIT-ORDER-001", "issue_date": "2026-08-01", "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-SPLIT-ORDER-001", "order_date": "2026-08-01", "expected_arrival": "2026-08-20", "pdf_link": ""})
-        writer.writerow({"supplier": "SupplierSplitOrder", "item_number": item["item_number"], "quantity": "10", "quotation_number": "Q-SPLIT-ORDER-001", "issue_date": "2026-08-01", "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-SPLIT-ORDER-001", "order_date": "2026-08-01", "expected_arrival": "2026-08-30", "pdf_link": ""})
+        writer.writerow({"supplier": "SupplierSplitOrder", "item_number": item["item_number"], "quantity": "10", "quotation_number": "Q-SPLIT-ORDER-001", "issue_date": "2026-08-01", "order_date": "2026-08-01", "expected_arrival": "2026-08-10", "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-SPLIT-ORDER-001.pdf"})
+        writer.writerow({"supplier": "SupplierSplitOrder", "item_number": item["item_number"], "quantity": "10", "quotation_number": "Q-SPLIT-ORDER-001", "issue_date": "2026-08-01", "order_date": "2026-08-01", "expected_arrival": "2026-08-20", "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-SPLIT-ORDER-001.pdf"})
+        writer.writerow({"supplier": "SupplierSplitOrder", "item_number": item["item_number"], "quantity": "10", "quotation_number": "Q-SPLIT-ORDER-001", "issue_date": "2026-08-01", "order_date": "2026-08-01", "expected_arrival": "2026-08-30", "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-SPLIT-ORDER-001.pdf"})
 
     import_result = service.import_orders_from_csv_path(conn, supplier_name="SupplierSplitOrder", csv_path=csv_path)
     assert import_result["status"] == "ok"
@@ -1057,8 +1066,8 @@ def test_delete_quotation_rejects_if_any_linked_order_arrived(conn):
     item = _create_basic_item(conn, item_number="ARRIVE-GUARD-001")
     csv_content = "\n".join(
         [
-            "item_number,quantity,quotation_number,issue_date,order_date,expected_arrival,pdf_link",
-            f"{item['item_number']},2,Q-ARRIVE-001,2026-04-01,2026-04-01,2026-04-10,",
+            "item_number,quantity,quotation_number,issue_date,order_date,expected_arrival,quotation_document_url",
+            f"{item['item_number']},2,Q-ARRIVE-001,2026-04-01,2026-04-01,2026-04-10,https://example.sharepoint.com/sites/procurement/Q-ARRIVE-001.pdf",
         ]
     )
     import_result = service.import_orders_from_content(
@@ -1257,7 +1266,7 @@ def test_analyze_bom_rows_target_date_includes_pending_arrivals(conn):
                 "issue_date": "2026-03-01",
                 "order_date": "2026-03-02",
                 "expected_arrival": "2026-03-20",
-                "pdf_link": "",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
             }
         ],
         source_name="bom_date.csv",
@@ -1340,7 +1349,7 @@ def test_project_gap_analysis_target_date_includes_pending_arrivals(conn):
                 "issue_date": "2026-03-01",
                 "order_date": "2026-03-02",
                 "expected_arrival": "2026-03-20",
-                "pdf_link": "",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
             }
         ],
         source_name="project_gap.csv",
@@ -1430,7 +1439,7 @@ def test_project_planning_analysis_keeps_started_committed_projects_in_pipeline(
                 "issue_date": "2026-03-01",
                 "order_date": "2026-03-02",
                 "expected_arrival": FUTURE_TARGET_DATE,
-                "pdf_link": "",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
             }
         ],
         source_name="planning_started_orders.csv",
@@ -1541,7 +1550,7 @@ def test_project_planning_analysis_includes_source_breakdown_and_cumulative_gene
                 "issue_date": "2026-03-01",
                 "order_date": "2026-03-02",
                 "expected_arrival": FUTURE_TARGET_DATE,
-                "pdf_link": "",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
             },
             {
                 "item_number": item["item_number"],
@@ -1550,7 +1559,7 @@ def test_project_planning_analysis_includes_source_breakdown_and_cumulative_gene
                 "issue_date": "2026-03-01",
                 "order_date": "2026-03-03",
                 "expected_arrival": "3000-01-15",
-                "pdf_link": "",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
             },
         ],
         source_name="planning_sources.csv",
@@ -1625,7 +1634,7 @@ def test_get_item_planning_context_includes_committed_and_preview_project_rows(c
                 "issue_date": "2026-03-01",
                 "order_date": "2026-03-02",
                 "expected_arrival": FUTURE_TARGET_DATE,
-                "pdf_link": "",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
             }
         ],
         source_name="planning_context.csv",
@@ -1710,7 +1719,7 @@ def test_update_rfq_line_only_dedicates_ordered_links_and_clears_replaced_orders
                 "issue_date": "2026-03-01",
                 "order_date": "2026-03-02",
                 "expected_arrival": FUTURE_TARGET_DATE,
-                "pdf_link": "",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
             },
             {
                 "item_number": item["item_number"],
@@ -1719,7 +1728,7 @@ def test_update_rfq_line_only_dedicates_ordered_links_and_clears_replaced_orders
                 "issue_date": "2026-03-01",
                 "order_date": "2026-03-03",
                 "expected_arrival": FUTURE_TARGET_DATE,
-                "pdf_link": "",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
             },
         ],
         source_name="rfq_order_sync.csv",
@@ -1820,7 +1829,7 @@ def test_split_order_leaves_rfq_managed_project_assignment_on_original_order_onl
                 "issue_date",
                 "order_date",
                 "expected_arrival",
-                "pdf_link",
+                "quotation_document_url",
             ],
         )
         writer.writeheader()
@@ -1833,7 +1842,7 @@ def test_split_order_leaves_rfq_managed_project_assignment_on_original_order_onl
                 "issue_date": "2026-03-01",
                 "order_date": "2026-03-02",
                 "expected_arrival": FUTURE_TARGET_DATE,
-                "pdf_link": "",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
             }
         )
 
@@ -1894,7 +1903,7 @@ def test_create_project_rfq_batch_uses_selected_target_date(conn):
                 "issue_date": "2026-03-01",
                 "order_date": "2026-03-02",
                 "expected_arrival": "2999-03-01",
-                "pdf_link": "",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
             }
         ],
         source_name="rfq_target_date.csv",
@@ -2061,7 +2070,7 @@ def test_partial_arrival_sibling_inherits_project_id(conn):
                 "issue_date": "2026-03-01",
                 "order_date": "2026-03-02",
                 "expected_arrival": FUTURE_TARGET_DATE,
-                "pdf_link": "",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
             }
         ],
         source_name="arrival_split.csv",
@@ -2111,7 +2120,7 @@ def test_manual_project_id_preserved_when_rfq_link_removed(conn):
                 "issue_date": "2026-03-01",
                 "order_date": "2026-03-02",
                 "expected_arrival": FUTURE_TARGET_DATE,
-                "pdf_link": "",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
             }
         ],
         source_name="manual_project_rfq.csv",
@@ -2178,7 +2187,7 @@ def test_confirm_project_allocation_can_preview_and_execute(conn):
                 "issue_date": "2026-03-01",
                 "order_date": "2026-03-02",
                 "expected_arrival": FUTURE_TARGET_DATE,
-                "pdf_link": "",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
             }
         ],
         source_name="confirm_allocation.csv",
@@ -2327,7 +2336,7 @@ def test_import_orders_deduplicates_missing_rows_for_same_item(conn, tmp_path: P
             "issue_date": "2026-03-01",
             "order_date": "2026-03-09",
             "expected_arrival": "2026-03-10",
-            "pdf_link": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
         },
         {
             "item_number": "DEDUP-ITEM-001",
@@ -2336,7 +2345,7 @@ def test_import_orders_deduplicates_missing_rows_for_same_item(conn, tmp_path: P
             "issue_date": "2026-03-01",
             "order_date": "2026-03-09",
             "expected_arrival": "2026-03-18",
-            "pdf_link": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
         },
         {
             "item_number": "DEDUP-ITEM-001",
@@ -2345,7 +2354,7 @@ def test_import_orders_deduplicates_missing_rows_for_same_item(conn, tmp_path: P
             "issue_date": "2026-03-01",
             "order_date": "2026-03-09",
             "expected_arrival": "2026-04-20",
-            "pdf_link": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
         },
     ]
 
@@ -2396,8 +2405,8 @@ def test_inventory_snapshot_net_available_returns_residual_stock(conn):
     service.import_orders_from_content(
         conn,
         content=(
-            "item_number,quantity,quotation_number,issue_date,order_date,expected_arrival,pdf_link\n"
-            f"{item['item_number']},3,Q-SNAPSHOT-NET-001,2026-03-01,2026-03-02,{FUTURE_TARGET_DATE},\n"
+            "item_number,quantity,quotation_number,issue_date,order_date,expected_arrival,quotation_document_url\n"
+            f"{item['item_number']},3,Q-SNAPSHOT-NET-001,2026-03-01,2026-03-02,{FUTURE_TARGET_DATE},https://example.sharepoint.com/sites/procurement/Q-SNAPSHOT-NET-001.pdf\n"
         ).encode("utf-8"),
         supplier_name="SNAPSHOT-SUPPLIER",
         source_name="snapshot_net_available.csv",

@@ -32,6 +32,18 @@ It focuses on:
 | `BACKEND_PUBLIC_BASE_URL` | Backend | No | project | Final value depends on the real backend URL |
 | `FRONTEND_PUBLIC_BASE_URL` | Backend | No | project | Final value depends on the real frontend URL |
 | `AUTO_MIGRATE_ON_STARTUP` | Backend | No | now | Keep `0` for Cloud Run |
+| `AUTH_MODE` | Backend | No | now | Use `oidc_enforced` in cloud-like deployments once bearer auth is required |
+| `RBAC_MODE` | Backend | No | now | Use `rbac_enforced` when role boundaries should block requests |
+| `DIAGNOSTICS_AUTH_ROLE` | Backend | No | now | Cloud default can stay `admin`; use only if you intentionally relax or tighten `/api/health` and `/api/auth/capabilities` |
+| `JWT_VERIFIER` | Backend | No | now | Use `jwks` in deployed OIDC environments and `shared_secret` only for local/test fixture flows |
+| `OIDC_PROVIDER` | Backend | No | now | Logical provider label used in app-user mapping |
+| `OIDC_EXPECTED_ISSUER` | Backend | No | project | Final value depends on the real Google/OIDC issuer used in deployment |
+| `OIDC_EXPECTED_AUDIENCE` | Backend | No | project | Final value depends on the real OAuth client / audience |
+| `OIDC_JWKS_URL` | Backend | No | project | Final value depends on the real issuer JWKS endpoint |
+| `OIDC_ALLOWED_HOSTED_DOMAINS` | Backend | No | now | Domain allowlist policy can be decided now even if exact tenant rollout is later |
+| `OIDC_REQUIRE_EMAIL_VERIFIED` | Backend | No | now | Keep enabled for production-oriented deployments |
+| `JWT_SIGNING_ALGORITHMS` | Backend | No | now | Local/test can stay on fixture-friendly values; deployed verifier should match the real provider |
+| `JWT_SHARED_SECRET` | Backend | Yes | now | Local/test fixture mode only; not the intended long-term cloud verifier input |
 | `DB_POOL_SIZE` | Backend | No | now | Tune conservatively for Cloud SQL |
 | `DB_MAX_OVERFLOW` | Backend | No | now | Tune conservatively for Cloud SQL |
 | `DB_POOL_TIMEOUT` | Backend | No | now | Tune conservatively for Cloud SQL |
@@ -48,6 +60,7 @@ It focuses on:
 | Variable | Service | Secret | Stage | Notes |
 |---|---|---:|---|---|
 | `VITE_API_BASE` | Frontend | No | project | Final value depends on the real backend URL and is baked in at build time |
+| `VITE_GOOGLE_CLIENT_ID` | Frontend | No | project | Final value depends on the real browser OAuth client used by Google Identity |
 
 ## Local-only or de-emphasized variables
 
@@ -64,6 +77,10 @@ It focuses on:
 
 - `APP_RUNTIME_TARGET=cloud_run`
 - `AUTO_MIGRATE_ON_STARTUP=0`
+- `AUTH_MODE=oidc_enforced`
+- `RBAC_MODE=rbac_enforced`
+- `DIAGNOSTICS_AUTH_ROLE=admin`
+- `JWT_VERIFIER=jwks`
 - `STORAGE_BACKEND=gcs`
 - `MAX_UPLOAD_BYTES=33554432`
 - `HEAVY_REQUEST_TARGET_SECONDS=60`
@@ -79,6 +96,7 @@ It focuses on:
 - actual object prefix by environment
 - actual Cloud SQL instance name
 - actual Secret Manager secret names
+- actual Google/OIDC issuer, audience, and browser login client wiring
 
 ## Operational note
 
@@ -89,7 +107,7 @@ The following still need separate operational ownership:
 - backup and restore
 - deployment rollback
 - monitoring and alerting
-- stronger production authentication
+- Google Identity login rollout and JWKS-backed verification
 
 ## Repo-visible recovery contract
 

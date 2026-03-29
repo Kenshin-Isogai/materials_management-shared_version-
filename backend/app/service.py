@@ -369,7 +369,18 @@ def list_users(
     where_clause = "" if include_inactive else "WHERE is_active = TRUE"
     rows = conn.execute(
         f"""
-        SELECT user_id, username, display_name, role, is_active, created_at, updated_at
+        SELECT
+            user_id,
+            username,
+            display_name,
+            email,
+            external_subject,
+            identity_provider,
+            hosted_domain,
+            role,
+            is_active,
+            created_at,
+            updated_at
         FROM users
         {where_clause}
         ORDER BY is_active DESC, lower(display_name), lower(username), user_id
@@ -390,18 +401,69 @@ def get_user(conn: sqlite3.Connection, user_id: int) -> dict[str, Any]:
     return dict(row)
 
 
-def get_active_user_by_username(conn: sqlite3.Connection, username: str) -> dict[str, Any] | None:
-    normalized = require_non_empty(username, "username")
-    row = conn.execute(
-        """
-        SELECT user_id, username, display_name, role, is_active, created_at, updated_at
-        FROM users
-        WHERE lower(username) = lower(?) AND is_active = TRUE
-        ORDER BY user_id
-        """,
-        (normalized,),
-    ).fetchone()
-    return dict(row) if row is not None else None
+def get_active_user_by_identity(
+    conn: sqlite3.Connection,
+    *,
+    email: str | None = None,
+    external_subject: str | None = None,
+    identity_provider: str | None = None,
+    hosted_domain: str | None = None,
+) -> dict[str, Any] | None:
+    normalized_email = _normalize_optional_email(email)
+    normalized_subject = _normalize_optional_identity_text(external_subject)
+    normalized_provider = _normalize_optional_identity_text(identity_provider, lower=True)
+    normalized_hosted_domain = _normalize_optional_identity_text(hosted_domain, lower=True)
+    if normalized_subject and normalized_provider:
+        row = conn.execute(
+            """
+            SELECT
+                user_id,
+                username,
+                display_name,
+                email,
+                external_subject,
+                identity_provider,
+                hosted_domain,
+                role,
+                is_active,
+                created_at,
+                updated_at
+            FROM users
+            WHERE identity_provider = ? AND external_subject = ? AND is_active = TRUE
+            ORDER BY user_id
+            """,
+            (normalized_provider, normalized_subject),
+        ).fetchone()
+        if row is not None:
+            user = dict(row)
+            _ensure_hosted_domain_matches(user, normalized_hosted_domain)
+            return user
+    if normalized_email:
+        row = conn.execute(
+            """
+            SELECT
+                user_id,
+                username,
+                display_name,
+                email,
+                external_subject,
+                identity_provider,
+                hosted_domain,
+                role,
+                is_active,
+                created_at,
+                updated_at
+            FROM users
+            WHERE lower(email) = lower(?) AND is_active = TRUE
+            ORDER BY user_id
+            """,
+            (normalized_email,),
+        ).fetchone()
+        if row is not None:
+            user = dict(row)
+            _ensure_hosted_domain_matches(user, normalized_hosted_domain)
+            return user
+    return None
 
 
 def has_active_users(conn: sqlite3.Connection) -> bool:
@@ -417,18 +479,53 @@ def has_active_users(conn: sqlite3.Connection) -> bool:
     return bool(row[0]) if row is not None else False
 
 
+def _require_valid_role(role: str) -> str:
+    """
+    Ensure that the given role is non-empty and one of the supported roles.
+    """
+    role = require_non_empty(role, "role")
+    if role not in {"admin", "operator", "viewer"}:
+        # Keep roles consistent with what the authorization layer expects.
+        raise AppError("INVALID_ROLE", f"Invalid role: {role}")
+    return role
+
+
 def create_user(conn: sqlite3.Connection, data: dict[str, Any]) -> dict[str, Any]:
     username = require_non_empty(str(data.get("username") or ""), "username")
     display_name = require_non_empty(str(data.get("display_name") or ""), "display_name")
-    role = require_non_empty(str(data.get("role") or "operator"), "role")
+    email, external_subject, identity_provider, hosted_domain = _normalize_user_identity_fields(data)
+    raw_role = str(data.get("role") or "operator")
+    role = _require_valid_role(raw_role)
     is_active = bool(data.get("is_active", True))
     created_at = now_jst_iso()
     cursor = conn.execute(
         """
-        INSERT INTO users (username, display_name, role, is_active, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO users (
+            username,
+            display_name,
+            email,
+            external_subject,
+            identity_provider,
+            hosted_domain,
+            role,
+            is_active,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (username, display_name, role, is_active, created_at, created_at),
+        (
+            username,
+            display_name,
+            email,
+            external_subject,
+            identity_provider,
+            hosted_domain,
+            role,
+            is_active,
+            created_at,
+            created_at,
+        ),
     )
     return get_user(conn, int(cursor.lastrowid))
 
@@ -437,15 +534,36 @@ def update_user(conn: sqlite3.Connection, user_id: int, data: dict[str, Any]) ->
     existing = get_user(conn, user_id)
     username = require_non_empty(str(data.get("username", existing["username"])), "username")
     display_name = require_non_empty(str(data.get("display_name", existing["display_name"])), "display_name")
-    role = require_non_empty(str(data.get("role", existing["role"])), "role")
+    email, external_subject, identity_provider, hosted_domain = _normalize_user_identity_fields(data, existing=existing)
+    role = _require_valid_role(str(data.get("role", existing["role"])))
     is_active = bool(data.get("is_active", existing["is_active"]))
     conn.execute(
         """
         UPDATE users
-        SET username = ?, display_name = ?, role = ?, is_active = ?, updated_at = ?
+        SET
+            username = ?,
+            display_name = ?,
+            email = ?,
+            external_subject = ?,
+            identity_provider = ?,
+            hosted_domain = ?,
+            role = ?,
+            is_active = ?,
+            updated_at = ?
         WHERE user_id = ?
         """,
-        (username, display_name, role, is_active, now_jst_iso(), user_id),
+        (
+            username,
+            display_name,
+            email,
+            external_subject,
+            identity_provider,
+            hosted_domain,
+            role,
+            is_active,
+            now_jst_iso(),
+            user_id,
+        ),
     )
     return get_user(conn, user_id)
 
@@ -457,6 +575,60 @@ def deactivate_user(conn: sqlite3.Connection, user_id: int) -> dict[str, Any]:
         (now_jst_iso(), user_id),
     )
     return get_user(conn, user_id)
+
+
+def _normalize_optional_identity_text(value: Any, *, lower: bool = False) -> str | None:
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    if not normalized:
+        return None
+    return normalized.lower() if lower else normalized
+
+
+def _normalize_optional_email(value: Any) -> str | None:
+    return _normalize_optional_identity_text(value, lower=True)
+
+
+def _normalize_user_identity_fields(
+    data: dict[str, Any],
+    *,
+    existing: dict[str, Any] | None = None,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    email = _normalize_optional_email(data.get("email", None if existing is None else existing.get("email")))
+    external_subject = _normalize_optional_identity_text(
+        data.get("external_subject", None if existing is None else existing.get("external_subject"))
+    )
+    identity_provider = _normalize_optional_identity_text(
+        data.get("identity_provider", None if existing is None else existing.get("identity_provider")),
+        lower=True,
+    )
+    hosted_domain = _normalize_optional_identity_text(
+        data.get("hosted_domain", None if existing is None else existing.get("hosted_domain")),
+        lower=True,
+    )
+    if (external_subject is None) != (identity_provider is None):
+        raise AppError(
+            code="INVALID_USER_IDENTITY",
+            message="identity_provider and external_subject must be set together",
+            status_code=422,
+        )
+    return email, external_subject, identity_provider, hosted_domain
+
+
+def _ensure_hosted_domain_matches(user: dict[str, Any], hosted_domain: str | None) -> None:
+    required_hosted_domain = _normalize_optional_identity_text(user.get("hosted_domain"), lower=True)
+    if required_hosted_domain and required_hosted_domain != hosted_domain:
+        raise AppError(
+            code="HOSTED_DOMAIN_MISMATCH",
+            message="OIDC hosted domain does not match the user mapping",
+            status_code=403,
+            details={
+                "required_hosted_domain": required_hosted_domain,
+                "hosted_domain": hosted_domain,
+                "username": user.get("username"),
+            },
+        )
 
 
 def _require_json_object(
@@ -2089,33 +2261,6 @@ def _supplier_name_from_registered_path(csv_path: Path, roots: OrderImportRoots)
             status_code=422,
         )
     return relative.parts[0], []
-
-
-def _resolve_pdf_source_path(
-    csv_path: Path,
-    pdf_link: str,
-    roots: OrderImportRoots,
-    supplier_name: str,
-    *,
-    prefer_filename_only: bool = False,
-) -> tuple[Path | None, str, list[dict[str, str]], list[str]]:
-    raw = (pdf_link or "").strip()
-    if not raw:
-        return None, "", [], []
-    filename = Path(raw).name.strip() if prefer_filename_only else raw
-    if Path(filename).suffix.lower() != ".pdf":
-        return None, filename, [], [f"Unable to resolve pdf_link '{raw}' for supplier '{supplier_name}'."]
-    candidates = [
-        (roots.unregistered_pdf_root / supplier_name / filename).resolve(),
-        (roots.registered_pdf_root / supplier_name / filename).resolve(),
-    ]
-    for candidate in candidates:
-        if candidate.exists() and candidate.is_file():
-            normalizations: list[dict[str, str]] = []
-            if filename != raw:
-                normalizations.append({"kind": "pdf_link_filename", "from": raw, "to": filename})
-            return candidate, filename, normalizations, []
-    return None, filename, [], [f"Unable to resolve pdf_link '{raw}' for supplier '{supplier_name}'."]
 
 
 def list_items(
@@ -5386,13 +5531,8 @@ def _resolve_import_quotation_document_url(
     row: dict[str, Any],
     *,
     row_index: int,
-    allow_legacy_pdf_field: bool = False,
 ) -> str | None:
     raw_value = row.get("quotation_document_url")
-    if allow_legacy_pdf_field and not str(raw_value or "").strip():
-        legacy_pdf_link = str(row.get("pdf_link") or "").strip()
-        if legacy_pdf_link:
-            return None
     return _normalize_required_quotation_document_url(raw_value, row_index=row_index)
 
 
@@ -6154,7 +6294,6 @@ def preview_orders_import_from_rows(
         quotation_document_url = _resolve_import_quotation_document_url(
             row,
             row_index=row_number,
-            allow_legacy_pdf_field=False,
         )
         purchase_order_document_url = normalize_external_document_url(
             row.get("purchase_order_document_url"),
@@ -6266,7 +6405,6 @@ def _process_order_rows_for_import(
     supplier_name: str | None = None,
     rows: list[dict[str, str]],
     default_order_date: str | None = None,
-    allow_noncanonical_pdf_link: bool = False,
     row_overrides: dict[int, dict[str, int]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     resolved: list[dict[str, Any]] = []
@@ -6317,7 +6455,6 @@ def _process_order_rows_for_import(
         quotation_document_url = _resolve_import_quotation_document_url(
             row,
             row_index=idx,
-            allow_legacy_pdf_field=allow_noncanonical_pdf_link,
         )
         purchase_order_document_url = normalize_external_document_url(
             row.get("purchase_order_document_url"),
@@ -6398,7 +6535,6 @@ def import_orders_from_rows(
     default_order_date: str | None = None,
     source_name: str = "order_import.csv",
     missing_output_dir: str | Path | None = None,
-    allow_noncanonical_pdf_link: bool = False,
     row_overrides: dict[str | int, Any] | None = None,
     alias_saves: list[dict[str, Any]] | None = None,
     import_job_id: int | None = None,
@@ -6420,7 +6556,6 @@ def import_orders_from_rows(
         supplier_name=supplier_name,
         rows=rows,
         default_order_date=default_order_date,
-        allow_noncanonical_pdf_link=allow_noncanonical_pdf_link,
         row_overrides=normalized_overrides,
     )
     if missing:
@@ -7267,7 +7402,6 @@ def _import_unregistered_order_csv_file(
     supplier_name: str,
     default_order_date: str | None = None,
     items_unregistered_root: Path | None = None,
-    prefer_filename_only_pdf_links: bool = False,
 ) -> dict[str, Any]:
     unregistered_items_root = items_unregistered_root if items_unregistered_root else ITEMS_IMPORT_UNREGISTERED_ROOT
     fieldnames, rows = _load_csv_rows_with_fieldnames_from_path(csv_path)
@@ -7278,7 +7412,6 @@ def _import_unregistered_order_csv_file(
         default_order_date=default_order_date,
         source_name=f"{_safe_filename_component(supplier_name)}__{csv_path.name}",
         missing_output_dir=unregistered_items_root,
-        allow_noncanonical_pdf_link=True,
     )
     file_warnings: list[str] = []
     file_normalizations: list[dict[str, str]] = []
@@ -7296,12 +7429,6 @@ def _import_unregistered_order_csv_file(
             "normalizations": file_normalizations,
         }
 
-    supplier_id = _get_or_create_supplier(conn, supplier_name)
-    planned_pdf_moves: list[tuple[Path, Path]] = []
-    planned_pdf_target_by_source: dict[str, Path] = {}
-    reserved_pdf_targets: set[str] = set()
-    moved_pdf_files: list[dict[str, str]] = []
-    registered_pdf_dir = registered_pdf_supplier_dir(roots, supplier_name).resolve()
     use_storage_registered_roots = (
         not is_local_storage_backend()
         or (
@@ -7310,71 +7437,11 @@ def _import_unregistered_order_csv_file(
         )
     )
 
-    for row in rows:
-        quotation_number = (row.get("quotation_number") or "").strip()
-        pdf_link = (row.get("pdf_link") or "").strip()
-        if not quotation_number or not pdf_link:
-            continue
-        source_pdf, _normalized_pdf_link, link_normalizations, link_warnings = _resolve_pdf_source_path(
-            csv_path,
-            pdf_link,
-            roots,
-            supplier_name,
-            prefer_filename_only=prefer_filename_only_pdf_links,
-        )
-        for warning in link_warnings:
-            if warning not in file_warnings:
-                file_warnings.append(warning)
-        for entry in link_normalizations:
-            item = dict(entry)
-            item.setdefault("file", str(csv_path))
-            item.setdefault("quotation_number", quotation_number)
-            if item not in file_normalizations:
-                file_normalizations.append(item)
-        if source_pdf is None or not source_pdf.exists():
-            continue
-        resolved_source = source_pdf.resolve()
-        if resolved_source.is_relative_to(registered_pdf_dir):
-            final_pdf = resolved_source
-        else:
-            source_key = str(resolved_source).casefold()
-            planned_target = planned_pdf_target_by_source.get(source_key)
-            if planned_target is None:
-                predicted_target, _ = _predict_move_target(
-                    resolved_source,
-                    registered_pdf_dir,
-                    reserved_pdf_targets,
-                )
-                planned_target = predicted_target.resolve()
-                planned_pdf_target_by_source[source_key] = planned_target
-                planned_pdf_moves.append((resolved_source, planned_target))
-                reserved_pdf_targets.add(str(planned_target).casefold())
-                moved_pdf_files.append(
-                    {
-                        "source_path": str(resolved_source),
-                        "registered_path": str(planned_target),
-                    }
-                )
-
     csv_source = csv_path.resolve()
     if use_storage_registered_roots:
         rollback_storage_refs: list[str] = []
-        actual_moved_pdf_files: list[dict[str, str]] = []
         csv_dest_display: str | None = None
         try:
-            for source_pdf, _predicted_target in planned_pdf_moves:
-                stored_pdf = move_file_to_storage(
-                    bucket=ORDERS_REGISTERED_PDF_BUCKET,
-                    source_path=source_pdf,
-                    subdir=supplier_name,
-                )
-                rollback_storage_refs.append(stored_pdf.storage_ref)
-                actual_moved_pdf_files.append(
-                    {
-                        "source_path": str(source_pdf),
-                        "registered_path": stored_pdf.storage_ref if stored_pdf.path is None else str(stored_pdf.path),
-                    }
-                )
             stored_csv = move_file_to_storage(
                 bucket=ORDERS_REGISTERED_CSV_BUCKET,
                 source_path=csv_source,
@@ -7383,7 +7450,6 @@ def _import_unregistered_order_csv_file(
             rollback_storage_refs.append(stored_csv.storage_ref)
             csv_dest = stored_csv.path
             csv_dest_display = stored_csv.storage_ref if stored_csv.path is None else str(stored_csv.path)
-            moved_pdf_files = actual_moved_pdf_files
         except Exception:
             for storage_ref in reversed(rollback_storage_refs):
                 delete_storage_ref(storage_ref)
@@ -7394,7 +7460,7 @@ def _import_unregistered_order_csv_file(
             registered_csv_supplier_dir(roots, supplier_name).resolve(),
             set(),
         )
-        _execute_planned_file_moves([*planned_pdf_moves, (csv_source, csv_dest.resolve())])
+        _execute_planned_file_moves([(csv_source, csv_dest.resolve())])
         csv_dest_display = str(csv_dest)
     return {
         "file": str(csv_path),
@@ -7402,7 +7468,7 @@ def _import_unregistered_order_csv_file(
         "status": "ok",
         "moved_to": csv_dest_display,
         "imported_count": result.get("imported_count", 0),
-        "moved_pdf_files": moved_pdf_files,
+        "moved_pdf_files": [],
         "warnings": file_warnings,
         "normalizations": file_normalizations,
     }

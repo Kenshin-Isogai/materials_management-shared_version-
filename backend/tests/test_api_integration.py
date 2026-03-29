@@ -14,8 +14,9 @@ from app.api import create_app
 from app.db import get_connection, init_db
 from app.utils import today_jst
 from fastapi.testclient import TestClient
+import jwt
 
-from .conftest import _reset_database
+from .conftest import _reset_database, auth_headers_for_user
 
 FUTURE_TARGET_DATE = "2999-12-31"
 
@@ -130,8 +131,9 @@ def test_health_endpoint(client):
     )
     assert payload["data"]["recovery_policy"]["object_storage"]["versioning_policy_required"] is True
     assert "/readyz" in payload["data"]["recovery_policy"]["post_restore_validation"]
-    assert payload["data"]["temporary_identity_model"]["mode"] == "x-user-name"
-    assert payload["data"]["temporary_identity_model"]["temporary"] is True
+    assert payload["data"]["temporary_identity_model"] is None
+    assert payload["data"]["auth"]["auth_mode"] == "oidc_enforced"
+    assert payload["data"]["auth"]["rbac_mode"] == "rbac_enforced"
 
 
 def test_liveness_and_readiness_endpoints(client):
@@ -485,8 +487,8 @@ def test_project_confirm_allocation_endpoint_previews_and_executes(client):
             "file": (
                 "confirm-allocation.csv",
                 (
-                    "item_number,quantity,quotation_number,issue_date,order_date,expected_arrival,pdf_link\n"
-                    f"{order_item['item_number']},6,Q-CONFIRM-ALLOC-001,2026-03-01,2026-03-02,{FUTURE_TARGET_DATE},\n"
+                    "item_number,quantity,quotation_number,issue_date,order_date,expected_arrival,quotation_document_url\n"
+                    f"{order_item['item_number']},6,Q-CONFIRM-ALLOC-001,2026-03-01,2026-03-02,{FUTURE_TARGET_DATE},https://example.sharepoint.com/sites/procurement/Q-CONFIRM-ALLOC-001.pdf\n"
                 ).encode("utf-8"),
                 "text/csv",
             )
@@ -584,26 +586,27 @@ def test_project_confirm_allocation_endpoint_rejects_planning_project_execute(cl
     payload = executed.json()
     assert payload["error"]["code"] == "PROJECT_CONFIRMATION_REQUIRED"
 
-def test_auth_capabilities_endpoint_defaults_and_header(client):
+def test_auth_capabilities_endpoint_defaults_and_identity(client):
     response = client.get("/api/auth/capabilities")
     assert response.status_code == 200
     payload = response.json()["data"]
-    assert payload["auth_mode"] == "none"
-    assert payload["auth_enforced"] is False
+    assert payload["auth_mode"] == "oidc_enforced"
+    assert payload["auth_enforced"] is True
     assert payload["auth_dry_run"] is False
+    assert payload["rbac_mode"] == "rbac_enforced"
+    assert payload["rbac_enforced"] is True
+    assert payload["rbac_dry_run"] is False
     assert payload["planned_roles"] == ["admin", "operator", "viewer"]
     assert payload["effective_role"] == "admin"
-    assert payload["mutation_identity"]["mode"] == "x-user-name"
-    assert payload["mutation_identity"]["temporary"] is True
-    assert payload["mutation_identity"]["stronger_auth_required"] is True
-    assert "/api/users" in payload["mutation_identity"]["admin_only_scope"]
-    assert payload["endpoint_policy"]["users"] == "admin_when_rbac_enabled"
-
-    client.headers.pop("X-User-Name", None)
-    header_response = client.get("/api/auth/capabilities", headers={"X-User-Role": "Viewer"})
-    assert header_response.status_code == 200
-    header_payload = header_response.json()["data"]
-    assert header_payload["effective_role"] == "viewer"
+    assert payload["current_user"]["username"] == "pytest"
+    assert payload["current_identity"]["email"] == "pytest@example.test"
+    assert payload["mutation_identity"]["mode"] == "bearer_jwt"
+    assert payload["mutation_identity"]["provider"] == "test-oidc"
+    assert payload["mutation_identity"]["temporary"] is False
+    assert payload["mutation_identity"]["stronger_auth_required"] is False
+    assert "GET /api/users" in payload["endpoint_policy"]["admin"]
+    assert "/api/auth/capabilities" in payload["endpoint_policy"]["public"]
+    assert "/api/health" in payload["endpoint_policy"]["public"]
 
 
 def test_request_size_limit_rejects_oversized_upload(database_url: str):
@@ -625,6 +628,10 @@ def test_request_size_limit_rejects_oversized_upload(database_url: str):
                 {
                     "username": "pytest",
                     "display_name": "Pytest User",
+                    "email": "pytest@example.test",
+                    "external_subject": "sub-pytest",
+                    "identity_provider": "test-oidc",
+                    "hosted_domain": "example.test",
                     "role": "admin",
                     "is_active": True,
                 },
@@ -635,7 +642,7 @@ def test_request_size_limit_rejects_oversized_upload(database_url: str):
 
         app = api.create_app(database_url=database_url)
         with TestClient(app) as test_client:
-            test_client.headers.update({"X-User-Name": "pytest"})
+            test_client.headers.update(auth_headers_for_user(sub="sub-pytest", email="pytest@example.test"))
             response = test_client.post(
                 "/api/items/import",
                 files={"file": ("oversized.csv", b"x" * 64, "text/csv")},
@@ -716,21 +723,22 @@ def test_request_size_limit_rejects_streaming_body_without_content_length():
         importlib.reload(api_module)
 
 
-def test_users_endpoint_allows_anonymous_read(client):
-    client.headers.pop("X-User-Name", None)
+def test_users_endpoint_requires_bearer_token(client):
+    client.headers.pop("Authorization", None)
 
     response = client.get("/api/users")
 
-    assert response.status_code == 200
+    assert response.status_code == 401
     payload = response.json()
-    assert payload["status"] == "ok"
-    assert any(row["username"] == "pytest" for row in payload["data"])
+    assert payload["status"] == "error"
+    assert payload["error"]["code"] == "AUTH_REQUIRED"
 
 
 def test_users_endpoint_requires_admin_role_when_rbac_is_enforced(database_url: str):
     original_env = os.environ.copy()
     try:
-        os.environ["INVENTORY_AUTH_MODE"] = "rbac_enforced"
+        os.environ["AUTH_MODE"] = "oidc_enforced"
+        os.environ["RBAC_MODE"] = "rbac_enforced"
         import app.api as api_module
         import app.config as config_module
 
@@ -746,6 +754,10 @@ def test_users_endpoint_requires_admin_role_when_rbac_is_enforced(database_url: 
                 {
                     "username": "admin-user",
                     "display_name": "Admin User",
+                    "email": "admin-user@example.test",
+                    "external_subject": "sub-admin-user",
+                    "identity_provider": "test-oidc",
+                    "hosted_domain": "example.test",
                     "role": "admin",
                     "is_active": True,
                 },
@@ -755,6 +767,10 @@ def test_users_endpoint_requires_admin_role_when_rbac_is_enforced(database_url: 
                 {
                     "username": "operator-user",
                     "display_name": "Operator User",
+                    "email": "operator-user@example.test",
+                    "external_subject": "sub-operator-user",
+                    "identity_provider": "test-oidc",
+                    "hosted_domain": "example.test",
                     "role": "operator",
                     "is_active": True,
                 },
@@ -766,14 +782,20 @@ def test_users_endpoint_requires_admin_role_when_rbac_is_enforced(database_url: 
         app = api_module.create_app(database_url=database_url)
         with TestClient(app) as test_client:
             anonymous_response = test_client.get("/api/users")
-            assert anonymous_response.status_code == 403
-            assert anonymous_response.json()["error"]["code"] == "FORBIDDEN"
+            assert anonymous_response.status_code == 401
+            assert anonymous_response.json()["error"]["code"] == "AUTH_REQUIRED"
 
-            operator_response = test_client.get("/api/users", headers={"X-User-Name": "operator-user"})
+            operator_response = test_client.get(
+                "/api/users",
+                headers=auth_headers_for_user(sub="sub-operator-user", email="operator-user@example.test"),
+            )
             assert operator_response.status_code == 403
             assert operator_response.json()["error"]["code"] == "FORBIDDEN"
 
-            admin_response = test_client.get("/api/users", headers={"X-User-Name": "admin-user"})
+            admin_response = test_client.get(
+                "/api/users",
+                headers=auth_headers_for_user(sub="sub-admin-user", email="admin-user@example.test"),
+            )
             assert admin_response.status_code == 200
             assert any(row["username"] == "operator-user" for row in admin_response.json()["data"])
     finally:
@@ -786,18 +808,51 @@ def test_users_endpoint_requires_admin_role_when_rbac_is_enforced(database_url: 
         importlib.reload(api_module)
 
 
-def test_users_me_endpoint_requires_active_user_header_on_read_request(client):
-    client.headers.pop("X-User-Name", None)
+def test_users_me_endpoint_requires_bearer_token_on_read_request(client):
+    client.headers.pop("Authorization", None)
 
     response = client.get("/api/users/me")
 
-    assert response.status_code == 403
+    assert response.status_code == 401
     payload = response.json()
     assert payload["status"] == "error"
-    assert payload["error"]["code"] == "USER_REQUIRED"
+    assert payload["error"]["code"] == "AUTH_REQUIRED"
 
 
-def test_users_me_endpoint_resolves_request_user_from_read_header(client):
+def test_users_me_endpoint_reports_bearer_token_requirement_in_dry_run_mode(database_url: str):
+    original_env = os.environ.copy()
+    try:
+        os.environ["AUTH_MODE"] = "oidc_dry_run"
+        os.environ["RBAC_MODE"] = "rbac_dry_run"
+        import app.api as api_module
+        import app.config as config_module
+
+        importlib.reload(config_module)
+        importlib.reload(api_module)
+
+        _reset_database(database_url)
+        init_db(database_url)
+        app = api_module.create_app(database_url=database_url)
+        with TestClient(app) as test_client:
+            response = test_client.get("/api/users/me")
+
+        assert response.status_code == 403
+        payload = response.json()
+        assert payload["status"] == "error"
+        assert payload["error"]["code"] == "USER_REQUIRED"
+        assert payload["error"]["message"] == "An active user mapped from a bearer token is required"
+        assert payload["error"]["details"]["requires"] == "Authorization: Bearer <JWT> mapped to an active user"
+    finally:
+        os.environ.clear()
+        os.environ.update(original_env)
+        import app.api as api_module
+        import app.config as config_module
+
+        importlib.reload(config_module)
+        importlib.reload(api_module)
+
+
+def test_users_me_endpoint_resolves_request_user_from_bearer_token(client):
     response = client.get("/api/users/me")
 
     assert response.status_code == 200
@@ -807,13 +862,424 @@ def test_users_me_endpoint_resolves_request_user_from_read_header(client):
     assert payload["data"]["display_name"] == "Pytest User"
 
 
-def test_read_request_with_unknown_user_header_is_rejected(client):
-    response = client.get("/api/users", headers={"X-User-Name": "missing-user"})
+def test_user_update_allows_partial_identity_update_when_existing_pair_remains_valid(client):
+    current_user = client.get("/api/users/me").json()["data"]
+
+    response = client.put(
+        f"/api/users/{current_user['user_id']}",
+        json={"external_subject": "sub-pytest-updated"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["data"]["external_subject"] == "sub-pytest-updated"
+    assert payload["data"]["identity_provider"] == "test-oidc"
+
+
+def test_read_request_with_unmapped_identity_is_rejected(client):
+    response = client.get(
+        "/api/users",
+        headers=auth_headers_for_user(sub="sub-missing-user", email="missing-user@example.test"),
+    )
 
     assert response.status_code == 403
     payload = response.json()
     assert payload["status"] == "error"
     assert payload["error"]["code"] == "USER_NOT_FOUND"
+
+
+def test_jwks_verifier_mode_accepts_oidc_bearer_tokens(database_url: str, monkeypatch):
+    class _FakeSigningKey:
+        def __init__(self, key: str):
+            self.key = key
+
+    class _FakePyJwkClient:
+        def __init__(self, url: str):
+            self.url = url
+
+        def get_signing_key_from_jwt(self, _token: str):
+            return _FakeSigningKey("jwks-test-shared-secret-for-backend-auth")
+
+    original_env = os.environ.copy()
+    try:
+        os.environ["AUTH_MODE"] = "oidc_enforced"
+        os.environ["RBAC_MODE"] = "rbac_enforced"
+        os.environ["JWT_VERIFIER"] = "jwks"
+        os.environ["JWT_SIGNING_ALGORITHMS"] = "HS256"
+        os.environ["JWT_SHARED_SECRET"] = "jwks-test-shared-secret-for-backend-auth"
+        os.environ["OIDC_JWKS_URL"] = "https://issuer.example.test/.well-known/jwks.json"
+        os.environ["OIDC_PROVIDER"] = "google"
+        os.environ["OIDC_EXPECTED_ISSUER"] = "https://issuer.example.test"
+        os.environ["OIDC_EXPECTED_AUDIENCE"] = "materials-management-tests"
+
+        import app.auth as auth_module
+        import app.api as api_module
+        import app.config as config_module
+
+        importlib.reload(config_module)
+        auth_module = importlib.reload(auth_module)
+        monkeypatch.setattr(auth_module.jwt, "PyJWKClient", _FakePyJwkClient)
+        api_module = importlib.reload(api_module)
+
+        _reset_database(database_url)
+        init_db(database_url)
+        seed_conn = get_connection(database_url)
+        try:
+            service.create_user(
+                seed_conn,
+                {
+                    "username": "jwks-user",
+                    "display_name": "JWKS User",
+                    "email": "jwks-user@example.test",
+                    "external_subject": "sub-jwks-user",
+                    "identity_provider": "google",
+                    "hosted_domain": "example.test",
+                    "role": "admin",
+                    "is_active": True,
+                },
+            )
+            seed_conn.commit()
+        finally:
+            seed_conn.close()
+
+        app = api_module.create_app(database_url=database_url)
+        with TestClient(app) as test_client:
+            test_client.headers.update(
+                auth_headers_for_user(
+                    sub="sub-jwks-user",
+                    email="jwks-user@example.test",
+                    hd="example.test",
+                    iss="https://issuer.example.test",
+                    aud="materials-management-tests",
+                )
+            )
+            response = test_client.get("/api/users/me")
+            capabilities = test_client.get("/api/auth/capabilities")
+
+        assert response.status_code == 200
+        assert response.json()["data"]["username"] == "jwks-user"
+        assert capabilities.status_code == 200
+        assert capabilities.json()["data"]["jwt_verifier"] == "jwks"
+        assert capabilities.json()["data"]["oidc_jwks_configured"] is True
+    finally:
+        os.environ.clear()
+        os.environ.update(original_env)
+        import app.auth as auth_module
+        import app.api as api_module
+        import app.config as config_module
+
+        importlib.reload(config_module)
+        importlib.reload(auth_module)
+        importlib.reload(api_module)
+
+
+def test_cors_preflight_bypasses_auth_and_role_enforcement(client):
+    client.headers.pop("Authorization", None)
+
+    response = client.options(
+        "/api/users",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+def test_shared_secret_verifier_rejects_email_without_true_verified_claim(database_url: str):
+    _reset_database(database_url)
+    init_db(database_url)
+    seed_conn = get_connection(database_url)
+    try:
+        service.create_user(
+            seed_conn,
+            {
+                "username": "email-verified-user",
+                "display_name": "Email Verified User",
+                "email": "email-verified-user@example.test",
+                "external_subject": "sub-email-verified-user",
+                "identity_provider": "test-oidc",
+                "hosted_domain": "example.test",
+                "role": "admin",
+                "is_active": True,
+            },
+        )
+        seed_conn.commit()
+    finally:
+        seed_conn.close()
+
+    token = jwt.encode(
+        {
+            "sub": "sub-email-verified-user",
+            "email": "email-verified-user@example.test",
+            "hd": "example.test",
+            "iss": os.environ["OIDC_EXPECTED_ISSUER"],
+            "aud": os.environ["OIDC_EXPECTED_AUDIENCE"],
+        },
+        os.environ["JWT_SHARED_SECRET"],
+        algorithm="HS256",
+    )
+    app = create_app(database_url=database_url)
+    with TestClient(app) as test_client:
+        response = test_client.get(
+            "/api/users/me",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+    assert response.status_code == 401
+    payload = response.json()
+    assert payload["status"] == "error"
+    assert payload["error"]["code"] == "INVALID_TOKEN"
+    assert payload["error"]["message"] == "Verified email claim is required when email is present"
+
+
+def test_shared_secret_verifier_allows_missing_hosted_domain_claim_when_allow_list_is_configured(
+    database_url: str,
+):
+    original_env = os.environ.copy()
+    try:
+        os.environ["OIDC_ALLOWED_HOSTED_DOMAINS"] = "example.test"
+        import app.auth as auth_module
+        import app.api as api_module
+        import app.config as config_module
+
+        importlib.reload(config_module)
+        importlib.reload(auth_module)
+        importlib.reload(api_module)
+
+        _reset_database(database_url)
+        init_db(database_url)
+        seed_conn = get_connection(database_url)
+        try:
+            service.create_user(
+                seed_conn,
+                {
+                    "username": "no-hd-user",
+                    "display_name": "No HD User",
+                    "email": "no-hd-user@example.test",
+                    "external_subject": "sub-no-hd-user",
+                    "identity_provider": "test-oidc",
+                    "hosted_domain": None,
+                    "role": "admin",
+                    "is_active": True,
+                },
+            )
+            seed_conn.commit()
+        finally:
+            seed_conn.close()
+
+        token = jwt.encode(
+            {
+                "sub": "sub-no-hd-user",
+                "email": "no-hd-user@example.test",
+                "email_verified": True,
+                "iss": os.environ["OIDC_EXPECTED_ISSUER"],
+                "aud": os.environ["OIDC_EXPECTED_AUDIENCE"],
+            },
+            os.environ["JWT_SHARED_SECRET"],
+            algorithm="HS256",
+        )
+        app = api_module.create_app(database_url=database_url)
+        with TestClient(app) as test_client:
+            response = test_client.get("/api/users/me", headers={"Authorization": f"Bearer {token}"})
+
+        assert response.status_code == 200
+        assert response.json()["data"]["username"] == "no-hd-user"
+    finally:
+        os.environ.clear()
+        os.environ.update(original_env)
+        import app.auth as auth_module
+        import app.api as api_module
+        import app.config as config_module
+
+        importlib.reload(config_module)
+        importlib.reload(auth_module)
+        importlib.reload(api_module)
+
+
+def test_jwks_verifier_allows_missing_hosted_domain_claim_when_allow_list_is_configured(
+    database_url: str,
+    monkeypatch,
+):
+    class _FakeSigningKey:
+        def __init__(self, key: str):
+            self.key = key
+
+    class _FakePyJwkClient:
+        def __init__(self, url: str):
+            self.url = url
+
+        def get_signing_key_from_jwt(self, _token: str):
+            return _FakeSigningKey("jwks-test-shared-secret-for-backend-auth")
+
+    original_env = os.environ.copy()
+    try:
+        os.environ["AUTH_MODE"] = "oidc_enforced"
+        os.environ["RBAC_MODE"] = "rbac_enforced"
+        os.environ["JWT_VERIFIER"] = "jwks"
+        os.environ["JWT_SIGNING_ALGORITHMS"] = "HS256"
+        os.environ["JWT_SHARED_SECRET"] = "jwks-test-shared-secret-for-backend-auth"
+        os.environ["OIDC_JWKS_URL"] = "https://issuer.example.test/.well-known/jwks.json"
+        os.environ["OIDC_PROVIDER"] = "google"
+        os.environ["OIDC_EXPECTED_ISSUER"] = "https://issuer.example.test"
+        os.environ["OIDC_EXPECTED_AUDIENCE"] = "materials-management-tests"
+        os.environ["OIDC_ALLOWED_HOSTED_DOMAINS"] = "example.test"
+
+        import app.auth as auth_module
+        import app.api as api_module
+        import app.config as config_module
+
+        importlib.reload(config_module)
+        auth_module = importlib.reload(auth_module)
+        monkeypatch.setattr(auth_module.jwt, "PyJWKClient", _FakePyJwkClient)
+        api_module = importlib.reload(api_module)
+
+        _reset_database(database_url)
+        init_db(database_url)
+        seed_conn = get_connection(database_url)
+        try:
+            service.create_user(
+                seed_conn,
+                {
+                    "username": "jwks-no-hd-user",
+                    "display_name": "JWKS No HD User",
+                    "email": "jwks-no-hd-user@example.test",
+                    "external_subject": "sub-jwks-no-hd-user",
+                    "identity_provider": "google",
+                    "hosted_domain": None,
+                    "role": "admin",
+                    "is_active": True,
+                },
+            )
+            seed_conn.commit()
+        finally:
+            seed_conn.close()
+
+        token = jwt.encode(
+            {
+                "sub": "sub-jwks-no-hd-user",
+                "email": "jwks-no-hd-user@example.test",
+                "email_verified": True,
+                "iss": "https://issuer.example.test",
+                "aud": "materials-management-tests",
+            },
+            os.environ["JWT_SHARED_SECRET"],
+            algorithm="HS256",
+        )
+        app = api_module.create_app(database_url=database_url)
+        with TestClient(app) as test_client:
+            response = test_client.get("/api/users/me", headers={"Authorization": f"Bearer {token}"})
+
+        assert response.status_code == 200
+        assert response.json()["data"]["username"] == "jwks-no-hd-user"
+    finally:
+        os.environ.clear()
+        os.environ.update(original_env)
+        import app.auth as auth_module
+        import app.api as api_module
+        import app.config as config_module
+
+        importlib.reload(config_module)
+        importlib.reload(auth_module)
+        importlib.reload(api_module)
+
+
+def test_cloud_run_diagnostics_default_to_admin_access(database_url: str):
+    original_env = os.environ.copy()
+    try:
+        os.environ["APP_RUNTIME_TARGET"] = "cloud_run"
+        os.environ["AUTH_MODE"] = "oidc_enforced"
+        os.environ["RBAC_MODE"] = "rbac_enforced"
+        import app.api as api_module
+        import app.config as config_module
+
+        importlib.reload(config_module)
+        importlib.reload(api_module)
+
+        _reset_database(database_url)
+        init_db(database_url)
+        seed_conn = get_connection(database_url)
+        try:
+            service.create_user(
+                seed_conn,
+                {
+                    "username": "cloud-admin",
+                    "display_name": "Cloud Admin",
+                    "email": "cloud-admin@example.test",
+                    "external_subject": "sub-cloud-admin",
+                    "identity_provider": "test-oidc",
+                    "hosted_domain": "example.test",
+                    "role": "admin",
+                    "is_active": True,
+                },
+            )
+            service.create_user(
+                seed_conn,
+                {
+                    "username": "cloud-viewer",
+                    "display_name": "Cloud Viewer",
+                    "email": "cloud-viewer@example.test",
+                    "external_subject": "sub-cloud-viewer",
+                    "identity_provider": "test-oidc",
+                    "hosted_domain": "example.test",
+                    "role": "viewer",
+                    "is_active": True,
+                },
+            )
+            seed_conn.commit()
+        finally:
+            seed_conn.close()
+
+        app = api_module.create_app(database_url=database_url)
+        with TestClient(app) as test_client:
+            anonymous_health = test_client.get("/api/health")
+            liveness = test_client.get("/healthz")
+            viewer_health = test_client.get(
+                "/api/health",
+                headers=auth_headers_for_user(sub="sub-cloud-viewer", email="cloud-viewer@example.test"),
+            )
+            admin_health = test_client.get(
+                "/api/health",
+                headers=auth_headers_for_user(sub="sub-cloud-admin", email="cloud-admin@example.test"),
+            )
+
+        assert anonymous_health.status_code == 401
+        assert anonymous_health.json()["error"]["code"] == "AUTH_REQUIRED"
+        assert liveness.status_code == 200
+        assert viewer_health.status_code == 403
+        assert viewer_health.json()["error"]["code"] == "FORBIDDEN"
+        assert admin_health.status_code == 200
+        assert admin_health.json()["data"]["diagnostics"]["auth_role"] == "admin"
+    finally:
+        os.environ.clear()
+        os.environ.update(original_env)
+        import app.api as api_module
+        import app.config as config_module
+
+        importlib.reload(config_module)
+        importlib.reload(api_module)
+
+
+def test_domain_audit_logging_emits_for_mutations_but_not_previews(client, monkeypatch):
+    import app.api as api_module
+
+    emitted_paths: list[str] = []
+
+    def _capture_domain_audit(request, _response):
+        emitted_paths.append(request.url.path)
+
+    monkeypatch.setattr(api_module, "_emit_domain_audit_event", _capture_domain_audit)
+
+    create_response = client.post("/api/manufacturers", json={"name": "AUDIT-MFG"})
+    preview_response = client.post("/api/projects/requirements/preview", json={"text": "AUDIT-ITEM,2"})
+
+    assert create_response.status_code == 200
+    assert preview_response.status_code == 200
+    assert "/api/manufacturers" in emitted_paths
+    assert "/api/projects/requirements/preview" not in emitted_paths
 
 
 def test_users_endpoint_can_include_inactive_rows(client):
@@ -854,6 +1320,10 @@ def test_first_active_user_can_be_created_without_user_header_when_none_exist(da
             json={
                 "username": "bootstrap-admin",
                 "display_name": "Bootstrap Admin",
+                "email": "bootstrap-admin@example.test",
+                "external_subject": "sub-bootstrap-admin",
+                "identity_provider": "test-oidc",
+                "hosted_domain": "example.test",
                 "role": "admin",
                 "is_active": True,
             },
@@ -865,7 +1335,7 @@ def test_first_active_user_can_be_created_without_user_header_when_none_exist(da
     assert payload["data"]["username"] == "bootstrap-admin"
 
 
-def test_user_creation_without_header_is_rejected_once_active_user_exists(database_url: str):
+def test_user_creation_without_bearer_token_is_rejected_once_active_user_exists(database_url: str):
     _reset_database(database_url)
     init_db(database_url)
     seed_conn = get_connection(database_url)
@@ -875,6 +1345,10 @@ def test_user_creation_without_header_is_rejected_once_active_user_exists(databa
             {
                 "username": "existing-admin",
                 "display_name": "Existing Admin",
+                "email": "existing-admin@example.test",
+                "external_subject": "sub-existing-admin",
+                "identity_provider": "test-oidc",
+                "hosted_domain": "example.test",
                 "role": "admin",
                 "is_active": True,
             },
@@ -889,15 +1363,19 @@ def test_user_creation_without_header_is_rejected_once_active_user_exists(databa
             json={
                 "username": "blocked-bootstrap",
                 "display_name": "Blocked Bootstrap",
+                "email": "blocked-bootstrap@example.test",
+                "external_subject": "sub-blocked-bootstrap",
+                "identity_provider": "test-oidc",
+                "hosted_domain": "example.test",
                 "role": "operator",
                 "is_active": True,
             },
         )
 
-    assert response.status_code == 403
+    assert response.status_code == 401
     payload = response.json()
     assert payload["status"] == "error"
-    assert payload["error"]["code"] == "USER_REQUIRED"
+    assert payload["error"]["code"] == "AUTH_REQUIRED"
 
 
 def test_inventory_reservation_and_dashboard_flow(client):
@@ -1143,7 +1621,7 @@ def test_order_import_preview_and_import_accept_supplier_from_csv_rows(client):
     orders = client.get("/api/orders").json()["data"]
     assert any(row["supplier_name"] == "SupplierRowOnly" for row in orders)
 
-def test_order_import_requires_quotation_document_url_instead_of_pdf_link(client):
+def test_order_import_requires_quotation_document_url(client):
     client.post("/api/manufacturers", json={"name": "API-MANUAL-MFG"})
     client.post(
         "/api/items",
@@ -1164,7 +1642,6 @@ def test_order_import_requires_quotation_document_url_instead_of_pdf_link(client
             "issue_date",
             "order_date",
             "expected_arrival",
-            "pdf_link",
         ],
     )
     writer.writeheader()
@@ -1176,7 +1653,6 @@ def test_order_import_requires_quotation_document_url_instead_of_pdf_link(client
             "issue_date": "2026-02-21",
             "order_date": "2026-02-22",
             "expected_arrival": "2026-03-01",
-            "pdf_link": "Q-MANUAL-001.pdf",
         }
     )
     response = client.post(
@@ -1190,7 +1666,7 @@ def test_order_import_requires_quotation_document_url_instead_of_pdf_link(client
     assert payload["error"]["code"] == "INVALID_FIELD"
     assert "quotation_document_url" in payload["error"]["message"]
 
-def test_order_import_rejects_unregistered_pdf_link_path(client):
+def test_order_import_rejects_non_url_quotation_document_url(client):
     client.post("/api/manufacturers", json={"name": "API-MANUAL-VALID-MFG"})
     client.post(
         "/api/items",
@@ -1211,7 +1687,7 @@ def test_order_import_rejects_unregistered_pdf_link_path(client):
             "issue_date",
             "order_date",
             "expected_arrival",
-            "pdf_link",
+            "quotation_document_url",
         ],
     )
     writer.writeheader()
@@ -1223,7 +1699,7 @@ def test_order_import_rejects_unregistered_pdf_link_path(client):
             "issue_date": "2026-02-21",
             "order_date": "2026-02-22",
             "expected_arrival": "2026-03-01",
-            "pdf_link": "imports/orders/unregistered/pdf_files/SupplierManual/Q-MANUAL-002.pdf",
+            "quotation_document_url": "imports/orders/unregistered/pdf_files/SupplierManual/Q-MANUAL-002.pdf",
         }
     )
     response = client.post(
@@ -1234,7 +1710,7 @@ def test_order_import_rejects_unregistered_pdf_link_path(client):
     assert response.status_code == 422
     payload = response.json()
     assert payload["status"] == "error"
-    assert payload["error"]["code"] == "INVALID_FIELD"
+    assert payload["error"]["code"] == "INVALID_DOCUMENT_URL"
     assert "quotation_document_url" in payload["error"]["message"]
 
 def test_order_import_rejects_duplicate_quotation_for_same_supplier(client):
@@ -1258,7 +1734,7 @@ def test_order_import_rejects_duplicate_quotation_for_same_supplier(client):
             "issue_date",
             "order_date",
             "expected_arrival",
-            "pdf_link",
+            "quotation_document_url",
         ],
     )
     writer.writeheader()
@@ -1270,7 +1746,7 @@ def test_order_import_rejects_duplicate_quotation_for_same_supplier(client):
             "issue_date": "2026-02-21",
             "order_date": "2026-02-22",
             "expected_arrival": "2026-03-01",
-            "pdf_link": "Q-DUP-001.pdf",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-DUP-001.pdf",
         }
     )
 
@@ -1323,10 +1799,9 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
             "quantity",
             "quotation_number",
             "issue_date",
-            "quotation_document_url",
             "order_date",
             "expected_arrival",
-            "pdf_link",
+            "quotation_document_url",
         ],
     )
     existing_writer.writeheader()
@@ -1336,10 +1811,9 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
             "quantity": "1",
             "quotation_number": "Q-DUP-PREVIEW",
             "issue_date": "2026-02-21",
-            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-DUP-PREVIEW",
             "order_date": "2026-02-22",
             "expected_arrival": "2026-03-01",
-            "pdf_link": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-DUP-PREVIEW.pdf",
         }
     )
     imported = client.post(
@@ -1357,10 +1831,9 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
             "quantity",
             "quotation_number",
             "issue_date",
-            "quotation_document_url",
             "order_date",
             "expected_arrival",
-            "pdf_link",
+            "quotation_document_url",
         ],
     )
     preview_writer.writeheader()
@@ -1370,10 +1843,9 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
             "quantity": "2",
             "quotation_number": "Q-DUP-PREVIEW",
             "issue_date": "2026-02-21",
-            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-DUP-PREVIEW",
             "order_date": "2026-02-22",
             "expected_arrival": "2026-03-01",
-            "pdf_link": "Q-DUP-PREVIEW.pdf",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-DUP-PREVIEW.pdf",
         }
     )
     preview_writer.writerow(
@@ -1382,10 +1854,9 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
             "quantity": "1",
             "quotation_number": "Q-REVIEW-PREVIEW",
             "issue_date": "2026-02-21",
-            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-REVIEW-PREVIEW",
             "order_date": "2026-02-22",
             "expected_arrival": "2026-03-01",
-            "pdf_link": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-REVIEW-PREVIEW.pdf",
         }
     )
     preview_writer.writerow(
@@ -1394,10 +1865,9 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
             "quantity": "1",
             "quotation_number": "Q-UNRESOLVED-PREVIEW",
             "issue_date": "2026-02-21",
-            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-UNRESOLVED-PREVIEW",
             "order_date": "2026-02-22",
             "expected_arrival": "2026-03-01",
-            "pdf_link": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-UNRESOLVED-PREVIEW.pdf",
         }
     )
 
@@ -1453,7 +1923,7 @@ def test_orders_import_accepts_preview_overrides_and_alias_saves(client):
             "issue_date",
             "order_date",
             "expected_arrival",
-            "pdf_link",
+            "quotation_document_url",
         ],
     )
     writer.writeheader()
@@ -1465,7 +1935,7 @@ def test_orders_import_accepts_preview_overrides_and_alias_saves(client):
             "issue_date": "2026-02-21",
             "order_date": "2026-02-22",
             "expected_arrival": "2026-03-01",
-            "pdf_link": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
         }
     )
 
@@ -1515,7 +1985,7 @@ def test_orders_import_accepts_preview_overrides_and_alias_saves(client):
             "issue_date",
             "order_date",
             "expected_arrival",
-            "pdf_link",
+            "quotation_document_url",
         ],
     )
     second_writer.writeheader()
@@ -1527,7 +1997,7 @@ def test_orders_import_accepts_preview_overrides_and_alias_saves(client):
             "issue_date": "2026-02-21",
             "order_date": "2026-02-22",
             "expected_arrival": "2026-03-01",
-            "pdf_link": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
         }
     )
     second_response = client.post(
@@ -1557,7 +2027,7 @@ def test_orders_import_rejects_malformed_preview_override_json(client):
             "issue_date",
             "order_date",
             "expected_arrival",
-            "pdf_link",
+            "quotation_document_url",
         ],
         [
             {
@@ -1567,7 +2037,7 @@ def test_orders_import_rejects_malformed_preview_override_json(client):
                 "issue_date": "2026-02-21",
                 "order_date": "2026-02-22",
                 "expected_arrival": "2026-03-01",
-                "pdf_link": "",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
             }
         ],
     )
@@ -1604,7 +2074,7 @@ def test_orders_import_rejects_non_array_alias_saves(client):
             "issue_date",
             "order_date",
             "expected_arrival",
-            "pdf_link",
+            "quotation_document_url",
         ],
         [
             {
@@ -1614,7 +2084,7 @@ def test_orders_import_rejects_non_array_alias_saves(client):
                 "issue_date": "2026-02-21",
                 "order_date": "2026-02-22",
                 "expected_arrival": "2026-03-01",
-                "pdf_link": "",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
             }
         ],
     )
@@ -1662,7 +2132,7 @@ def test_orders_endpoint_filters_by_item_id(client):
             "issue_date",
             "order_date",
             "expected_arrival",
-            "pdf_link",
+            "quotation_document_url",
         ],
     )
     writer.writeheader()
@@ -1674,7 +2144,7 @@ def test_orders_endpoint_filters_by_item_id(client):
             "issue_date": "2026-03-01",
             "order_date": "2026-03-02",
             "expected_arrival": FUTURE_TARGET_DATE,
-            "pdf_link": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
         }
     )
     writer.writerow(
@@ -1685,7 +2155,7 @@ def test_orders_endpoint_filters_by_item_id(client):
             "issue_date": "2026-03-01",
             "order_date": "2026-03-02",
             "expected_arrival": FUTURE_TARGET_DATE,
-            "pdf_link": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
         }
     )
     imported = client.post(
@@ -1723,7 +2193,7 @@ def test_order_import_accepts_slash_date_format(client):
             "issue_date",
             "order_date",
             "expected_arrival",
-            "pdf_link",
+            "quotation_document_url",
         ],
     )
     writer.writeheader()
@@ -1735,7 +2205,7 @@ def test_order_import_accepts_slash_date_format(client):
             "issue_date": "2026/2/21",
             "order_date": "2026/2/22",
             "expected_arrival": "2026/3/1",
-            "pdf_link": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
         }
     )
     response = client.post(
@@ -2626,7 +3096,7 @@ def test_delete_order_endpoint(client):
             "issue_date",
             "order_date",
             "expected_arrival",
-            "pdf_link",
+            "quotation_document_url",
         ],
     )
     writer.writeheader()
@@ -2638,7 +3108,7 @@ def test_delete_order_endpoint(client):
             "issue_date": "2026-03-01",
             "order_date": "2026-03-01",
             "expected_arrival": "2026-03-10",
-            "pdf_link": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
         }
     )
 
@@ -2675,7 +3145,7 @@ def test_merge_orders_endpoint_merges_and_returns_lineage(client):
             "issue_date",
             "order_date",
             "expected_arrival",
-            "pdf_link",
+            "quotation_document_url",
         ],
     )
     writer.writeheader()
@@ -2687,7 +3157,7 @@ def test_merge_orders_endpoint_merges_and_returns_lineage(client):
             "issue_date": "2026-03-01",
             "order_date": "2026-03-01",
             "expected_arrival": "2026-03-10",
-            "pdf_link": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
         }
     )
     writer.writerow(
@@ -2698,7 +3168,7 @@ def test_merge_orders_endpoint_merges_and_returns_lineage(client):
             "issue_date": "2026-03-01",
             "order_date": "2026-03-01",
             "expected_arrival": "2026-03-15",
-            "pdf_link": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
         }
     )
 
@@ -2752,7 +3222,7 @@ def test_delete_quotation_endpoint_removes_related_orders(client):
             "issue_date",
             "order_date",
             "expected_arrival",
-            "pdf_link",
+            "quotation_document_url",
         ],
     )
     writer.writeheader()
@@ -2764,7 +3234,7 @@ def test_delete_quotation_endpoint_removes_related_orders(client):
             "issue_date": "2026-03-01",
             "order_date": "2026-03-01",
             "expected_arrival": "2026-03-10",
-            "pdf_link": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
         }
     )
 
@@ -2811,13 +3281,15 @@ def test_import_template_endpoints_return_header_only_bom_csv(client):
             "note",
         ],
         "/api/orders/import-template": [
+            "supplier",
             "item_number",
             "quantity",
             "quotation_number",
             "issue_date",
+            "quotation_document_url",
             "order_date",
             "expected_arrival",
-            "pdf_link",
+            "purchase_order_document_url",
         ],
         "/api/reservations/import-template": [
             "item_id",
@@ -3472,7 +3944,7 @@ def test_bom_analyze_endpoint_supports_target_date_projection(client):
             "issue_date",
             "order_date",
             "expected_arrival",
-            "pdf_link",
+            "quotation_document_url",
         ],
     )
     writer.writeheader()
@@ -3484,7 +3956,7 @@ def test_bom_analyze_endpoint_supports_target_date_projection(client):
             "issue_date": "2026-03-01",
             "order_date": "2026-03-02",
             "expected_arrival": "2026-03-20",
-            "pdf_link": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
         }
     )
     imported = client.post(
@@ -3726,7 +4198,7 @@ def test_project_gap_analysis_endpoint_supports_target_date(client):
             "issue_date",
             "order_date",
             "expected_arrival",
-            "pdf_link",
+            "quotation_document_url",
         ],
     )
     writer.writeheader()
@@ -3738,7 +4210,7 @@ def test_project_gap_analysis_endpoint_supports_target_date(client):
             "issue_date": "2026-03-01",
             "order_date": "2026-03-02",
             "expected_arrival": "2026-03-20",
-            "pdf_link": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
         }
     )
     imported = client.post(
@@ -4233,7 +4705,7 @@ def test_item_planning_context_endpoint_and_workspace_export(client):
             "issue_date",
             "order_date",
             "expected_arrival",
-            "pdf_link",
+            "quotation_document_url",
         ],
     )
     writer.writeheader()
@@ -4245,7 +4717,7 @@ def test_item_planning_context_endpoint_and_workspace_export(client):
             "issue_date": "2026-03-01",
             "order_date": "2026-03-02",
             "expected_arrival": FUTURE_TARGET_DATE,
-            "pdf_link": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
         }
     )
     imported = client.post(
@@ -4358,7 +4830,7 @@ def test_project_rfq_batch_endpoint_uses_requested_target_date(client):
             "issue_date",
             "order_date",
             "expected_arrival",
-            "pdf_link",
+            "quotation_document_url",
         ],
     )
     writer.writeheader()
@@ -4370,7 +4842,7 @@ def test_project_rfq_batch_endpoint_uses_requested_target_date(client):
             "issue_date": "2026-03-01",
             "order_date": "2026-03-02",
             "expected_arrival": "2999-03-01",
-            "pdf_link": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
         }
     )
     imported = client.post(
@@ -4438,7 +4910,7 @@ def test_update_order_endpoint_rejects_manual_project_override_for_rfq_owned_ord
             "issue_date",
             "order_date",
             "expected_arrival",
-            "pdf_link",
+            "quotation_document_url",
         ],
     )
     writer.writeheader()
@@ -4450,7 +4922,7 @@ def test_update_order_endpoint_rejects_manual_project_override_for_rfq_owned_ord
             "issue_date": "2026-03-01",
             "order_date": "2026-03-02",
             "expected_arrival": FUTURE_TARGET_DATE,
-            "pdf_link": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
         }
     )
     imported = client.post(
@@ -4514,7 +4986,7 @@ def test_procurement_line_revert_preserves_rfq_owned_order_project(client):
             "issue_date",
             "order_date",
             "expected_arrival",
-            "pdf_link",
+            "quotation_document_url",
         ],
     )
     writer.writeheader()
@@ -4526,7 +4998,7 @@ def test_procurement_line_revert_preserves_rfq_owned_order_project(client):
             "issue_date": "2026-03-01",
             "order_date": "2026-03-02",
             "expected_arrival": FUTURE_TARGET_DATE,
-            "pdf_link": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
         }
     )
     imported = client.post(
@@ -4618,7 +5090,7 @@ def test_rfq_line_endpoint_clears_stale_link_when_reverted_to_quoted(client):
             "issue_date",
             "order_date",
             "expected_arrival",
-            "pdf_link",
+            "quotation_document_url",
         ],
     )
     writer.writeheader()
@@ -4630,7 +5102,7 @@ def test_rfq_line_endpoint_clears_stale_link_when_reverted_to_quoted(client):
             "issue_date": "2026-03-01",
             "order_date": "2026-03-02",
             "expected_arrival": FUTURE_TARGET_DATE,
-            "pdf_link": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
         }
     )
     imported = client.post(
