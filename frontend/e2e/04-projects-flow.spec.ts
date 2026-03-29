@@ -1,20 +1,13 @@
 import { test, expect } from '@playwright/test';
+import { E2E_BEARER_TOKEN, installAccessToken } from './auth';
 
 test.describe('Projects Flow', () => {
-  test('Project List loads and can open Project Creation Form', async ({ page }) => {
-    // We need to set a user first to avoid unauthorized errors for mutations
-    await page.goto('/');
-    
-    // Attempt to pick a user if combobox is present
-    const userSelect = page.locator('select').first();
-    await expect(userSelect).toBeVisible();
-    
-    // Choose the second option if the first is "Select user"
-    const optionsCount = await userSelect.locator('option').count();
-    if (optionsCount > 1) {
-      await userSelect.selectOption({ index: 1 });
-    }
+  test.beforeEach(async ({ page }) => {
+    test.skip(!E2E_BEARER_TOKEN, 'Set PLAYWRIGHT_E2E_BEARER_TOKEN before running Playwright E2E tests.');
+    await installAccessToken(page);
+  });
 
+  test('Project List loads and can open Project Creation Form', async ({ page }) => {
     await page.goto('/projects');
 
     // Should be on Projects tab

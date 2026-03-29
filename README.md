@@ -122,9 +122,12 @@ This wrapper sets `NGINX_HOST_PORT=8088` for the E2E stack, so Playwright does n
 - Set `DATABASE_URL` from Secret Manager / Cloud SQL connection config
 - Set `INSTANCE_CONNECTION_NAME` for the target Cloud SQL instance and keep `DATABASE_URL` on the Cloud SQL Unix-socket form
 - Set `VITE_API_BASE` to the backend Cloud Run public `/api` URL for split-service deployment
+- Set `VITE_GOOGLE_CLIENT_ID` to the browser OAuth client used for Google Identity sign-in
 - The built frontend image no longer proxies `/api` to an internal backend container by default; browser API traffic should come from `VITE_API_BASE`
 - Set `BACKEND_PUBLIC_BASE_URL` and `FRONTEND_PUBLIC_BASE_URL` if you want the runtime health surface to report the intended public URLs explicitly
 - Set `CORS_ALLOWED_ORIGINS` to the frontend Cloud Run origin explicitly
+- Set `JWT_VERIFIER=jwks` plus `OIDC_JWKS_URL`, `OIDC_EXPECTED_ISSUER`, and `OIDC_EXPECTED_AUDIENCE` for deployed OIDC verification
+- `DIAGNOSTICS_AUTH_ROLE` defaults to `admin` in Cloud Run so `/api/health` and `/api/auth/capabilities` do not stay anonymously public
 - Keep `MAX_UPLOAD_BYTES=33554432` unless you intentionally revise the first-rollout 32 MB ceiling
 - Keep `CLOUD_RUN_CONCURRENCY_TARGET=10` and align actual Cloud Run/Gunicorn settings with Cloud SQL capacity
 - Set `STORAGE_BACKEND=gcs` plus `GCS_BUCKET` and optional `GCS_OBJECT_PREFIX` for Cloud Run durable storage; `local` remains the local/shared-server default
@@ -141,9 +144,11 @@ This wrapper sets `NGINX_HOST_PORT=8088` for the E2E stack, so Playwright does n
 
 - API base: `http://127.0.0.1:8000/api`
 - API docs (Swagger): `http://127.0.0.1:8000/docs`
-- Mutation requests require `X-User-Name` for a pre-registered active user.
-- `X-User-Name` is a temporary rollout identity mechanism, not the intended long-term public-cloud auth boundary.
-- The frontend header bar now includes a user selector backed by `/api/users`.
+- Browser/API auth now uses `Authorization: Bearer <JWT>`.
+- Runtime auth is controlled by `AUTH_MODE` (`none`, `oidc_dry_run`, `oidc_enforced`) and `RBAC_MODE` (`none`, `rbac_dry_run`, `rbac_enforced`).
+- `JWT_VERIFIER` supports `shared_secret` for local fixtures and `jwks` for deployed OIDC verification.
+- App users are mapped from verified OIDC claims (`email`, `sub`, `hd`) onto active rows in `users`.
+- The frontend header bar now supports Google Identity sign-in when `VITE_GOOGLE_CLIENT_ID` is configured and keeps manual Bearer token entry as a fallback.
 
 ## Database and File Layout
 

@@ -7,7 +7,7 @@ function normalizeApiBase(value: unknown): string {
 }
 
 const API_BASE = normalizeApiBase(import.meta.env.VITE_API_BASE);
-const USERNAME_STORAGE_KEY = "materials.username";
+const ACCESS_TOKEN_STORAGE_KEY = "materials.access-token";
 const USERS_CHANGED_EVENT = "materials:users-changed";
 
 function toAbsolutePath(path: string): string {
@@ -19,23 +19,23 @@ function buildApiUrl(path: string): string {
   return `${API_BASE}${toAbsolutePath(path)}`;
 }
 
-function getStoredUsername(): string | null {
+function getStoredAccessToken(): string | null {
   if (typeof window === "undefined") return null;
-  const value = window.localStorage.getItem(USERNAME_STORAGE_KEY);
+  const value = window.localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY);
   return value && value.trim() ? value.trim() : null;
 }
 
-export function setStoredUsername(username: string | null): void {
+export function setStoredAccessToken(token: string | null): void {
   if (typeof window === "undefined") return;
-  if (username && username.trim()) {
-    window.localStorage.setItem(USERNAME_STORAGE_KEY, username.trim());
+  if (token && token.trim()) {
+    window.localStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, token.trim());
     return;
   }
-  window.localStorage.removeItem(USERNAME_STORAGE_KEY);
+  window.localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
 }
 
-export function getStoredUsernameOrNull(): string | null {
-  return getStoredUsername();
+export function getStoredAccessTokenOrNull(): string | null {
+  return getStoredAccessToken();
 }
 
 export function notifyUsersChanged(): void {
@@ -63,13 +63,13 @@ type BuildHeadersOptions = {
 
 function buildHeaders(init?: RequestInit, options?: BuildHeadersOptions): Headers {
   const headers = new Headers(init?.headers ?? {});
-  const username = getStoredUsername();
+  const accessToken = getStoredAccessToken();
+  if (accessToken) {
+    headers.set("Authorization", `Bearer ${accessToken}`);
+  }
   if (isMutationMethod(init?.method)) {
-    if (!username && !options?.allowAnonymousMutation) {
-      throw new Error("Select a user before performing changes.");
-    }
-    if (username) {
-      headers.set("X-User-Name", username);
+    if (!accessToken && !options?.allowAnonymousMutation) {
+      throw new Error("Set an access token before performing changes.");
     }
   }
   return headers;

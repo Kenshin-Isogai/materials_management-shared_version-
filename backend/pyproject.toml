@@ -10,6 +10,7 @@ dependencies = [
     "gunicorn>=23.0.0",
     "httpx>=0.28.1",
     "pydantic>=2.12.5",
+    "PyJWT>=2.10.1",
     "psycopg[binary]>=3.2.10",
     "pypdf>=6.7.3",
     "pytest>=8.4.2",

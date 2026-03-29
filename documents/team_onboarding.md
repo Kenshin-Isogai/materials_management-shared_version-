@@ -172,7 +172,7 @@ After the app is running, create at least one user:
 - Open the `/users` page in the UI and add a user, or
 - Call the API directly (e.g., `POST /api/users`)
 
-Mutations (create, update, delete) require the `X-User-Name` header. In the UI, select a user from the header dropdown before making changes. Read operations work without a user.
+Mutations now use `Authorization: Bearer <JWT>`. In the UI, paste a local fixture token or real access token into the shell header before making changes.
 
 ### Step 10: Run backend tests
 

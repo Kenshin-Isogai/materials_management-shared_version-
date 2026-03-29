@@ -23,17 +23,21 @@ This document explains the implemented architecture of the Materials Management 
   - `docker-compose.yml` (production), `docker-compose.override.yml` (local dev), `docker-compose.test.yml` (test DB)
   - `backend/Dockerfile`, `frontend/Dockerfile`, `frontend/nginx.conf`, `frontend/nginx.local-proxy.conf`
   - the built frontend image keeps a cloud-first nginx config that does not proxy `/api`; local Docker Compose mounts `frontend/nginx.local-proxy.conf` to preserve same-origin `/api` access
-- Header-based user identification for mutation requests:
-  - anonymous reads remain allowed
-  - mutation requests require `X-User-Name`
-  - resolved users are stored in `request.state.user`
-  - database-side audit triggers populate `created_by` / `updated_by` / `performed_by` where supported
-  - bootstrap exception: `POST /api/users` is allowed without `X-User-Name` only while the system has zero active users, so the first user can be created from `/users`
-  - when `INVENTORY_AUTH_MODE=rbac_enforced`, `/api/users*` is restricted to `admin`; `rbac_dry_run` logs would-be denials without blocking
-  - this remains an explicit temporary Cloud Run rollout compromise, not the intended long-term public-cloud trust boundary
+- Bearer-token identity and RBAC:
+  - API/browser calls use `Authorization: Bearer <JWT>`
+  - verified claims are normalized into `request.state.identity` (`subject`, `email`, `provider`, `claims`, optional `hosted_domain`)
+  - app users are resolved into `request.state.user` through active `users` rows using `email` or `identity_provider` + `external_subject`, with optional hosted-domain matching
+  - browser login now supports Google Identity Services when `VITE_GOOGLE_CLIENT_ID` is configured, while manual token entry remains as a local/test fallback
+  - database-side audit triggers continue to populate `created_by` / `updated_by` / `performed_by` where supported
+  - application-level domain audit events are now emitted through structured logs for successful high-impact mutations and export/download flows
+  - `AUTH_MODE` controls auth posture: `none`, `oidc_dry_run`, `oidc_enforced`
+  - `RBAC_MODE` controls authorization posture: `none`, `rbac_dry_run`, `rbac_enforced`
+  - `JWT_VERIFIER` supports `shared_secret` and `jwks`; deployed OIDC verification uses `OIDC_JWKS_URL`
+  - `/api/users*` is admin-only, normal mutations/exports/imports are operator scope, and authenticated reads default to viewer scope
+  - bootstrap exception: `POST /api/users` is allowed without Bearer auth only while the system has zero active users
 - Frontend user administration at `/users` page.
-  - `GET /api/users` provides the active-user feed for the global picker
-  - `GET /api/users?include_inactive=true` backs the management screen
+  - admins manage `username`, display name, role, active state, and OIDC mapping fields
+  - the global shell now stores a Bearer token and resolves the current user through `/api/users/me`
   - create/update/deactivate flows emit a frontend refresh signal so the shared header picker stays aligned
 - The browser-facing item registration flow is now unified around the preview-first Items CSV import.
   - order-generated missing-item CSVs are downloaded to the browser, edited, and re-imported through `POST /api/items/import-preview` + `POST /api/items/import`
@@ -71,9 +75,11 @@ This document explains the implemented architecture of the Materials Management 
   - storage backend summary and public-url metadata
   - repo-visible recovery policy metadata for Cloud SQL PITR, GCS retention/versioning, and post-restore validation expectations
   - temporary mutation-identity posture
+  - diagnostics exposure posture through `diagnostics.auth_role`
 - dedicated probe endpoints now separate lightweight liveness from dependency readiness:
   - `GET /healthz` for fast process liveness
   - `GET /readyz` for DB-backed readiness checks suitable for Cloud Run
+  - `GET /api/health` and `GET /api/auth/capabilities` now default to `admin` exposure in Cloud Run unless `DIAGNOSTICS_AUTH_ROLE` explicitly relaxes that
 - backend request/application logging now supports structured JSON output via `STRUCTURED_LOGGING`, including request IDs, latency, status, auth mode, and startup/shutdown events.
 
 ## Operating Profile (Confirmed)
@@ -167,7 +173,7 @@ flowchart LR
    `inventory_ledger` gives fast current stock lookup, while `transaction_log` enables traceability and undo.
 3. Filesystem-aware order ingestion.
      Orders are imported from CSV/PDF folders, then moved to canonical registered paths to preserve auditability.
-    Legacy CSV `pdf_link` text is now treated as compatibility-import input only, not as persisted quotation metadata.
+    Order import now requires canonical `quotation_document_url` values; legacy `pdf_link` compatibility has been removed.
     Imported order CSVs are historical artifacts only; order and quotation edits now use database state as the source of truth and do not rescan or rewrite archived CSV content.
     Shared-server upload adapters are now limited to request-scoped temporary files where needed; the Items missing-item batch path processes uploaded CSV bytes directly.
     Generated artifact retrieval is now routed through a storage boundary so the public API can use opaque artifact IDs instead of raw file locations.
@@ -495,9 +501,7 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 - Unregistered batch import resolves/moves CSV and PDF files, but no longer rewrites archived CSV content or quotation DB rows just to keep filesystem paths canonical.
 - The GCP-target browser workflow does not depend on supplier folder names or uploaded PDF staging for order import.
 - Orders ZIP staging accepts either canonical `csv_files/...` + `pdf_files/...` paths or simpler supplier-subfolder layouts, then normalizes them into the canonical unregistered structure before domain import starts.
-- Upload-first Orders ZIP CSVs should use the legacy `pdf_link` filename/path compatibility contract only when that legacy batch flow is intentionally used.
-  - browser uploads resolve that filename against staged PDFs for the same supplier
-  - path-shaped `pdf_link` text is normalized for compatibility inside the importer only, and is not persisted as quotation metadata
+- Upload-first Orders ZIP CSVs should use `quotation_document_url` values only; staged PDF filename/path compatibility is no longer supported.
 - Manual Orders CSV import should use external document URLs instead of filesystem-style PDF references.
 - `quotations.pdf_link` is removed from the schema; `quotation_document_url` is the document-reference field.
 - Manual order import now records DB-backed import jobs and row-level effects.

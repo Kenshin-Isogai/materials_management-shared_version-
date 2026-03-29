@@ -1,5 +1,6 @@
 /// <reference types="node" />
 import { test, expect } from '@playwright/test';
+import { E2E_BEARER_TOKEN, authHeaders, installAccessToken } from './auth';
 
 /**
  * Stateful CRUD test: Items CSV import → edit → delete
@@ -15,9 +16,16 @@ import { test, expect } from '@playwright/test';
  */
 test.describe('Items Stateful CRUD (CSV import → edit → delete)', () => {
   const e2eItemNumber = `E2E-ITEM-${Date.now()}`;
-  let selectedUsername = 'e2e.admin';
+
+  test.beforeEach(async ({ page }) => {
+    test.skip(!E2E_BEARER_TOKEN, 'Set PLAYWRIGHT_E2E_BEARER_TOKEN before running Playwright E2E tests.');
+    await installAccessToken(page);
+  });
 
   test.afterAll(async ({ request }) => {
+    if (!E2E_BEARER_TOKEN) {
+      return;
+    }
     try {
       const iRes = await request.get('/api/items?per_page=500');
       if (iRes.ok()) {
@@ -27,7 +35,7 @@ test.describe('Items Stateful CRUD (CSV import → edit → delete)', () => {
         );
         if (item) {
           await request.delete(`/api/items/${item.item_id}`, {
-            headers: { 'X-User-Name': selectedUsername },
+            headers: authHeaders(),
           });
           console.log(`afterAll cleanup: deleted item ${e2eItemNumber}`);
         }
@@ -38,15 +46,6 @@ test.describe('Items Stateful CRUD (CSV import → edit → delete)', () => {
   });
 
   test('Import item via CSV, edit it, then delete it', async ({ page }) => {
-    // ── Select an active user ────────────────────────────────────────────────
-    await page.goto('/');
-    const userSelect = page.locator('select').first();
-    if ((await userSelect.locator('option').count()) > 1) {
-      const val = await userSelect.locator('option').nth(1).getAttribute('value');
-      if (val) selectedUsername = val;
-      await userSelect.selectOption({ index: 1 });
-    }
-
     await page.goto('/items');
 
     // ── 1. Upload & Preview CSV ──────────────────────────────────────────────
@@ -150,27 +149,21 @@ test.describe('Items Stateful CRUD (CSV import → edit → delete)', () => {
 test.describe('Orders Stateful CRUD (CSV import → delete quotation)', () => {
   const e2eQuotationNumber = `E2E-QUO-${Date.now()}`;
   const e2eItemNumber = `E2E-ORD-ITEM-${Date.now()}`;
-  let selectedUsername = 'e2e.admin';
   let createdItemId: number | null = null;
 
-  test.beforeAll(async ({ request }) => {
-    // Resolve an active username from the DB first
-    try {
-      const usersRes = await request.get('/api/users?include_inactive=false');
-      if (usersRes.ok()) {
-        const usersData = await usersRes.json();
-        const activeUser = usersData?.[0] ?? usersData?.data?.[0];
-        if (activeUser?.username) selectedUsername = activeUser.username;
-      }
-    } catch (e) {
-      console.warn('Could not fetch active users for beforeAll:', e);
-    }
-    console.log(`Using username: ${selectedUsername}`);
+  test.beforeEach(async ({ page }) => {
+    test.skip(!E2E_BEARER_TOKEN, 'Set PLAYWRIGHT_E2E_BEARER_TOKEN before running Playwright E2E tests.');
+    await installAccessToken(page);
+  });
 
-    // Seed a canonical item for the orders CSV to resolve
+  test.beforeAll(async ({ request }) => {
+    if (!E2E_BEARER_TOKEN) {
+      return;
+    }
+
     try {
       const res = await request.post('/api/items/import', {
-        headers: { 'X-User-Name': selectedUsername },
+        headers: authHeaders(),
         multipart: {
           file: {
             name: 'seed_item.csv',
@@ -208,7 +201,9 @@ test.describe('Orders Stateful CRUD (CSV import → delete quotation)', () => {
   });
 
   test.afterAll(async ({ request }) => {
-    // Remove the quotation (cascades to orders)
+    if (!E2E_BEARER_TOKEN) {
+      return;
+    }
     try {
       const qRes = await request.get('/api/quotations?per_page=500');
       if (qRes.ok()) {
@@ -219,7 +214,7 @@ test.describe('Orders Stateful CRUD (CSV import → delete quotation)', () => {
         );
         if (quo) {
           await request.delete(`/api/quotations/${quo.quotation_id}`, {
-            headers: { 'X-User-Name': selectedUsername },
+            headers: authHeaders(),
           });
           console.log(`afterAll cleanup: deleted quotation ${e2eQuotationNumber}`);
         }
@@ -231,7 +226,7 @@ test.describe('Orders Stateful CRUD (CSV import → delete quotation)', () => {
     if (createdItemId != null) {
       try {
         await request.delete(`/api/items/${createdItemId}`, {
-          headers: { 'X-User-Name': selectedUsername },
+          headers: authHeaders(),
         });
         console.log(`afterAll cleanup: deleted item id=${createdItemId}`);
       } catch (e) {
@@ -242,15 +237,6 @@ test.describe('Orders Stateful CRUD (CSV import → delete quotation)', () => {
 
   test('Import orders via CSV, then delete the quotation', async ({ page }) => {
     test.skip(createdItemId == null, 'Prerequisite item could not be seeded');
-
-    // ── Select an active user ────────────────────────────────────────────────
-    await page.goto('/');
-    const userSelect = page.locator('select').first();
-    if ((await userSelect.locator('option').count()) > 1) {
-      const val = await userSelect.locator('option').nth(1).getAttribute('value');
-      if (val) selectedUsername = val;
-      await userSelect.selectOption({ index: 1 });
-    }
 
     await page.goto('/orders');
 
@@ -321,7 +307,7 @@ test.describe('Orders Stateful CRUD (CSV import → delete quotation)', () => {
         );
         if (quo) {
           const delRes = await page.request.delete(`/api/quotations/${quo.quotation_id}`, {
-            headers: { 'X-User-Name': selectedUsername },
+            headers: authHeaders(),
           });
           expect(delRes.ok()).toBeTruthy();
           console.log(`Quotation ${e2eQuotationNumber} deleted via API fallback`);

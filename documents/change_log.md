@@ -2,12 +2,25 @@
 
 ### Changed
 
+- Closed the remaining repo-side trust-boundary slice for browser auth and diagnostics.
+  - frontend header now supports Google Identity sign-in via `VITE_GOOGLE_CLIENT_ID` and keeps manual Bearer token entry as a fallback
+  - backend bearer verification now supports `JWT_VERIFIER=jwks` with `OIDC_JWKS_URL` for deployed OIDC/JWKS verification
+  - Cloud Run diagnostics can now be restricted through `DIAGNOSTICS_AUTH_ROLE`, with cloud defaulting to `admin` while `/healthz` and `/readyz` stay public
+  - successful high-impact mutations and export/download flows now emit `domain.audit` structured log events
+  - added backend regression coverage for JWKS mode, Cloud Run diagnostics access, and audit emission gating
+
+- Replaced the temporary local identity bridge with Bearer JWT / OIDC-oriented identity plumbing.
+  - `backend/app/api.py` now resolves `Authorization: Bearer <JWT>` into `request.state.identity` and maps active app users into `request.state.user`
+  - auth and authorization are now split across `AUTH_MODE` (`none`, `oidc_dry_run`, `oidc_enforced`) and `RBAC_MODE` (`none`, `rbac_dry_run`, `rbac_enforced`)
+  - `/api/auth/capabilities` and `/api/health` now describe the bearer-token posture and endpoint role policy instead of the old temporary mutation bridge
+  - `backend/app/service.py`, `backend/app/schemas.py`, and Alembic revision `009_oidc_user_identity` add OIDC-facing user mapping fields (`email`, `external_subject`, `identity_provider`, `hosted_domain`)
+  - frontend API calls now send Bearer tokens, and the shell stores a token instead of a locally selected operator identity
 - Added the next repository-only Cloud Run hardening slice on the backend.
   - `backend/app/api.py` now exposes `GET /healthz` and `GET /readyz` so Cloud Run can separate fast liveness from DB-backed readiness
   - backend startup/shutdown and per-request events now emit structured log payloads when `STRUCTURED_LOGGING=1`, including request IDs, latency, status code, and auth mode
   - `/api/health` remains a posture/contract endpoint and now points operators to the dedicated probe paths instead of attempting DB readiness inline
 - Tightened the first-pass RBAC boundary for admin surfaces.
-  - `/api/users*` is now admin-only when `INVENTORY_AUTH_MODE=rbac_enforced`
+  - `/api/users*` is now admin-only when `RBAC_MODE=rbac_enforced`
   - `rbac_dry_run` logs would-be denials without blocking traffic
   - bootstrap creation of the first active user remains available when no active users exist
 - Synced rollout/current-state documentation with the new probe, logging, and partial-RBAC behavior.
@@ -104,7 +117,7 @@
   - backend build dependencies now include `google-cloud-storage`
 - Started turning the locked GCP rollout decisions into explicit runtime behavior instead of doc-only assumptions.
   - backend runtime now exposes Cloud SQL/GCS/public-URL deployment metadata through config and `/api/health`
-  - `/api/health` and `/api/auth/capabilities` now describe the temporary `X-User-Name` mutation model explicitly, including the initial admin/operator boundary
+  - `/api/health` and `/api/auth/capabilities` now describe the temporary pre-OIDC mutation model explicitly, including the initial admin/operator boundary
   - backend request handling now enforces the first-rollout upload ceiling via `MAX_UPLOAD_BYTES` and returns `413 REQUEST_TOO_LARGE` for oversized requests
   - frontend nginx upload limit now matches the same 32 MB first-rollout ceiling
   - selecting `STORAGE_BACKEND=gcs` now fails explicitly as not-yet-implemented instead of silently implying Cloud Run durable storage is already complete
@@ -132,7 +145,7 @@
   - split frontend/backend Cloud Run services stay in place and the frontend keeps nginx for static delivery
   - Cloud SQL uses the Cloud SQL Connector / Unix socket model, with secrets sourced from Google Secret Manager
   - GCS uses one bucket per environment plus prefix-based class separation and lifecycle retention of 7-day staging, 30-day exports, 90-day artifacts, and non-expiring archives
-  - the first rollout assumes `dev` / `staging` / `prod`, native `*.run.app` URLs, backend-mediated downloads, a public browser-reachable backend with temporary `X-User-Name` mutations, a 32 MB upload ceiling, a roughly 60-second heavy-request target, and small-team / conservative-concurrency operation
+  - the first rollout assumes `dev` / `staging` / `prod`, native `*.run.app` URLs, backend-mediated downloads, a public browser-reachable backend with temporary pre-OIDC mutations, a 32 MB upload ceiling, a roughly 60-second heavy-request target, and small-team / conservative-concurrency operation
   - rollout planning now also fixes the initial admin/operator boundary, audit scope, monitoring baseline, and production-index review scope, while still deferring stronger end-user auth
 - Clarified checklist semantics in `documents/gcp_cloud_run_rollout/migration_checklist.md`.
   - added an explicit legend separating locked decisions from implementation/validation-complete items
@@ -262,13 +275,13 @@
 - Reservations provisional-allocation summary now revalidates immediately after reservation create/import/release/consume actions on the same page.
   - This keeps the `Provisional Allocation Summary` panel and its CSV export aligned with the refreshed Reservation List instead of showing stale totals until focus/refresh.
 - Restored first-user bootstrap in shared-server mode.
-  - `POST /api/users` is now allowed without `X-User-Name` only when there are zero active users.
-  - The Users page now allows first-user creation without a header selection and shows explicit bootstrap guidance when no active users exist.
+  - `POST /api/users` is now allowed without an authenticated identity only when there are zero active users.
+  - The Users page now allows first-user creation without an existing session and shows explicit bootstrap guidance when no active users exist.
 
 ### Tests
 
 - Added backend API regression coverage for:
-  - creating the first active user without `X-User-Name`
+  - creating the first active user without an authenticated identity
   - rejecting anonymous user creation again after an active user exists
 
 ### Added
@@ -344,7 +357,7 @@
 
 ### Changed
 
-- Extended `GET /api/users` with optional `include_inactive=true` so the frontend management screen can load inactive rows without changing the active-user picker contract.
+- Extended `GET /api/users` with optional `include_inactive=true` so the frontend management screen can load inactive rows without changing its management workflow.
 
 ### Documentation
 
@@ -353,10 +366,10 @@
 
 ### Added
 
-- Added backend API regression coverage for PostgreSQL migration user-header behavior.
+- Added backend API regression coverage for PostgreSQL migration identity-resolution behavior.
   - `GET /api/users` now has explicit test coverage confirming anonymous reads remain allowed.
-  - `GET /api/users/me` now has explicit test coverage for both missing-header rejection and valid `X-User-Name` resolution on read requests.
-  - Read requests that send an unknown `X-User-Name` now have explicit API coverage for the expected `USER_NOT_FOUND` error path.
+  - `GET /api/users/me` now has explicit test coverage for both missing-identity rejection and valid resolved-user reads.
+  - Read requests that send an unknown identity now have explicit API coverage for the expected `USER_NOT_FOUND` error path.
 
 ### Fixed
 
@@ -499,8 +512,8 @@
 
 - `GET /api/users/me` now resolves correctly in the deployed FastAPI app.
   - The static `/api/users/me` route is now registered before `/api/users/{user_id}` so it is no longer misparsed as `user_id="me"` and rejected with a `422` validation error during runtime smoke tests.
-- Read requests that provide `X-User-Name` now resolve `request.state.user` without forcing headers for anonymous reads.
-  - This restores the intended behavior of `GET /api/users/me`: anonymous reads remain allowed globally, while callers that send a valid user header can retrieve their active user identity on a read request.
+- Read requests that provide an explicit identity now resolve `request.state.user` without forcing credentials for anonymous reads.
+  - This restores the intended behavior of `GET /api/users/me`: anonymous reads remain allowed globally, while callers that send a valid identity can retrieve their active user identity on a read request.
 
 ### Documentation
 
@@ -532,8 +545,8 @@
 
 - Backend entrypoint is now server-only (`uv run main.py`); the legacy CLI flow is no longer the target path for the PostgreSQL/shared-server deployment.
 - Frontend API client now uses `VITE_API_BASE` / `/api` directly instead of runtime port probing.
-- Frontend mutations now require a selected user and send `X-User-Name`.
-- Header bar now includes a user picker populated from `/api/users`.
+- Frontend mutations now require an explicit browser identity context.
+- Header bar now includes an authentication control populated from runtime identity state.
 - Vite dev server now binds to `0.0.0.0` and proxies `/api` to `http://backend:8000`.
 
 ### Tests

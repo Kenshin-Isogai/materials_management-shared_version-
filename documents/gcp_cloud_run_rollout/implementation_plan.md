@@ -12,8 +12,8 @@ The current repository is close to infrastructure-ready, but not yet production-
 
 The largest remaining risks are:
 
-- public-cloud trust boundary is still weak
 - live cloud validation has not yet happened
+- cloud-side Google/OIDC client and issuer rollout is not yet finished
 - rollback and restore procedures are not yet institutionalized
 - monitoring and alert ownership are not yet spelled out
 
@@ -21,18 +21,19 @@ The largest remaining risks are:
 
 Goal:
 
-- remove dependence on `X-User-Name` as the effective production mutation gate
+- finish live production rollout on top of the now-complete repo-side bearer-token auth foundation
 
 Needed outcome:
 
-- a real user identity mechanism exists for browser mutations
+- a real Google Identity sign-in flow exists for browser mutations
+- deployed environments use the `jwks` verifier path with real issuer/audience/JWKS settings
 - admin/operator/viewer boundaries are explicit and enforced
-- production does not rely on anonymous reads plus header-only writes as its long-term model
+- production does not rely on manual token pasting as its long-term browser login model
 
 Notes:
 
 - this is the highest-priority functional hardening item
-- until this lands, production exposure should be treated as temporary and risk-accepted
+- repo-side auth plumbing is already in place; the remaining work is the live identity/login configuration and deployed-verifier validation slice
 
 ## Workstream 2: Real-environment deployment validation
 
@@ -101,11 +102,11 @@ Needed outcome:
 
 ## Suggested execution order
 
-1. real GCP resource provisioning
-2. live validation in `dev`
-3. monitoring and backup baseline
-4. staged deployment workflow (`dev` -> `staging` -> `prod`)
-5. stronger auth implementation
+1. complete repo-side follow-up for Google Identity/JWKS, audit logging, and diagnostics posture
+2. real GCP resource provisioning
+3. live validation in `dev`
+4. monitoring and backup baseline
+5. staged deployment workflow (`dev` -> `staging` -> `prod`)
 
 ## Definition of operational readiness
 
@@ -115,4 +116,4 @@ Treat the rollout as operationally ready only when all of the following are true
 - backup and restore expectations are active, not just documented
 - rollback procedure is rehearsed
 - production monitoring exists
-- the current temporary auth posture is either replaced or explicitly accepted with time-bounded risk ownership
+- the current bearer-token posture is backed by real Google Identity/JWKS or is explicitly accepted with time-bounded risk ownership

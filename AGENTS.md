@@ -26,10 +26,10 @@ When validating user-facing behavior, prefer checking the running Docker stack o
 
 ### Mutation Request Note
 
-Even when auth mode is effectively open for reads, API mutation requests require `X-User-Name` for an active user in the `users` table.
+Even when reads are effectively open, API mutation requests require `Authorization: Bearer <JWT>` that resolves to an active user in the `users` table.
 
 - Anonymous reads are allowed.
-- Writes without `X-User-Name` will fail.
+- Writes without a valid bearer token will fail.
 - If runtime validation needs write access, first confirm an active user exists in the running environment.
 
 ### Required Context Documents (Read Before Implementing)
@@ -75,7 +75,7 @@ When updating this application, follow this order:
 4. Prefer validation in the intended Docker environment:
    - Start the app stack with `.\start-app.ps1`
    - Use the running API/UI for changed user-flow validation
-   - For mutation-path validation, include `X-User-Name` and ensure that user exists in the running DB
+   - For mutation-path validation, include `Authorization: Bearer <JWT>` and ensure that mapped user exists in the running DB
 5. Run automated tests with `uv run` as available:
    - Full backend tests: `uv run python -m pytest`
    - Or targeted tests for touched behavior (for faster iteration), then run full suite before completion when the environment supports it

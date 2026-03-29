@@ -26,6 +26,10 @@ export type User = {
   user_id: number;
   username: string;
   display_name: string;
+  email?: string | null;
+  external_subject?: string | null;
+  identity_provider?: string | null;
+  hosted_domain?: string | null;
   role: UserRole;
   is_active: boolean;
   created_at: string;

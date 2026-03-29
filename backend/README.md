@@ -54,6 +54,13 @@ uv run --project backend python -m pytest --import-mode=importlib
 
 ### Authentication
 
-- Read-only endpoints can be called anonymously.
-- Mutation endpoints require `X-User-Name` for an active user in the `users` table.
-- `X-User-Name` remains a temporary identity bridge for the first Cloud Run rollout and should not be treated as the final public-cloud auth model.
+- API auth uses `Authorization: Bearer <JWT>`.
+- `AUTH_MODE` controls bearer-token enforcement: `none`, `oidc_dry_run`, or `oidc_enforced`.
+- `RBAC_MODE` controls role enforcement: `none`, `rbac_dry_run`, or `rbac_enforced`.
+- `JWT_VERIFIER` now supports `shared_secret` for local/test fixture tokens and `jwks` for deployed OIDC/JWKS verification.
+- Set `OIDC_JWKS_URL` when `JWT_VERIFIER=jwks`.
+- Verified OIDC claims are mapped to active `users` rows through `email`, `identity_provider` + `external_subject`, and optional `hosted_domain`.
+- `DIAGNOSTICS_AUTH_ROLE` controls `GET /api/health` and `GET /api/auth/capabilities` exposure.
+  - local default: `public`
+  - Cloud Run default: `admin`
+- Bootstrap exception: `POST /api/users` remains available without a bearer token only when there are zero active users.

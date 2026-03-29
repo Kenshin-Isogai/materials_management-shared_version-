@@ -23,7 +23,7 @@ Last updated: 2026-03-29 (JST)
   - `tests/`: integration/service/path tests
 - `frontend/`
   - `src/pages/`: active pages wired into the router: Dashboard, Workspace, Items (Search), Locations, Projects, Procurement, Orders, Inventory (Movements), Reservations (Reserve), BOM, Snapshot, History, Master, Users. Unused page files retained but not routed: `PlanningPage.tsx`, `RfqPage.tsx`, `AssembliesPage.tsx`, `PurchaseCandidatesPage.tsx`.
-  - `src/lib/api.ts`: API client now normalizes `VITE_API_BASE`, supports absolute backend URLs for split Cloud Run services, and injects `X-User-Name` on mutations
+  - `src/lib/api.ts`: API client now normalizes `VITE_API_BASE`, supports absolute backend URLs for split Cloud Run services, and injects `Authorization: Bearer <JWT>` when a stored token exists
   - `nginx.conf`: cloud-first static frontend config that does not proxy `/api`
   - `nginx.local-proxy.conf`: local Docker Compose nginx config that keeps same-origin `/api` proxying to the backend container
 - `documents/`
@@ -46,6 +46,7 @@ Last updated: 2026-03-29 (JST)
   - first-rollout Cloud Run guardrails are controlled by `MAX_UPLOAD_BYTES`, `HEAVY_REQUEST_TARGET_SECONDS`, and `CLOUD_RUN_CONCURRENCY_TARGET`
   - browser CORS defaults are runtime-specific: localhost-friendly defaults locally, explicit `CORS_ALLOWED_ORIGINS` required for Cloud Run browser traffic
   - deployment metadata/config now also exposes `INSTANCE_CONNECTION_NAME`, `BACKEND_PUBLIC_BASE_URL`, `FRONTEND_PUBLIC_BASE_URL`, `STORAGE_BACKEND`, `GCS_BUCKET`, and `GCS_OBJECT_PREFIX`
+  - auth/runtime config now also supports `JWT_VERIFIER=jwks`, `OIDC_JWKS_URL`, `DIAGNOSTICS_AUTH_ROLE`, `GOOGLE_IDENTITY_CLIENT_ID`, and `VITE_GOOGLE_CLIENT_ID`
   - generated artifact persistence now goes through a storage boundary (`backend/app/storage.py`), with current local refs stored as `local://generated_artifacts/...`
   - the storage layer now supports `gcs://...` refs for durable Cloud Run storage and keeps `local://...` for local/shared-server operation
   - default durable item/order archive moves now also route through that storage boundary; local disk remains the mechanism for temporary staging and a narrower set of local compatibility flows
@@ -60,24 +61,28 @@ Last updated: 2026-03-29 (JST)
   - error: `status=error` with code/message/details
 - Request-size enforcement now rejects bodies larger than `MAX_UPLOAD_BYTES` with `413 REQUEST_TOO_LARGE`, aligning backend behavior with the first-rollout 32 MB upload ceiling.
 - Business rules are centralized in `backend/app/service.py` and shared by API and CLI.
-- Mutation requests now pass through `UserIdentityMiddleware`.
-  - read methods stay anonymous
-  - write methods require `X-User-Name`
-  - bootstrap exception: when there are zero active users, `POST /api/users` is allowed without a selected header user so the first browser user can be created
-  - basic user endpoints now exist under `/api/users`
-  - `GET /api/users` returns active picker rows; `GET /api/users?include_inactive=true` returns the full management list while auth mode is `none`
-  - when `INVENTORY_AUTH_MODE=rbac_enforced`, `/api/users*` becomes admin-only; `rbac_dry_run` keeps traffic flowing but logs would-be denials
-  - `/api/auth/capabilities` and `/api/health` now both describe this as a temporary rollout identity model
+- Requests now pass through Bearer-token identity resolution.
+  - `Authorization: Bearer <JWT>` is the browser/API identity input
+  - `JWT_VERIFIER=shared_secret` remains the local/test fixture path, while `JWT_VERIFIER=jwks` now supports deployed OIDC/JWKS verification
+  - verified claims flow into `request.state.identity`
+  - active app users are resolved into `request.state.user` from `email` or `identity_provider` + `external_subject`, with optional `hosted_domain` matching
+  - bootstrap exception: when there are zero active users, `POST /api/users` is still allowed without a bearer token so the first admin can be created
+  - `/api/users*` is admin scope, normal mutations/imports/exports are operator scope, and authenticated reads are viewer scope
+  - `AUTH_MODE` now uses `none`, `oidc_dry_run`, `oidc_enforced`
+  - `RBAC_MODE` now uses `none`, `rbac_dry_run`, `rbac_enforced`
+  - `/api/auth/capabilities` now reports current identity, auth mode, rbac mode, and endpoint-policy summaries
+  - Cloud Run diagnostics no longer need to remain anonymous by default: `/api/health` and `/api/auth/capabilities` now use `DIAGNOSTICS_AUTH_ROLE`, defaulting to `admin` in Cloud Run and `public` locally
 - Probe/observability posture:
   - `GET /healthz` is the lightweight liveness endpoint
   - `GET /readyz` performs DB-backed readiness checks
   - request logs now emit request IDs, latency, status code, auth mode, and startup/shutdown events; JSON output is enabled by `STRUCTURED_LOGGING`
+  - successful high-impact mutations and export/download endpoints now also emit dedicated `domain.audit` structured log events
   - `GET /api/health` now also exposes a repo-side `recovery_policy` summary describing the expected Cloud SQL backup/PITR contract, GCS retention/versioning contract, and post-restore validation checklist
 - Planning snapshot hot paths now batch project/requirement loads, assembly component expansion (including legacy assembly-only project requirements), and per-item inventory totals; item planning context further narrows expansion to the requested item.
 - Current auth posture:
-  - no enforced auth for PoC
   - capability metadata endpoint exists: `GET /api/auth/capabilities`
-  - auth mode read from `INVENTORY_AUTH_MODE` (`none`, `rbac_dry_run`, `rbac_enforced`)
+  - bearer-token verification is pluggable and currently fixture-friendly through the shared-secret verifier
+  - user rows now carry OIDC mapping fields: `email`, `external_subject`, `identity_provider`, `hosted_domain`
 
 ### 3.2 Data Model
 
@@ -113,7 +118,8 @@ Last updated: 2026-03-29 (JST)
 - Data fetching is SWR-based with typed API client wrappers.
 - Added `/users` as the dedicated shared-server user administration route.
   - supports browser-side create, edit, activate, and deactivate flows against the existing `/api/users` endpoints
-  - the global header user picker now refreshes after user mutations and automatically falls back to the next active user if the selected one is deactivated
+  - the global shell now stores a bearer token and resolves the mapped current user through `/api/users/me`
+  - when `VITE_GOOGLE_CLIENT_ID` is set, the shared header renders a Google Identity sign-in button and stores the returned credential as the Bearer token
 - Shared-server browser CSV workflows are now preview-first on the main Items and Orders pages.
   - Items page uses one `General Items CSV Import` surface for regular item CSVs and order-generated missing-item CSVs
   - generated missing-item CSVs are downloaded from Orders and then edited/re-imported through the normal Items preview/import flow
@@ -139,7 +145,7 @@ Last updated: 2026-03-29 (JST)
 - Phase 6 cleanup is now applied on top of that compatibility boundary.
   - `quotations.pdf_link` is no longer part of the schema
   - `quotation_document_url` is the persisted quotation document field
-  - legacy CSV `pdf_link` is retained only as compatibility-import input and is no longer rewritten back into archived CSVs or quotation DB rows
+  - legacy CSV `pdf_link` compatibility has been removed; imports must provide `quotation_document_url`
 - Legacy order batch internals have now been removed as well.
   - backend no longer keeps `orders_legacy_batch` import jobs or `legacy_batch_staged_files`
   - the order domain no longer contains ZIP/staged-file retry helpers for the retired compatibility workflow

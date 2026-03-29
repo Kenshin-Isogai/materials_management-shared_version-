@@ -106,14 +106,62 @@ GCS_OBJECT_PREFIX = _env_text("GCS_OBJECT_PREFIX").strip("/")
 STORAGE_BACKEND = _env_text("STORAGE_BACKEND", STORAGE_BACKEND_LOCAL).lower() or STORAGE_BACKEND_LOCAL
 
 AUTH_MODE_NONE = "none"
-AUTH_MODE_DRY_RUN = "rbac_dry_run"
-AUTH_MODE_ENFORCED = "rbac_enforced"
+AUTH_MODE_OIDC_DRY_RUN = "oidc_dry_run"
+AUTH_MODE_OIDC_ENFORCED = "oidc_enforced"
+RBAC_MODE_NONE = "none"
+RBAC_MODE_DRY_RUN = "rbac_dry_run"
+RBAC_MODE_ENFORCED = "rbac_enforced"
+JWT_VERIFIER_SHARED_SECRET = "shared_secret"
+JWT_VERIFIER_JWKS = "jwks"
+JWT_SIGNING_ALGORITHMS = [
+    value.strip()
+    for value in _env_text("JWT_SIGNING_ALGORITHMS", "HS256").split(",")
+    if value.strip()
+]
+JWT_VERIFIER = _env_text("JWT_VERIFIER", JWT_VERIFIER_SHARED_SECRET).lower() or JWT_VERIFIER_SHARED_SECRET
+JWT_SHARED_SECRET = _env_text("JWT_SHARED_SECRET")
+OIDC_PROVIDER = _env_text("OIDC_PROVIDER", "oidc").lower() or "oidc"
+OIDC_EXPECTED_ISSUER = _env_text("OIDC_EXPECTED_ISSUER")
+OIDC_EXPECTED_AUDIENCE = _env_text("OIDC_EXPECTED_AUDIENCE")
+OIDC_JWKS_URL = _env_text("OIDC_JWKS_URL")
+OIDC_ALLOWED_HOSTED_DOMAINS = [
+    value.strip().lower()
+    for value in _env_text("OIDC_ALLOWED_HOSTED_DOMAINS").split(",")
+    if value.strip()
+]
+OIDC_REQUIRE_EMAIL_VERIFIED = _env_flag("OIDC_REQUIRE_EMAIL_VERIFIED", default=True)
+GOOGLE_IDENTITY_CLIENT_ID = _env_text("GOOGLE_IDENTITY_CLIENT_ID")
+DIAGNOSTICS_AUTH_ROLE_PUBLIC = "public"
+DIAGNOSTICS_AUTH_ROLE_VIEWER = "viewer"
+DIAGNOSTICS_AUTH_ROLE_OPERATOR = "operator"
+DIAGNOSTICS_AUTH_ROLE_ADMIN = "admin"
 
 
 def get_auth_mode() -> str:
-    raw = (os.getenv("INVENTORY_AUTH_MODE") or AUTH_MODE_NONE).strip().lower()
-    if raw not in {AUTH_MODE_NONE, AUTH_MODE_DRY_RUN, AUTH_MODE_ENFORCED}:
+    raw = (os.getenv("AUTH_MODE") or AUTH_MODE_NONE).strip().lower()
+    if raw not in {AUTH_MODE_NONE, AUTH_MODE_OIDC_DRY_RUN, AUTH_MODE_OIDC_ENFORCED}:
         return AUTH_MODE_NONE
+    return raw
+
+
+def get_rbac_mode() -> str:
+    raw = (os.getenv("RBAC_MODE") or RBAC_MODE_NONE).strip().lower()
+    if raw not in {RBAC_MODE_NONE, RBAC_MODE_DRY_RUN, RBAC_MODE_ENFORCED}:
+        return RBAC_MODE_NONE
+    return raw
+
+
+def get_diagnostics_auth_role() -> str:
+    default = DIAGNOSTICS_AUTH_ROLE_ADMIN if is_cloud_run_runtime() else DIAGNOSTICS_AUTH_ROLE_PUBLIC
+    raw = (os.getenv("DIAGNOSTICS_AUTH_ROLE") or default).strip().lower()
+    allowed = {
+        DIAGNOSTICS_AUTH_ROLE_PUBLIC,
+        DIAGNOSTICS_AUTH_ROLE_VIEWER,
+        DIAGNOSTICS_AUTH_ROLE_OPERATOR,
+        DIAGNOSTICS_AUTH_ROLE_ADMIN,
+    }
+    if raw not in allowed:
+        return default
     return raw
 
 

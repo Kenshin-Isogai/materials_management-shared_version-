@@ -13,7 +13,7 @@ This runbook covers the server-side steps for deploying the application on the t
 - Docker Compose files for production, development, and test DB
 - Backend and frontend Dockerfiles
 - nginx reverse-proxy config
-- Header-based user selection flow (`X-User-Name`)
+- Bearer-token authentication flow (`Authorization: Bearer <JWT>`)
 
 ## Server Prerequisites
 

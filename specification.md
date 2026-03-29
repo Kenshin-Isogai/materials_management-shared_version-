@@ -37,7 +37,7 @@ The Optical Component Inventory Management System provides comprehensive lifecyc
 | Package Manager (Frontend) | npm |
 | Frontend Builder | Vite |
 | User Model | Shared-server operation on trusted internal network, with forward compatibility for fuller RBAC deployment |
-| Authentication/Authorization | Anonymous reads; mutation requests require `X-User-Name` for a pre-registered active user. Bootstrap exception: `POST /api/users` may omit `X-User-Name` only when zero active users exist. Roadmap: RBAC (`admin`, `operator`, `viewer`) |
+| Authentication/Authorization | Browser/API auth uses `Authorization: Bearer <JWT>`. Verified OIDC claims (`email`, `sub`, optional `hd`) resolve to a pre-registered active app user. `AUTH_MODE` controls bearer-token enforcement (`none`, `oidc_dry_run`, `oidc_enforced`) and `RBAC_MODE` controls role enforcement (`none`, `rbac_dry_run`, `rbac_enforced`). Bootstrap exception: `POST /api/users` may omit Bearer auth only when zero active users exist. |
 | Timezone | Fixed JST for all date/time fields |
 | CSV Encoding | UTF-8 (no BOM) |
 | Expected Scale | Items: 10,000 / Orders: 5,000 / Transactions: ~100,000 |
@@ -955,12 +955,11 @@ Base URL: `http://localhost:8000/api`
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/users` | List active users for picker/mutation selection |
-| GET | `/users?include_inactive=true` | List all users, including inactive rows for management UI |
-| GET | `/users/me` | Resolve the current user from `X-User-Name` on read requests |
+| GET | `/users` | Admin-only user directory; `include_inactive=true` includes inactive rows |
+| GET | `/users/me` | Resolve the current user from Bearer JWT identity |
 | GET | `/users/{user_id}` | Get one user |
-| POST | `/users` | Create a user |
-| PUT | `/users/{user_id}` | Update display name, role, username, and active state |
+| POST | `/users` | Create a user and its OIDC mapping; anonymous only for first-user bootstrap |
+| PUT | `/users/{user_id}` | Update display name, role, username, OIDC mapping, and active state |
 | DELETE | `/users/{user_id}` | Deactivate a user |
 
 #### **Artifacts**
@@ -1398,12 +1397,9 @@ Managed generated-file delivery:
 
 - All quotation PDFs are stored under `imports/orders/registered/pdf_files/<supplier>/`
 - `pdf_link` is no longer a database field on `quotations`
-- legacy compatibility CSVs may still carry `pdf_link` as an input-only filename/path hint for staged PDF movement
 - PDF files are moved (not copied) during batch import processing
 - Upload-first Orders batch imports first extract browser-uploaded ZIP contents into `imports/staging/orders/<job-id>/...`, then move accepted PDFs into canonical registered storage during the existing import flow
-- For upload-first browser batches, CSV `pdf_link` values are resolved by uploaded filename first; path-shaped values are normalized only for compatibility
-- Input paths are normalized only inside the legacy compatibility importer
-- Missing/unresolved PDF links are returned as warnings in batch reports
+- Upload and manual import CSV contracts use `quotation_document_url`; staged PDF filename/path hints are not accepted
 - Filename collisions are handled by deterministic suffixing (`_1`, `_2`, ...)
 - Future hardening target: hash-based duplicate detection and original-filename retention
 
