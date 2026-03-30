@@ -50,6 +50,7 @@ This document explains the implemented architecture of the Materials Management 
   - `supplier` is required on every imported order CSV row
   - `quotation_document_url` is required and validated as `https://...`
   - `purchase_order_document_url` is optional and also validated as `https://...`
+  - when `purchase_order_document_url` is omitted, import reuses one supplier-scoped purchase-order header within the import/database instead of creating duplicate header rows per line
   - the Orders UI renders those values as openable document links instead of filesystem-style path text
   - order import jobs now persist `request_metadata` so `supplier_id`, `supplier_name`, `default_order_date`, `row_overrides`, and `alias_saves` remain available for inspection and redo
   - `POST /api/purchase-order-lines/import-jobs/{import_job_id}/undo` and `POST /api/purchase-order-lines/import-jobs/{import_job_id}/redo` now provide the same safety-first operator pattern already used by item imports

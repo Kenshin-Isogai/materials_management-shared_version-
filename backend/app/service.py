@@ -1354,15 +1354,25 @@ def _find_purchase_order_row(
     purchase_order_document_url: str | None,
 ) -> dict[str, Any] | None:
     if purchase_order_document_url is None:
-        return None
-    row = conn.execute(
-        """
-        SELECT purchase_order_id
-        FROM purchase_orders
-        WHERE supplier_id = ? AND purchase_order_document_url = ?
-        """,
-        (supplier_id, purchase_order_document_url),
-    ).fetchone()
+        row = conn.execute(
+            """
+            SELECT purchase_order_id
+            FROM purchase_orders
+            WHERE supplier_id = ? AND purchase_order_document_url IS NULL
+            ORDER BY purchase_order_id
+            LIMIT 1
+            """,
+            (supplier_id,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            SELECT purchase_order_id
+            FROM purchase_orders
+            WHERE supplier_id = ? AND purchase_order_document_url = ?
+            """,
+            (supplier_id, purchase_order_document_url),
+        ).fetchone()
     if row is None:
         return None
     return _get_purchase_order_row_by_id(conn, int(row["purchase_order_id"]))
@@ -5586,11 +5596,14 @@ def merge_open_orders(
             status_code=409,
         )
 
-    merge_keys = ("item_id", "quotation_id", "ordered_item_number", "project_id")
+    merge_keys = ("item_id", "quotation_id", "purchase_order_id", "ordered_item_number", "project_id")
     if any(source[key] != target[key] for key in merge_keys):
         raise AppError(
             code="ORDER_MERGE_SCOPE_MISMATCH",
-            message="Orders can be merged only when item_id, quotation_id, and ordered_item_number match",
+            message=(
+                "Orders can be merged only when item_id, quotation_id, "
+                "purchase_order_id, ordered_item_number, and project_id match"
+            ),
             status_code=422,
         )
 
@@ -6785,7 +6798,7 @@ def import_orders_from_rows(
     order_ids: list[int] = []
     quotation_ids_by_key: dict[tuple[int, str], int] = {}
     recorded_quotation_keys: set[tuple[int, str]] = set()
-    purchase_order_ids_by_key: dict[tuple[int, str], int] = {}
+    purchase_order_ids_by_key: dict[tuple[int, str | None], int] = {}
     for row in resolved:
         quotation_key = (int(row["supplier_id"]), str(row["quotation_number"]))
         quotation_id = quotation_ids_by_key.get(quotation_key)
@@ -6828,53 +6841,36 @@ def import_orders_from_rows(
                 recorded_quotation_keys.add(quotation_key)
         purchase_order_document_url = row["purchase_order_document_url"]
         purchase_order_before_state: dict[str, Any] | None = None
-        purchase_order_id: int
-        if purchase_order_document_url:
-            purchase_order_key = (int(row["supplier_id"]), str(purchase_order_document_url))
-            purchase_order_id = purchase_order_ids_by_key.get(purchase_order_key, 0)
-            if purchase_order_id == 0:
-                purchase_order_before_state = _find_purchase_order_row(
-                    conn,
-                    supplier_id=int(row["supplier_id"]),
-                    purchase_order_document_url=str(purchase_order_document_url),
-                )
-                purchase_order_id = _get_or_create_purchase_order(
-                    conn,
-                    int(row["supplier_id"]),
-                    str(purchase_order_document_url),
-                )
-                purchase_order_ids_by_key[purchase_order_key] = purchase_order_id
-                if import_job_id is not None:
-                    purchase_order_after_state = _get_purchase_order_row_by_id(conn, purchase_order_id)
-                    if purchase_order_after_state is not None and purchase_order_before_state != purchase_order_after_state:
-                        _record_import_job_effect(
-                            conn,
-                            import_job_id=import_job_id,
-                            row_number=int(row["row_number"]),
-                            status="created",
-                            effect_type=(
-                                "purchase_order_updated"
-                                if purchase_order_before_state is not None
-                                else "purchase_order_created"
-                            ),
-                            supplier_id=int(purchase_order_after_state["supplier_id"]),
-                            supplier_name=str(purchase_order_after_state["supplier_name"]),
-                            before_state=purchase_order_before_state,
-                            after_state=purchase_order_after_state,
-                        )
-        else:
-            purchase_order_id = _create_purchase_order(conn, int(row["supplier_id"]), None)
+        purchase_order_key = (int(row["supplier_id"]), purchase_order_document_url)
+        purchase_order_id = purchase_order_ids_by_key.get(purchase_order_key, 0)
+        if purchase_order_id == 0:
+            purchase_order_before_state = _find_purchase_order_row(
+                conn,
+                supplier_id=int(row["supplier_id"]),
+                purchase_order_document_url=purchase_order_document_url,
+            )
+            purchase_order_id = _get_or_create_purchase_order(
+                conn,
+                int(row["supplier_id"]),
+                purchase_order_document_url,
+            )
+            purchase_order_ids_by_key[purchase_order_key] = purchase_order_id
             if import_job_id is not None:
                 purchase_order_after_state = _get_purchase_order_row_by_id(conn, purchase_order_id)
-                if purchase_order_after_state is not None:
+                if purchase_order_after_state is not None and purchase_order_before_state != purchase_order_after_state:
                     _record_import_job_effect(
                         conn,
                         import_job_id=import_job_id,
                         row_number=int(row["row_number"]),
                         status="created",
-                        effect_type="purchase_order_created",
+                        effect_type=(
+                            "purchase_order_updated"
+                            if purchase_order_before_state is not None
+                            else "purchase_order_created"
+                        ),
                         supplier_id=int(purchase_order_after_state["supplier_id"]),
                         supplier_name=str(purchase_order_after_state["supplier_name"]),
+                        before_state=purchase_order_before_state,
                         after_state=purchase_order_after_state,
                     )
         cur = conn.execute(

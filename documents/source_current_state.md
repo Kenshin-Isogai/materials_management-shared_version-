@@ -129,6 +129,7 @@ Last updated: 2026-03-29 (JST)
   - `supplier` is required on every manual order CSV row
   - `quotation_document_url` is required for manual order CSV import
   - `purchase_order_document_url` is optional on orders
+  - manual import reuses the same supplier-scoped purchase-order header when rows omit `purchase_order_document_url`, preventing duplicate header creation for one import/workflow
   - imported quotation/order document values are rendered as openable links in the Orders UI
 - Manual Orders CSV import is now DB-tracked through the shared import-job tables.
   - `POST /api/purchase-order-lines/import` returns `import_job_id`

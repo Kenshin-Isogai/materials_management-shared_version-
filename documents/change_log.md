@@ -2,6 +2,9 @@
 
 ### Changed
 
+- Fixed purchase-order header integrity gaps in the purchasing refactor.
+  - manual order import now reuses supplier-scoped purchase-order headers when `purchase_order_document_url` is blank instead of creating duplicate header rows
+  - purchase-order-line merge now rejects lines from different purchase orders instead of allowing an invalid cross-header merge
 - Refactored purchasing document modeling to split purchase-order headers from line data.
   - added `purchase_orders` as an independent header entity and backfilled `orders.purchase_order_id`
   - removed `orders.purchase_order_document_url` from persisted line storage and now resolve PO document URLs through the header entity
