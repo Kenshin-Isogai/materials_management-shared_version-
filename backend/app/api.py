@@ -1143,8 +1143,8 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
     def post_merge_orders(body: OrderMergeRequest, conn= db):
         result = service.merge_open_orders(
             conn,
-            source_order_id=body.source_purchase_order_line_id,
-            target_order_id=body.target_purchase_order_line_id,
+            source_purchase_order_line_id=body.source_purchase_order_line_id,
+            target_purchase_order_line_id=body.target_purchase_order_line_id,
             expected_arrival=body.expected_arrival,
         )
         conn.commit()

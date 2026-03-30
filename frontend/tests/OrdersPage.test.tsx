@@ -242,7 +242,7 @@ describe("OrdersPage", () => {
 
     await user.click(within(orderRow as HTMLElement).getByRole("button", { name: "Line Details" }));
 
-    const orderDetailsSection = screen.getAllByRole("heading", { name: "Purchase Order Line Details" })[1]?.closest("section");
+    const orderDetailsSection = screen.getByRole("heading", { name: "Purchase Order Line Details" }).closest("section");
     const quotationDetailsSection = screen.getByRole("heading", { name: "Quotation Details" }).closest("section");
     expect(orderDetailsSection).toBeTruthy();
     expect(quotationDetailsSection).toBeTruthy();

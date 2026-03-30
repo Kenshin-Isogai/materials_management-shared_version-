@@ -3931,10 +3931,16 @@ def get_item_flow_timeline(conn: sqlite3.Connection, item_id: int) -> dict[str, 
 
     order_rows = conn.execute(
         """
-        SELECT o.order_id, o.order_amount, o.expected_arrival, q.quotation_number, s.name AS supplier_name
+        SELECT
+            o.order_id,
+            o.order_amount,
+            o.expected_arrival,
+            q.quotation_number,
+            s.name AS supplier_name
         FROM orders o
-        JOIN quotations q ON q.quotation_id = o.quotation_id
-        JOIN suppliers s ON s.supplier_id = q.supplier_id
+        JOIN purchase_orders po ON po.purchase_order_id = o.purchase_order_id
+        JOIN suppliers s ON s.supplier_id = po.supplier_id
+        LEFT JOIN quotations q ON q.quotation_id = o.quotation_id
         WHERE o.item_id = ?
           AND o.status <> 'Arrived'
           AND o.expected_arrival IS NOT NULL
@@ -3951,7 +3957,11 @@ def get_item_flow_timeline(conn: sqlite3.Connection, item_id: int) -> dict[str, 
                 "direction": "increase",
                 "source_type": "expected_arrival",
                 "source_ref": f"order#{int(row['order_id'])}",
-                "reason": f"Expected arrival from {row['supplier_name']} / {row['quotation_number']}",
+                "reason": (
+                    f"Expected arrival from {row['supplier_name']} / {row['quotation_number']}"
+                    if row["quotation_number"]
+                    else f"Expected arrival from {row['supplier_name']}"
+                ),
                 "note": None,
             }
         )
@@ -5196,9 +5206,9 @@ def list_orders(
             po.purchase_order_document_url
         FROM orders o
         JOIN items_master im ON im.item_id = o.item_id
-        JOIN quotations q ON q.quotation_id = o.quotation_id
-        JOIN suppliers s ON s.supplier_id = q.supplier_id
         JOIN purchase_orders po ON po.purchase_order_id = o.purchase_order_id
+        JOIN suppliers s ON s.supplier_id = po.supplier_id
+        LEFT JOIN quotations q ON q.quotation_id = o.quotation_id
         LEFT JOIN projects p ON p.project_id = o.project_id
         {where}
         ORDER BY o.order_date DESC, o.order_id DESC
@@ -5221,9 +5231,9 @@ def get_order(conn: sqlite3.Connection, order_id: int) -> dict[str, Any]:
             s.name AS supplier_name
         FROM orders o
         JOIN items_master im ON im.item_id = o.item_id
-        JOIN quotations q ON q.quotation_id = o.quotation_id
-        JOIN suppliers s ON s.supplier_id = q.supplier_id
         JOIN purchase_orders po ON po.purchase_order_id = o.purchase_order_id
+        JOIN suppliers s ON s.supplier_id = po.supplier_id
+        LEFT JOIN quotations q ON q.quotation_id = o.quotation_id
         LEFT JOIN projects p ON p.project_id = o.project_id
         WHERE o.order_id = ?
         """,
@@ -5242,8 +5252,8 @@ def _record_order_lineage_event(
     conn: sqlite3.Connection,
     *,
     event_type: str,
-    source_order_id: int,
-    target_order_id: int | None = None,
+    source_purchase_order_line_id: int,
+    target_purchase_order_line_id: int | None = None,
     quantity: int | None = None,
     previous_expected_arrival: str | None = None,
     new_expected_arrival: str | None = None,
@@ -5252,14 +5262,14 @@ def _record_order_lineage_event(
     cur = conn.execute(
         """
         INSERT INTO order_lineage_events (
-            event_type, source_order_id, target_order_id, quantity,
+            event_type, source_purchase_order_line_id, target_purchase_order_line_id, quantity,
             previous_expected_arrival, new_expected_arrival, note, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             event_type,
-            source_order_id,
-            target_order_id,
+            source_purchase_order_line_id,
+            target_purchase_order_line_id,
             quantity,
             previous_expected_arrival,
             new_expected_arrival,
@@ -5282,10 +5292,10 @@ def list_order_lineage_events(
 ) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
-        SELECT event_id, event_type, source_order_id, target_order_id, quantity,
+        SELECT event_id, event_type, source_purchase_order_line_id, target_purchase_order_line_id, quantity,
                previous_expected_arrival, new_expected_arrival, note, created_at
         FROM order_lineage_events
-        WHERE source_order_id = ? OR target_order_id = ?
+        WHERE source_purchase_order_line_id = ? OR target_purchase_order_line_id = ?
         ORDER BY event_id ASC
         """,
         (order_id, order_id),
@@ -5394,8 +5404,8 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
             _record_order_lineage_event(
                 conn,
                 event_type="ETA_UPDATE",
-                source_order_id=order_id,
-                target_order_id=order_id,
+                source_purchase_order_line_id=order_id,
+                target_purchase_order_line_id=order_id,
                 quantity=int(updated.get("order_amount") or 0),
                 previous_expected_arrival=current.get("expected_arrival"),
                 new_expected_arrival=updated.get("expected_arrival"),
@@ -5507,8 +5517,8 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
     _record_order_lineage_event(
         conn,
         event_type="ETA_SPLIT",
-        source_order_id=order_id,
-        target_order_id=split_order_id,
+        source_purchase_order_line_id=order_id,
+        target_purchase_order_line_id=split_order_id,
         quantity=split_quantity,
         previous_expected_arrival=current.get("expected_arrival"),
         new_expected_arrival=expected_arrival,
@@ -5535,14 +5545,15 @@ def delete_order(conn: sqlite3.Connection, order_id: int) -> dict[str, Any]:
     conn.execute("DELETE FROM orders WHERE order_id = ?", (order_id,))
     purchase_order_deleted = _delete_purchase_order_if_orphaned(conn, int(order["purchase_order_id"]))
 
-    remaining = conn.execute(
-        "SELECT COUNT(*) AS c FROM orders WHERE quotation_id = ?",
-        (order["quotation_id"],),
-    ).fetchone()
     quotation_deleted = False
-    if int(remaining["c"]) == 0:
-        conn.execute("DELETE FROM quotations WHERE quotation_id = ?", (order["quotation_id"],))
-        quotation_deleted = True
+    if order["quotation_id"] is not None:
+        remaining = conn.execute(
+            "SELECT COUNT(*) AS c FROM orders WHERE quotation_id = ?",
+            (order["quotation_id"],),
+        ).fetchone()
+        if int(remaining["c"]) == 0:
+            conn.execute("DELETE FROM quotations WHERE quotation_id = ?", (order["quotation_id"],))
+            quotation_deleted = True
     return {
         "deleted": True,
         "order_id": order_id,
@@ -5555,19 +5566,19 @@ def delete_order(conn: sqlite3.Connection, order_id: int) -> dict[str, Any]:
 def merge_open_orders(
     conn: sqlite3.Connection,
     *,
-    source_order_id: int,
-    target_order_id: int,
+    source_purchase_order_line_id: int,
+    target_purchase_order_line_id: int,
     expected_arrival: str | None = None,
 ) -> dict[str, Any]:
-    if source_order_id == target_order_id:
+    if source_purchase_order_line_id == target_purchase_order_line_id:
         raise AppError(
             code="INVALID_MERGE_PAIR",
-            message="source_order_id and target_order_id must differ",
+            message="source_purchase_order_line_id and target_purchase_order_line_id must differ",
             status_code=422,
         )
 
-    source = get_order(conn, source_order_id)
-    target = get_order(conn, target_order_id)
+    source = get_order(conn, source_purchase_order_line_id)
+    target = get_order(conn, target_purchase_order_line_id)
     if source["status"] == "Arrived" or target["status"] == "Arrived":
         raise AppError(
             code="ORDER_ALREADY_ARRIVED",
@@ -5600,15 +5611,15 @@ def merge_open_orders(
             status = 'Ordered'
         WHERE order_id = ?
         """,
-        (target_amount + source_amount, target_ordered + source_ordered, final_eta, target_order_id),
+        (target_amount + source_amount, target_ordered + source_ordered, final_eta, target_purchase_order_line_id),
     )
-    conn.execute("DELETE FROM orders WHERE order_id = ?", (source_order_id,))
+    conn.execute("DELETE FROM orders WHERE order_id = ?", (source_purchase_order_line_id,))
 
     event = _record_order_lineage_event(
         conn,
         event_type="ETA_MERGE",
-        source_order_id=source_order_id,
-        target_order_id=target_order_id,
+        source_purchase_order_line_id=source_purchase_order_line_id,
+        target_purchase_order_line_id=target_purchase_order_line_id,
         quantity=source_amount,
         previous_expected_arrival=source.get("expected_arrival"),
         new_expected_arrival=final_eta,
@@ -5617,9 +5628,9 @@ def merge_open_orders(
 
     return {
         "merged": True,
-        "source_order_id": source_order_id,
-        "target_order_id": target_order_id,
-        "target_order": get_order(conn, target_order_id),
+        "source_purchase_order_line_id": source_purchase_order_line_id,
+        "target_purchase_order_line_id": target_purchase_order_line_id,
+        "target_order": get_order(conn, target_purchase_order_line_id),
         "lineage_event": event,
     }
 
@@ -6932,7 +6943,7 @@ def import_orders_from_rows(
             SELECT o.order_id, o.item_id, o.quotation_id, im.item_number, q.quotation_number
             FROM orders o
             JOIN items_master im ON im.item_id = o.item_id
-            JOIN quotations q ON q.quotation_id = o.quotation_id
+            LEFT JOIN quotations q ON q.quotation_id = o.quotation_id
             WHERE o.order_id IN ({placeholders})
             """,
             tuple(order_ids),
@@ -7287,7 +7298,7 @@ def undo_orders_import_job(conn: sqlite3.Connection, import_job_id: int) -> dict
                 """
                 SELECT COUNT(*) AS c
                 FROM order_lineage_events
-                WHERE source_order_id = ? OR target_order_id = ?
+                WHERE source_purchase_order_line_id = ? OR target_purchase_order_line_id = ?
                 """,
                 (order_id, order_id),
             ).fetchone()
@@ -7801,8 +7812,8 @@ def process_order_arrival(
         _record_order_lineage_event(
             conn,
             event_type="ARRIVAL_SPLIT",
-            source_order_id=order_id,
-            target_order_id=split_order_id,
+            source_purchase_order_line_id=order_id,
+            target_purchase_order_line_id=split_order_id,
             quantity=arrived_qty,
             previous_expected_arrival=order.get("expected_arrival"),
             new_expected_arrival=order.get("expected_arrival"),
@@ -12388,8 +12399,9 @@ def dashboard_summary(conn: sqlite3.Connection, low_stock_threshold: int = 5) ->
                 s.name AS supplier_name
             FROM orders o
             JOIN items_master im ON im.item_id = o.item_id
-            JOIN quotations q ON q.quotation_id = o.quotation_id
-            JOIN suppliers s ON s.supplier_id = q.supplier_id
+            JOIN purchase_orders po ON po.purchase_order_id = o.purchase_order_id
+            JOIN suppliers s ON s.supplier_id = po.supplier_id
+            LEFT JOIN quotations q ON q.quotation_id = o.quotation_id
             WHERE o.status = 'Ordered'
               AND o.expected_arrival IS NOT NULL
               AND o.expected_arrival < ?
