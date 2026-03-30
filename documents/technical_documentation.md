@@ -50,9 +50,10 @@ This document explains the implemented architecture of the Materials Management 
   - `supplier` is required on every imported order CSV row
   - `quotation_document_url` is required and validated as `https://...`
   - `purchase_order_document_url` is optional and also validated as `https://...`
+  - when `purchase_order_document_url` is omitted, import reuses one supplier-scoped purchase-order header within the import/database instead of creating duplicate header rows per line
   - the Orders UI renders those values as openable document links instead of filesystem-style path text
   - order import jobs now persist `request_metadata` so `supplier_id`, `supplier_name`, `default_order_date`, `row_overrides`, and `alias_saves` remain available for inspection and redo
-  - `POST /api/orders/import-jobs/{import_job_id}/undo` and `POST /api/orders/import-jobs/{import_job_id}/redo` now provide the same safety-first operator pattern already used by item imports
+  - `POST /api/purchase-order-lines/import-jobs/{import_job_id}/undo` and `POST /api/purchase-order-lines/import-jobs/{import_job_id}/redo` now provide the same safety-first operator pattern already used by item imports
 - Generated artifact delivery for batch-produced missing-item register CSVs:
   - `GET /api/artifacts`, `GET /api/artifacts/{artifact_id}`, `GET /api/artifacts/{artifact_id}/download`
   - storage-backed registry now goes through `backend/app/storage.py`
@@ -258,11 +259,17 @@ erDiagram
         string quotation_document_url
     }
 
+    PURCHASE_ORDERS {
+        int purchase_order_id PK
+        int supplier_id FK
+        string purchase_order_document_url
+    }
+
     ORDERS {
         int order_id PK
+        int purchase_order_id FK
         int item_id FK
         int quotation_id FK
-        string purchase_order_document_url
         int order_amount
         int ordered_quantity
         string ordered_item_number
@@ -425,15 +432,15 @@ erDiagram
         string supplier_name
         string status
         string expected_arrival
-        int linked_order_id FK
+        int linked_purchase_order_line_id FK
         string note
     }
 
     ORDER_LINEAGE_EVENTS {
         int event_id PK
         string event_type
-        int source_order_id FK
-        int target_order_id FK
+        int source_purchase_order_line_id FK
+        int target_purchase_order_line_id FK
         string metadata
         string created_at
     }
@@ -507,8 +514,8 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 - Manual Orders CSV import should use external document URLs instead of filesystem-style PDF references.
 - `quotations.pdf_link` is removed from the schema; `quotation_document_url` is the document-reference field.
 - Manual order import now records DB-backed import jobs and row-level effects.
-  - `POST /api/orders/import` creates `import_jobs(import_type='orders')`
-  - `GET /api/orders/import-jobs` and `GET /api/orders/import-jobs/{import_job_id}` expose summary and row-level results
+  - `POST /api/purchase-order-lines/import` creates `import_jobs(import_type='orders')`
+  - `GET /api/purchase-order-lines/import-jobs` and `GET /api/purchase-order-lines/import-jobs/{import_job_id}` expose summary and row-level results
   - job rows keep shared import-job statuses (`ok`, `partial`, `error`) even when the immediate API response uses `status="missing_items"`
 - The Orders page now supports selecting multiple CSV files in one browser action and processes them sequentially through the same preview/import contract.
 - Missing items discovered during unregistered batch import are aggregated into a single register CSV per batch run under `imports/items/unregistered/` (instead of per-quotation output beside source CSVs).
@@ -717,9 +724,9 @@ End-to-End tests are implemented using Playwright to verify the full-stack behav
   - `PUT /api/rfq-lines/{line_id}`
 - RFQ line semantics:
   - `QUOTED` + `expected_arrival` => dedicated planned supply
-  - `ORDERED` requires `linked_order_id`
-  - non-`ORDERED` RFQ states clear `linked_order_id`, so quoted supply stays in the planning-only path
-  - only `ORDERED` links set `orders.project_id`; removing or replacing the link clears/reassigns the dedicated order ownership to match the RFQ line state, and manual `/api/orders/{id}` project edits must not override that RFQ-owned assignment
+  - `ORDERED` requires `linked_purchase_order_line_id`
+  - non-`ORDERED` RFQ states clear `linked_purchase_order_line_id`, so quoted supply stays in the planning-only path
+  - only `ORDERED` links set `orders.project_id`; removing or replacing the link clears/reassigns the dedicated order ownership to match the RFQ line state, and manual `PUT /api/purchase-order-lines/{id}` project edits must not override that RFQ-owned assignment
   - splitting an RFQ-owned order must not clone that dedicated `project_id` onto the new sibling order, because RFQ ownership remains attached only to the original linked row
 
 ### Purchase candidate persistence (pre-PO planning)
@@ -742,13 +749,17 @@ End-to-End tests are implemented using Playwright to verify the full-stack behav
 ### Order/quotation correction operations (UI + consistency)
 
 - Correction endpoints:
-  - `PUT /api/orders/{order_id}` updates open-order expected arrival metadata (`expected_arrival`) and supports partial ETA postponement via `split_quantity` (integer-safe split creates a second open order row).
-  - `POST /api/orders/merge` merges two open split-compatible rows and appends lineage metadata.
-  - `GET /api/orders/{order_id}/lineage` returns split/merge/arrival lineage events for traceability views and audits.
+  - `PUT /api/purchase-order-lines/{order_id}` updates open-order expected arrival metadata (`expected_arrival`) and supports partial ETA postponement via `split_quantity` (integer-safe split creates a second open order row).
+  - `POST /api/purchase-order-lines/merge` merges two open split-compatible rows and appends lineage metadata.
+  - `GET /api/purchase-order-lines/{order_id}/lineage` returns split/merge/arrival lineage events for traceability views and audits.
   - `PUT /api/quotations/{quotation_id}` updates quotation metadata.
-  - `DELETE /api/orders/{order_id}` deletes open (non-arrived) orders.
+  - `DELETE /api/purchase-order-lines/{order_id}` deletes open (non-arrived) orders.
   - `DELETE /api/quotations/{quotation_id}` deletes quotation and linked orders only when no linked order is already arrived.
-- Orders-page read model note: the Orders screen now fetches all pages for `/orders` and `/quotations` before rendering `Imported Quotations` aggregates or opening quotation-driven `Quotation Details`, preventing older quotations from showing false zero counts and ensuring the selected quotation can list every linked order even when some linked rows were outside the first API page.
+- Orders-page read model note: the Orders screen now fetches all pages for `/purchase-order-lines`, `/quotations`, and `/purchase-orders` before rendering the line pane plus quotation/purchase-order header panes, preventing false header counts when linked rows fall outside the first API page.
+- Frontend UX note: the Orders screen is now intentionally split by domain level rather than one long row-form.
+  - `Purchase Order Lines` is the operational pane for ETA, arrival, split, delete, and manual project assignment.
+  - `Quotations` and `Purchase Orders` are header panes with searchable card lists, linked-line counts, and dedicated detail editors.
+  - The line pane uses a denser card + side-detail layout to reduce vertical scrolling when line records carry many fields.
 - Consistency rule: when these operations mutate DB rows, matching order CSV records are rewritten/inserted/removed so CSV source files and database state do not diverge.
 - Reliability/scalability posture: order split/merge transitions are persisted in `order_lineage_events` so future analytics/audit screens can read durable lineage without inferring history from mutable order rows.
 - CSV row identity rule for order-level maintenance: `update_order`/`delete_order` must target exactly one CSV row by order identity (including duplicate `(supplier, quotation_number, item_number)` occurrences) to prevent fan-out edits/deletes when a quotation contains repeated item rows.
@@ -761,7 +772,7 @@ End-to-End tests are implemented using Playwright to verify the full-stack behav
   - `POST /api/reservations/import-csv` (multipart CSV)
   - `GET /api/items/import-template`, `GET /api/items/import-reference`
   - `GET /api/inventory/import-template`, `GET /api/inventory/import-reference`
-  - `GET /api/orders/import-template`, `GET /api/orders/import-reference`
+  - `GET /api/purchase-order-lines/import-template`, `GET /api/purchase-order-lines/import-reference`
   - `GET /api/reservations/import-template`, `GET /api/reservations/import-reference`
 - Movement CSV rows are normalized into existing `batch_inventory_operations`, preserving transaction log semantics and undo behavior consistency.
 - Reservation CSV supports assembly references by assembly name/id and expands to component-level reservations; this reuses assembly data efficiently for planning input while keeping assembly behavior advisory.
@@ -772,9 +783,9 @@ End-to-End tests are implemented using Playwright to verify the full-stack behav
   - `POST /api/items/import` accepts optional multipart JSON `row_overrides` so preview confirmation can pin `canonical_item_number` and `units_per_order` for alias rows
   - `POST /api/inventory/import-preview` validates movement rows against operation/location rules, simulates stock deltas in CSV order, and flags item resolution or stock-shortage problems before commit
   - `POST /api/inventory/import-csv` accepts optional multipart JSON `row_overrides` so preview confirmation can substitute canonical `item_id` values
-  - `POST /api/orders/import-preview` parses the upload, requires row-level `supplier`, classifies rows (`exact`, `high_confidence`, `needs_review`, `unresolved`), ranks candidate matches, and reports duplicate quotation conflicts before commit
+  - `POST /api/purchase-order-lines/import-preview` parses the upload, requires row-level `supplier`, classifies rows (`exact`, `high_confidence`, `needs_review`, `unresolved`), ranks candidate matches, and reports duplicate quotation conflicts before commit
   - preview uses direct canonical item numbers, row-supplier-scoped aliases, normalized equality, and fuzzy ranking, but does not create a missing supplier during preview
-  - `POST /api/orders/import` now accepts optional multipart JSON fields `row_overrides` and `alias_saves` so preview-confirmation can pin canonical items/units and persist supplier aliases after duplicate checks pass
+  - `POST /api/purchase-order-lines/import` now accepts optional multipart JSON fields `row_overrides` and `alias_saves` so preview-confirmation can pin canonical items/units and persist supplier aliases after duplicate checks pass
   - `POST /api/reservations/import-preview` validates item/assembly target resolution, previews assembly expansion into generated component reservations, and flags inventory shortages before commit
   - `POST /api/reservations/import-csv` accepts optional multipart JSON `row_overrides` so preview confirmation can choose `item_id` or `assembly_id` targets explicitly; that explicit override wins over stale raw CSV target text during commit
   - preview-confirmation JSON is strict across these flows: malformed JSON, wrong top-level shapes, missing required keys, unsupported fields, and row numbers not present in the uploaded CSV all return controlled `422` responses instead of uncaught server errors

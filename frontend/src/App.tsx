@@ -32,7 +32,7 @@ export const appRoutes = createRoutesFromElements(
     <Route path="/reserve" element={<ReservationsPage />} />
     <Route path="/items" element={<ItemsPage />} />
     <Route path="/inventory" element={<Navigate to="/movements" replace />} />
-    <Route path="/orders" element={<OrdersPage />} />
+    <Route path="/purchase-order-lines" element={<OrdersPage />} />
     <Route path="/reservations" element={<Navigate to="/reserve" replace />} />
     <Route path="/projects" element={<ProjectsPage />} />
     <Route path="/workspace" element={<WorkspacePage />} />

@@ -1347,6 +1347,97 @@ def _get_quotation_row_by_id(conn: sqlite3.Connection, quotation_id: int) -> dic
     return dict(row) if row is not None else None
 
 
+def _find_purchase_order_row(
+    conn: sqlite3.Connection,
+    *,
+    supplier_id: int,
+    purchase_order_document_url: str | None,
+) -> dict[str, Any] | None:
+    if purchase_order_document_url is None:
+        row = conn.execute(
+            """
+            SELECT purchase_order_id
+            FROM purchase_orders
+            WHERE supplier_id = ? AND purchase_order_document_url IS NULL
+            ORDER BY purchase_order_id
+            LIMIT 1
+            """,
+            (supplier_id,),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            SELECT purchase_order_id
+            FROM purchase_orders
+            WHERE supplier_id = ? AND purchase_order_document_url = ?
+            """,
+            (supplier_id, purchase_order_document_url),
+        ).fetchone()
+    if row is None:
+        return None
+    return _get_purchase_order_row_by_id(conn, int(row["purchase_order_id"]))
+
+
+def _create_purchase_order(
+    conn: sqlite3.Connection,
+    supplier_id: int,
+    purchase_order_document_url: str | None,
+) -> int:
+    cur = conn.execute(
+        """
+        INSERT INTO purchase_orders (supplier_id, purchase_order_document_url)
+        VALUES (?, ?)
+        """,
+        (supplier_id, purchase_order_document_url),
+    )
+    return int(cur.lastrowid)
+
+
+def _get_or_create_purchase_order(
+    conn: sqlite3.Connection,
+    supplier_id: int,
+    purchase_order_document_url: str | None,
+) -> int:
+    existing = _find_purchase_order_row(
+        conn,
+        supplier_id=supplier_id,
+        purchase_order_document_url=purchase_order_document_url,
+    )
+    if existing is not None:
+        return int(existing["purchase_order_id"])
+    return _create_purchase_order(conn, supplier_id, purchase_order_document_url)
+
+
+def _get_purchase_order_row_by_id(conn: sqlite3.Connection, purchase_order_id: int) -> dict[str, Any] | None:
+    row = conn.execute(
+        """
+        SELECT
+            po.purchase_order_id,
+            po.supplier_id,
+            s.name AS supplier_name,
+            po.purchase_order_document_url
+        FROM purchase_orders po
+        JOIN suppliers s ON s.supplier_id = po.supplier_id
+        WHERE po.purchase_order_id = ?
+        """,
+        (purchase_order_id,),
+    ).fetchone()
+    return dict(row) if row is not None else None
+
+
+def _delete_purchase_order_if_orphaned(conn: sqlite3.Connection, purchase_order_id: int | None) -> bool:
+    if purchase_order_id is None:
+        return False
+    remaining = conn.execute(
+        "SELECT COUNT(*) AS c FROM orders WHERE purchase_order_id = ?",
+        (purchase_order_id,),
+    ).fetchone()
+    if int(remaining["c"] or 0) > 0:
+        return False
+    conn.execute("DELETE FROM purchase_orders WHERE purchase_order_id = ?", (purchase_order_id,))
+    return True
+
+
 def _decode_csv_bytes(content: bytes) -> str:
     """Decode CSV bytes, falling back to cp932 when the content is not valid UTF-8.
 
@@ -3850,10 +3941,16 @@ def get_item_flow_timeline(conn: sqlite3.Connection, item_id: int) -> dict[str, 
 
     order_rows = conn.execute(
         """
-        SELECT o.order_id, o.order_amount, o.expected_arrival, q.quotation_number, s.name AS supplier_name
+        SELECT
+            o.order_id,
+            o.order_amount,
+            o.expected_arrival,
+            q.quotation_number,
+            s.name AS supplier_name
         FROM orders o
-        JOIN quotations q ON q.quotation_id = o.quotation_id
-        JOIN suppliers s ON s.supplier_id = q.supplier_id
+        JOIN purchase_orders po ON po.purchase_order_id = o.purchase_order_id
+        JOIN suppliers s ON s.supplier_id = po.supplier_id
+        LEFT JOIN quotations q ON q.quotation_id = o.quotation_id
         WHERE o.item_id = ?
           AND o.status <> 'Arrived'
           AND o.expected_arrival IS NOT NULL
@@ -3870,7 +3967,11 @@ def get_item_flow_timeline(conn: sqlite3.Connection, item_id: int) -> dict[str, 
                 "direction": "increase",
                 "source_type": "expected_arrival",
                 "source_ref": f"order#{int(row['order_id'])}",
-                "reason": f"Expected arrival from {row['supplier_name']} / {row['quotation_number']}",
+                "reason": (
+                    f"Expected arrival from {row['supplier_name']} / {row['quotation_number']}"
+                    if row["quotation_number"]
+                    else f"Expected arrival from {row['supplier_name']}"
+                ),
                 "note": None,
             }
         )
@@ -5111,11 +5212,13 @@ def list_orders(
             s.name AS supplier_name,
             q.quotation_number,
             q.issue_date,
-            q.quotation_document_url
+            q.quotation_document_url,
+            po.purchase_order_document_url
         FROM orders o
         JOIN items_master im ON im.item_id = o.item_id
-        JOIN quotations q ON q.quotation_id = o.quotation_id
-        JOIN suppliers s ON s.supplier_id = q.supplier_id
+        JOIN purchase_orders po ON po.purchase_order_id = o.purchase_order_id
+        JOIN suppliers s ON s.supplier_id = po.supplier_id
+        LEFT JOIN quotations q ON q.quotation_id = o.quotation_id
         LEFT JOIN projects p ON p.project_id = o.project_id
         {where}
         ORDER BY o.order_date DESC, o.order_id DESC
@@ -5133,12 +5236,14 @@ def get_order(conn: sqlite3.Connection, order_id: int) -> dict[str, Any]:
             q.quotation_number,
             q.issue_date,
             q.quotation_document_url,
+            po.purchase_order_document_url,
             s.supplier_id,
             s.name AS supplier_name
         FROM orders o
         JOIN items_master im ON im.item_id = o.item_id
-        JOIN quotations q ON q.quotation_id = o.quotation_id
-        JOIN suppliers s ON s.supplier_id = q.supplier_id
+        JOIN purchase_orders po ON po.purchase_order_id = o.purchase_order_id
+        JOIN suppliers s ON s.supplier_id = po.supplier_id
+        LEFT JOIN quotations q ON q.quotation_id = o.quotation_id
         LEFT JOIN projects p ON p.project_id = o.project_id
         WHERE o.order_id = ?
         """,
@@ -5157,8 +5262,8 @@ def _record_order_lineage_event(
     conn: sqlite3.Connection,
     *,
     event_type: str,
-    source_order_id: int,
-    target_order_id: int | None = None,
+    source_purchase_order_line_id: int,
+    target_purchase_order_line_id: int | None = None,
     quantity: int | None = None,
     previous_expected_arrival: str | None = None,
     new_expected_arrival: str | None = None,
@@ -5167,14 +5272,14 @@ def _record_order_lineage_event(
     cur = conn.execute(
         """
         INSERT INTO order_lineage_events (
-            event_type, source_order_id, target_order_id, quantity,
+            event_type, source_purchase_order_line_id, target_purchase_order_line_id, quantity,
             previous_expected_arrival, new_expected_arrival, note, created_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             event_type,
-            source_order_id,
-            target_order_id,
+            source_purchase_order_line_id,
+            target_purchase_order_line_id,
             quantity,
             previous_expected_arrival,
             new_expected_arrival,
@@ -5197,10 +5302,10 @@ def list_order_lineage_events(
 ) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
-        SELECT event_id, event_type, source_order_id, target_order_id, quantity,
+        SELECT event_id, event_type, source_purchase_order_line_id, target_purchase_order_line_id, quantity,
                previous_expected_arrival, new_expected_arrival, note, created_at
         FROM order_lineage_events
-        WHERE source_order_id = ? OR target_order_id = ?
+        WHERE source_purchase_order_line_id = ? OR target_purchase_order_line_id = ?
         ORDER BY event_id ASC
         """,
         (order_id, order_id),
@@ -5221,12 +5326,12 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
         if "expected_arrival" in payload
         else current.get("expected_arrival")
     )
-    status = payload.get("status")
-    purchase_order_document_url = (
+    next_purchase_order_document_url = (
         normalize_external_document_url(payload.get("purchase_order_document_url"), "purchase_order_document_url")
         if "purchase_order_document_url" in payload
         else current.get("purchase_order_document_url")
     )
+    status = payload.get("status")
     if status and status != "Ordered":
         raise AppError(
             code="INVALID_ORDER_STATUS",
@@ -5282,8 +5387,13 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
         updates = ["expected_arrival = ?", "status = COALESCE(?, status)"]
         params: list[Any] = [expected_arrival, status]
         if "purchase_order_document_url" in payload:
-            updates.append("purchase_order_document_url = ?")
-            params.append(purchase_order_document_url)
+            purchase_order_id = _get_or_create_purchase_order(
+                conn,
+                int(current["supplier_id"]),
+                next_purchase_order_document_url,
+            )
+            updates.append("purchase_order_id = ?")
+            params.append(purchase_order_id)
         if "project_id" in payload:
             updates.append("project_id = ?")
             params.append(project_id)
@@ -5295,12 +5405,17 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
             tuple(params),
         )
         updated = get_order(conn, order_id)
+        if (
+            "purchase_order_document_url" in payload
+            and int(updated["purchase_order_id"]) != int(current["purchase_order_id"])
+        ):
+            _delete_purchase_order_if_orphaned(conn, int(current["purchase_order_id"]))
         if current.get("expected_arrival") != updated.get("expected_arrival"):
             _record_order_lineage_event(
                 conn,
                 event_type="ETA_UPDATE",
-                source_order_id=order_id,
-                target_order_id=order_id,
+                source_purchase_order_line_id=order_id,
+                target_purchase_order_line_id=order_id,
                 quantity=int(updated.get("order_amount") or 0),
                 previous_expected_arrival=current.get("expected_arrival"),
                 new_expected_arrival=updated.get("expected_arrival"),
@@ -5347,6 +5462,15 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
 
     split_updates = ["order_amount = ?", "ordered_quantity = ?", "status = COALESCE(?, status)"]
     split_params: list[Any] = [remaining_order_amount, remaining_ordered, status]
+    split_purchase_order_id = int(current["purchase_order_id"])
+    if "purchase_order_document_url" in payload:
+        split_purchase_order_id = _get_or_create_purchase_order(
+            conn,
+            int(current["supplier_id"]),
+            next_purchase_order_document_url,
+        )
+        split_updates.append("purchase_order_id = ?")
+        split_params.append(split_purchase_order_id)
     if "project_id" in payload:
         split_updates.append("project_id = ?")
         split_params.append(project_id)
@@ -5375,13 +5499,14 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
     cur = conn.execute(
         """
         INSERT INTO orders (
-            item_id, quotation_id, project_id, project_id_manual, order_amount, ordered_quantity,
-            ordered_item_number, order_date, expected_arrival, arrival_date, purchase_order_document_url, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 'Ordered')
+            item_id, quotation_id, purchase_order_id, project_id, project_id_manual, order_amount, ordered_quantity,
+            ordered_item_number, order_date, expected_arrival, arrival_date, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'Ordered')
         """,
         (
             current["item_id"],
             current["quotation_id"],
+            split_purchase_order_id,
             split_child_project_id,
             split_child_project_id_manual,
             split_quantity,
@@ -5389,17 +5514,21 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
             current["ordered_item_number"],
             current["order_date"],
             expected_arrival,
-            current.get("purchase_order_document_url"),
         ),
     )
     split_order_id = int(cur.lastrowid)
 
     split_order = get_order(conn, split_order_id)
+    if (
+        "purchase_order_document_url" in payload
+        and split_purchase_order_id != int(current["purchase_order_id"])
+    ):
+        _delete_purchase_order_if_orphaned(conn, int(current["purchase_order_id"]))
     _record_order_lineage_event(
         conn,
         event_type="ETA_SPLIT",
-        source_order_id=order_id,
-        target_order_id=split_order_id,
+        source_purchase_order_line_id=order_id,
+        target_purchase_order_line_id=split_order_id,
         quantity=split_quantity,
         previous_expected_arrival=current.get("expected_arrival"),
         new_expected_arrival=expected_arrival,
@@ -5424,19 +5553,22 @@ def delete_order(conn: sqlite3.Connection, order_id: int) -> dict[str, Any]:
         )
 
     conn.execute("DELETE FROM orders WHERE order_id = ?", (order_id,))
+    purchase_order_deleted = _delete_purchase_order_if_orphaned(conn, int(order["purchase_order_id"]))
 
-    remaining = conn.execute(
-        "SELECT COUNT(*) AS c FROM orders WHERE quotation_id = ?",
-        (order["quotation_id"],),
-    ).fetchone()
     quotation_deleted = False
-    if int(remaining["c"]) == 0:
-        conn.execute("DELETE FROM quotations WHERE quotation_id = ?", (order["quotation_id"],))
-        quotation_deleted = True
+    if order["quotation_id"] is not None:
+        remaining = conn.execute(
+            "SELECT COUNT(*) AS c FROM orders WHERE quotation_id = ?",
+            (order["quotation_id"],),
+        ).fetchone()
+        if int(remaining["c"]) == 0:
+            conn.execute("DELETE FROM quotations WHERE quotation_id = ?", (order["quotation_id"],))
+            quotation_deleted = True
     return {
         "deleted": True,
         "order_id": order_id,
         "quotation_deleted": quotation_deleted,
+        "purchase_order_deleted": purchase_order_deleted,
         "csv_sync": _csv_archive_sync_disabled_result(),
     }
 
@@ -5444,19 +5576,19 @@ def delete_order(conn: sqlite3.Connection, order_id: int) -> dict[str, Any]:
 def merge_open_orders(
     conn: sqlite3.Connection,
     *,
-    source_order_id: int,
-    target_order_id: int,
+    source_purchase_order_line_id: int,
+    target_purchase_order_line_id: int,
     expected_arrival: str | None = None,
 ) -> dict[str, Any]:
-    if source_order_id == target_order_id:
+    if source_purchase_order_line_id == target_purchase_order_line_id:
         raise AppError(
             code="INVALID_MERGE_PAIR",
-            message="source_order_id and target_order_id must differ",
+            message="source_purchase_order_line_id and target_purchase_order_line_id must differ",
             status_code=422,
         )
 
-    source = get_order(conn, source_order_id)
-    target = get_order(conn, target_order_id)
+    source = get_order(conn, source_purchase_order_line_id)
+    target = get_order(conn, target_purchase_order_line_id)
     if source["status"] == "Arrived" or target["status"] == "Arrived":
         raise AppError(
             code="ORDER_ALREADY_ARRIVED",
@@ -5464,11 +5596,14 @@ def merge_open_orders(
             status_code=409,
         )
 
-    merge_keys = ("item_id", "quotation_id", "ordered_item_number", "project_id")
+    merge_keys = ("item_id", "quotation_id", "purchase_order_id", "ordered_item_number", "project_id")
     if any(source[key] != target[key] for key in merge_keys):
         raise AppError(
             code="ORDER_MERGE_SCOPE_MISMATCH",
-            message="Orders can be merged only when item_id, quotation_id, and ordered_item_number match",
+            message=(
+                "Orders can be merged only when item_id, quotation_id, "
+                "purchase_order_id, ordered_item_number, and project_id match"
+            ),
             status_code=422,
         )
 
@@ -5489,15 +5624,15 @@ def merge_open_orders(
             status = 'Ordered'
         WHERE order_id = ?
         """,
-        (target_amount + source_amount, target_ordered + source_ordered, final_eta, target_order_id),
+        (target_amount + source_amount, target_ordered + source_ordered, final_eta, target_purchase_order_line_id),
     )
-    conn.execute("DELETE FROM orders WHERE order_id = ?", (source_order_id,))
+    conn.execute("DELETE FROM orders WHERE order_id = ?", (source_purchase_order_line_id,))
 
     event = _record_order_lineage_event(
         conn,
         event_type="ETA_MERGE",
-        source_order_id=source_order_id,
-        target_order_id=target_order_id,
+        source_purchase_order_line_id=source_purchase_order_line_id,
+        target_purchase_order_line_id=target_purchase_order_line_id,
         quantity=source_amount,
         previous_expected_arrival=source.get("expected_arrival"),
         new_expected_arrival=final_eta,
@@ -5506,9 +5641,9 @@ def merge_open_orders(
 
     return {
         "merged": True,
-        "source_order_id": source_order_id,
-        "target_order_id": target_order_id,
-        "target_order": get_order(conn, target_order_id),
+        "source_purchase_order_line_id": source_purchase_order_line_id,
+        "target_purchase_order_line_id": target_purchase_order_line_id,
+        "target_order": get_order(conn, target_purchase_order_line_id),
         "lineage_event": event,
     }
 
@@ -6663,6 +6798,7 @@ def import_orders_from_rows(
     order_ids: list[int] = []
     quotation_ids_by_key: dict[tuple[int, str], int] = {}
     recorded_quotation_keys: set[tuple[int, str]] = set()
+    purchase_order_ids_by_key: dict[tuple[int, str | None], int] = {}
     for row in resolved:
         quotation_key = (int(row["supplier_id"]), str(row["quotation_number"]))
         quotation_id = quotation_ids_by_key.get(quotation_key)
@@ -6703,29 +6839,63 @@ def import_orders_from_rows(
                         after_state=after_state,
                     )
                 recorded_quotation_keys.add(quotation_key)
+        purchase_order_document_url = row["purchase_order_document_url"]
+        purchase_order_before_state: dict[str, Any] | None = None
+        purchase_order_key = (int(row["supplier_id"]), purchase_order_document_url)
+        purchase_order_id = purchase_order_ids_by_key.get(purchase_order_key, 0)
+        if purchase_order_id == 0:
+            purchase_order_before_state = _find_purchase_order_row(
+                conn,
+                supplier_id=int(row["supplier_id"]),
+                purchase_order_document_url=purchase_order_document_url,
+            )
+            purchase_order_id = _get_or_create_purchase_order(
+                conn,
+                int(row["supplier_id"]),
+                purchase_order_document_url,
+            )
+            purchase_order_ids_by_key[purchase_order_key] = purchase_order_id
+            if import_job_id is not None:
+                purchase_order_after_state = _get_purchase_order_row_by_id(conn, purchase_order_id)
+                if purchase_order_after_state is not None and purchase_order_before_state != purchase_order_after_state:
+                    _record_import_job_effect(
+                        conn,
+                        import_job_id=import_job_id,
+                        row_number=int(row["row_number"]),
+                        status="created",
+                        effect_type=(
+                            "purchase_order_updated"
+                            if purchase_order_before_state is not None
+                            else "purchase_order_created"
+                        ),
+                        supplier_id=int(purchase_order_after_state["supplier_id"]),
+                        supplier_name=str(purchase_order_after_state["supplier_name"]),
+                        before_state=purchase_order_before_state,
+                        after_state=purchase_order_after_state,
+                    )
         cur = conn.execute(
             """
             INSERT INTO orders (
                 item_id,
                 quotation_id,
+                purchase_order_id,
                 order_amount,
                 ordered_quantity,
                 ordered_item_number,
                 order_date,
                 expected_arrival,
-                purchase_order_document_url,
                 status
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Ordered')
             """,
             (
                 row["item_id"],
                 quotation_id,
+                purchase_order_id,
                 row["order_amount"],
                 row["ordered_quantity"],
                 row["ordered_item_number"],
                 row["order_date"],
                 row["expected_arrival"],
-                row["purchase_order_document_url"],
             ),
         )
         order_id = int(cur.lastrowid)
@@ -6751,11 +6921,12 @@ def import_orders_from_rows(
                     "ordered_item_number": str(order_snapshot["ordered_item_number"]),
                     "order_date": order_snapshot["order_date"],
                     "expected_arrival": order_snapshot["expected_arrival"],
-                    "purchase_order_document_url": order_snapshot["purchase_order_document_url"],
+                    "purchase_order_id": int(order_snapshot["purchase_order_id"]),
                     "status": str(order_snapshot["status"]),
                     "project_id": order_snapshot.get("project_id"),
                     "quotation_number": str(order_snapshot["quotation_number"]),
                     "quotation_document_url": order_snapshot["quotation_document_url"],
+                    "purchase_order_document_url": order_snapshot["purchase_order_document_url"],
                     "supplier_id": int(order_snapshot["supplier_id"]),
                     "supplier_name": str(order_snapshot["supplier_name"]),
                 },
@@ -6768,7 +6939,7 @@ def import_orders_from_rows(
             SELECT o.order_id, o.item_id, o.quotation_id, im.item_number, q.quotation_number
             FROM orders o
             JOIN items_master im ON im.item_id = o.item_id
-            JOIN quotations q ON q.quotation_id = o.quotation_id
+            LEFT JOIN quotations q ON q.quotation_id = o.quotation_id
             WHERE o.order_id IN ({placeholders})
             """,
             tuple(order_ids),
@@ -7052,6 +7223,9 @@ def undo_orders_import_job(conn: sqlite3.Connection, import_job_id: int) -> dict
     effect_rows = [_normalize_import_job_effect_row(row) for row in effects]
     order_effects = [row for row in effect_rows if row["effect_type"] == "order_created"]
     quotation_effects = [row for row in effect_rows if row["effect_type"] in {"quotation_created", "quotation_updated"}]
+    purchase_order_effects = [
+        row for row in effect_rows if row["effect_type"] in {"purchase_order_created", "purchase_order_updated"}
+    ]
     alias_effects = [row for row in effect_rows if row["effect_type"] in {"alias_created", "alias_updated"}]
 
     savepoint = f"sp_undo_orders_import_{uuid4().hex}"
@@ -7079,12 +7253,12 @@ def undo_orders_import_job(conn: sqlite3.Connection, import_job_id: int) -> dict
                     order_id,
                     item_id,
                     quotation_id,
+                    purchase_order_id,
                     order_amount,
                     ordered_quantity,
                     ordered_item_number,
                     order_date,
                     expected_arrival,
-                    purchase_order_document_url,
                     status,
                     project_id
                 FROM orders
@@ -7100,12 +7274,12 @@ def undo_orders_import_job(conn: sqlite3.Connection, import_job_id: int) -> dict
                     "order_id",
                     "item_id",
                     "quotation_id",
+                    "purchase_order_id",
                     "order_amount",
                     "ordered_quantity",
                     "ordered_item_number",
                     "order_date",
                     "expected_arrival",
-                    "purchase_order_document_url",
                     "status",
                     "project_id",
                 ),
@@ -7120,7 +7294,7 @@ def undo_orders_import_job(conn: sqlite3.Connection, import_job_id: int) -> dict
                 """
                 SELECT COUNT(*) AS c
                 FROM order_lineage_events
-                WHERE source_order_id = ? OR target_order_id = ?
+                WHERE source_purchase_order_line_id = ? OR target_purchase_order_line_id = ?
                 """,
                 (order_id, order_id),
             ).fetchone()
@@ -7216,6 +7390,68 @@ def undo_orders_import_job(conn: sqlite3.Connection, import_job_id: int) -> dict
                 ),
             )
             restored_quotations += 1
+
+        for effect in purchase_order_effects:
+            effect_id = int(effect["effect_id"])
+            row_number = int(effect["row_number"])
+            effect_type = str(effect["effect_type"])
+            after_state = effect.get("after_state")
+            if not isinstance(after_state, dict):
+                _raise_import_undo_conflict(
+                    "Missing purchase order after_state snapshot for undo",
+                    effect_id=effect_id,
+                    row_number=row_number,
+                )
+            purchase_order_id = int(after_state["purchase_order_id"])
+            current_purchase_order = _get_purchase_order_row_by_id(conn, purchase_order_id)
+            if not _import_job_matches_state(
+                current_purchase_order,
+                after_state,
+                ("purchase_order_id", "supplier_id", "purchase_order_document_url"),
+            ):
+                _raise_import_undo_conflict(
+                    f"Purchase order was modified after import; cannot safely undo row {row_number}",
+                    effect_id=effect_id,
+                    row_number=row_number,
+                )
+
+            remaining_orders = conn.execute(
+                "SELECT COUNT(*) AS c FROM orders WHERE purchase_order_id = ?",
+                (purchase_order_id,),
+            ).fetchone()
+            if int(remaining_orders["c"] or 0) > 0:
+                _raise_import_undo_conflict(
+                    (
+                        "Purchase order is now referenced by order lines outside the import job "
+                        f"and cannot be safely undone (row {row_number})"
+                    ),
+                    effect_id=effect_id,
+                    row_number=row_number,
+                )
+
+            if effect_type == "purchase_order_created":
+                conn.execute("DELETE FROM purchase_orders WHERE purchase_order_id = ?", (purchase_order_id,))
+                removed_quotations += 0
+                continue
+
+            before_state = effect.get("before_state")
+            if not isinstance(before_state, dict):
+                _raise_import_undo_conflict(
+                    "Missing purchase order before_state snapshot for undo",
+                    effect_id=effect_id,
+                    row_number=row_number,
+                )
+            conn.execute(
+                """
+                UPDATE purchase_orders
+                SET purchase_order_document_url = ?
+                WHERE purchase_order_id = ?
+                """,
+                (
+                    before_state.get("purchase_order_document_url"),
+                    purchase_order_id,
+                ),
+            )
 
         for effect in alias_effects:
             effect_id = int(effect["effect_id"])
@@ -7551,13 +7787,14 @@ def process_order_arrival(
         cur = conn.execute(
             """
             INSERT INTO orders (
-                item_id, quotation_id, project_id, project_id_manual, order_amount, ordered_quantity,
+                item_id, quotation_id, purchase_order_id, project_id, project_id_manual, order_amount, ordered_quantity,
                 ordered_item_number, order_date, expected_arrival, arrival_date, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'Ordered')
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'Ordered')
             """,
             (
                 order["item_id"],
                 order["quotation_id"],
+                order["purchase_order_id"],
                 order.get("project_id"),
                 order.get("project_id_manual") or 0,
                 remaining_order_amount,
@@ -7571,8 +7808,8 @@ def process_order_arrival(
         _record_order_lineage_event(
             conn,
             event_type="ARRIVAL_SPLIT",
-            source_order_id=order_id,
-            target_order_id=split_order_id,
+            source_purchase_order_line_id=order_id,
+            target_purchase_order_line_id=split_order_id,
             quantity=arrived_qty,
             previous_expected_arrival=order.get("expected_arrival"),
             new_expected_arrival=order.get("expected_arrival"),
@@ -7621,6 +7858,38 @@ def list_quotations(
     return _paginate(conn, sql, tuple(params), page, per_page)
 
 
+def list_purchase_orders(
+    conn: sqlite3.Connection,
+    *,
+    supplier: str | None = None,
+    page: int = 1,
+    per_page: int = 50,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if supplier:
+        clauses.append("s.name = ?")
+        params.append(supplier)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = f"""
+        SELECT
+            po.purchase_order_id,
+            po.supplier_id,
+            s.name AS supplier_name,
+            po.purchase_order_document_url,
+            COUNT(o.order_id) AS line_count,
+            MIN(o.order_date) AS first_order_date,
+            MAX(o.order_date) AS last_order_date
+        FROM purchase_orders po
+        JOIN suppliers s ON s.supplier_id = po.supplier_id
+        LEFT JOIN orders o ON o.purchase_order_id = po.purchase_order_id
+        {where}
+        GROUP BY po.purchase_order_id, po.supplier_id, s.name, po.purchase_order_document_url
+        ORDER BY COALESCE(MAX(o.order_date), '0001-01-01') DESC, po.purchase_order_id DESC
+    """
+    return _paginate(conn, sql, tuple(params), page, per_page)
+
+
 def update_quotation(conn: sqlite3.Connection, quotation_id: int, payload: dict[str, Any]) -> dict[str, Any]:
     _get_entity_or_404(
         conn,
@@ -7663,6 +7932,51 @@ def update_quotation(conn: sqlite3.Connection, quotation_id: int, payload: dict[
     return updated
 
 
+def update_purchase_order(conn: sqlite3.Connection, purchase_order_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+    _get_entity_or_404(
+        conn,
+        "purchase_orders",
+        "purchase_order_id",
+        purchase_order_id,
+        "PURCHASE_ORDER_NOT_FOUND",
+        f"Purchase order with id {purchase_order_id} not found",
+    )
+    next_document_url = (
+        normalize_external_document_url(payload.get("purchase_order_document_url"), "purchase_order_document_url")
+        if "purchase_order_document_url" in payload
+        else None
+    )
+    if "purchase_order_document_url" in payload:
+        current = _get_purchase_order_row_by_id(conn, purchase_order_id)
+        if current is None:
+            raise AppError(
+                code="PURCHASE_ORDER_NOT_FOUND",
+                message=f"Purchase order with id {purchase_order_id} not found",
+                status_code=404,
+            )
+        duplicate = _find_purchase_order_row(
+            conn,
+            supplier_id=int(current["supplier_id"]),
+            purchase_order_document_url=next_document_url,
+        )
+        if duplicate is not None and int(duplicate["purchase_order_id"]) != purchase_order_id:
+            raise AppError(
+                code="PURCHASE_ORDER_ALREADY_EXISTS",
+                message="Another purchase order already uses this document URL for the same supplier",
+                status_code=409,
+            )
+        conn.execute(
+            """
+            UPDATE purchase_orders
+            SET purchase_order_document_url = ?
+            WHERE purchase_order_id = ?
+            """,
+            (next_document_url, purchase_order_id),
+        )
+    updated = _get_purchase_order_row_by_id(conn, purchase_order_id)
+    return updated if updated is not None else {"purchase_order_id": purchase_order_id}
+
+
 def delete_quotation(conn: sqlite3.Connection, quotation_id: int) -> dict[str, Any]:
     row = conn.execute(
         """
@@ -7691,12 +8005,64 @@ def delete_quotation(conn: sqlite3.Connection, quotation_id: int) -> dict[str, A
             status_code=409,
         )
 
+    linked_purchase_order_rows = conn.execute(
+        "SELECT DISTINCT purchase_order_id FROM orders WHERE quotation_id = ?",
+        (quotation_id,),
+    ).fetchall()
     conn.execute("DELETE FROM orders WHERE quotation_id = ?", (quotation_id,))
     conn.execute("DELETE FROM quotations WHERE quotation_id = ?", (quotation_id,))
+    deleted_purchase_orders = 0
+    for purchase_order_row in linked_purchase_order_rows:
+        if _delete_purchase_order_if_orphaned(conn, int(purchase_order_row["purchase_order_id"])):
+            deleted_purchase_orders += 1
 
     return {
         "deleted": True,
         "quotation_id": quotation_id,
+        "deleted_purchase_orders": deleted_purchase_orders,
+        "csv_sync": _csv_archive_sync_disabled_result(),
+    }
+
+
+def delete_purchase_order(conn: sqlite3.Connection, purchase_order_id: int) -> dict[str, Any]:
+    row = _get_purchase_order_row_by_id(conn, purchase_order_id)
+    if row is None:
+        raise AppError(
+            code="PURCHASE_ORDER_NOT_FOUND",
+            message=f"Purchase order with id {purchase_order_id} not found",
+            status_code=404,
+        )
+
+    arrived_count_row = conn.execute(
+        "SELECT COUNT(*) AS c FROM orders WHERE purchase_order_id = ? AND status = 'Arrived'",
+        (purchase_order_id,),
+    ).fetchone()
+    if int(arrived_count_row["c"] or 0) > 0:
+        raise AppError(
+            code="PURCHASE_ORDER_HAS_ARRIVED_LINES",
+            message="Purchase orders linked to arrived lines cannot be deleted",
+            status_code=409,
+        )
+
+    linked_quotation_rows = conn.execute(
+        "SELECT DISTINCT quotation_id FROM orders WHERE purchase_order_id = ?",
+        (purchase_order_id,),
+    ).fetchall()
+    conn.execute("DELETE FROM orders WHERE purchase_order_id = ?", (purchase_order_id,))
+    conn.execute("DELETE FROM purchase_orders WHERE purchase_order_id = ?", (purchase_order_id,))
+    deleted_quotations = 0
+    for quotation_row in linked_quotation_rows:
+        remaining = conn.execute(
+            "SELECT COUNT(*) AS c FROM orders WHERE quotation_id = ?",
+            (int(quotation_row["quotation_id"]),),
+        ).fetchone()
+        if int(remaining["c"] or 0) == 0:
+            conn.execute("DELETE FROM quotations WHERE quotation_id = ?", (int(quotation_row["quotation_id"]),))
+            deleted_quotations += 1
+    return {
+        "deleted": True,
+        "purchase_order_id": purchase_order_id,
+        "deleted_quotations": deleted_quotations,
         "csv_sync": _csv_archive_sync_disabled_result(),
     }
 
@@ -10444,10 +10810,11 @@ def _rfq_line_detail_rows(conn: sqlite3.Connection, rfq_id: int) -> list[dict[st
             rl.*,
             im.item_number,
             m.name AS manufacturer_name,
-            o.project_id AS linked_order_project_id,
-            o.expected_arrival AS linked_order_expected_arrival,
+            rl.linked_order_id AS linked_purchase_order_line_id,
+            o.project_id AS linked_purchase_order_line_project_id,
+            o.expected_arrival AS linked_purchase_order_line_expected_arrival,
             q.quotation_number AS linked_quotation_number,
-            s.name AS linked_order_supplier_name
+            s.name AS linked_purchase_order_line_supplier_name
         FROM rfq_lines rl
         JOIN items_master im ON im.item_id = rl.item_id
         JOIN manufacturers m ON m.manufacturer_id = im.manufacturer_id
@@ -10696,10 +11063,11 @@ def update_rfq_line(
         final_status = _validate_rfq_line_status(str(payload["status"]))
 
     final_linked_order_id = current_linked_order_id
-    if "linked_order_id" in payload:
-        final_linked_order_id = payload.get("linked_order_id")
+    linked_purchase_order_line_key_present = "linked_purchase_order_line_id" in payload
+    if linked_purchase_order_line_key_present:
+        final_linked_order_id = payload.get("linked_purchase_order_line_id")
         final_linked_order_id = None if final_linked_order_id is None else int(final_linked_order_id)
-    if "linked_order_id" in payload and final_linked_order_id is not None and "status" not in payload:
+    if linked_purchase_order_line_key_present and final_linked_order_id is not None and "status" not in payload:
         final_status = "ORDERED"
     if final_status != "ORDERED":
         final_linked_order_id = None
@@ -10713,7 +11081,7 @@ def update_rfq_line(
     if final_status == "ORDERED" and final_linked_order_id is None:
         raise AppError(
             code="RFQ_LINKED_ORDER_REQUIRED",
-            message="linked_order_id is required before an RFQ line can be marked ORDERED",
+            message="linked_purchase_order_line_id is required before an RFQ line can be marked ORDERED",
             status_code=422,
         )
     if final_status == "ORDERED":
@@ -10817,10 +11185,11 @@ def _procurement_line_detail_rows(conn: sqlite3.Connection, batch_id: int) -> li
             im.description,
             m.name AS manufacturer_name,
             p.name AS source_project_name,
-            o.project_id AS linked_order_project_id,
-            o.expected_arrival AS linked_order_expected_arrival,
+            pl.linked_order_id AS linked_purchase_order_line_id,
+            o.project_id AS linked_purchase_order_line_project_id,
+            o.expected_arrival AS linked_purchase_order_line_expected_arrival,
             q.quotation_number AS linked_quotation_number,
-            s.name AS linked_order_supplier_name
+            s.name AS linked_purchase_order_line_supplier_name
         FROM procurement_lines pl
         JOIN items_master im ON im.item_id = pl.item_id
         JOIN manufacturers m ON m.manufacturer_id = im.manufacturer_id
@@ -11007,7 +11376,7 @@ def add_procurement_lines(
                 finalized_quantity,
                 line.get("supplier_name"),
                 normalize_optional_date(line.get("expected_arrival"), "expected_arrival"),
-                line.get("linked_order_id"),
+                line.get("linked_purchase_order_line_id"),
                 line.get("linked_quotation_id"),
                 _validate_procurement_line_status(str(line.get("status") or "DRAFT")),
                 line.get("note"),
@@ -11068,10 +11437,11 @@ def update_procurement_line(conn: sqlite3.Connection, line_id: int, payload: dic
         final_status = _validate_procurement_line_status(str(payload["status"]))
 
     final_linked_order_id = current_linked_order_id
-    if "linked_order_id" in payload:
-        final_linked_order_id = payload.get("linked_order_id")
+    linked_purchase_order_line_key_present = "linked_purchase_order_line_id" in payload
+    if linked_purchase_order_line_key_present:
+        final_linked_order_id = payload.get("linked_purchase_order_line_id")
         final_linked_order_id = None if final_linked_order_id is None else int(final_linked_order_id)
-    if "linked_order_id" in payload and final_linked_order_id is not None and "status" not in payload:
+    if linked_purchase_order_line_key_present and final_linked_order_id is not None and "status" not in payload:
         final_status = "ORDERED"
     if final_status != "ORDERED":
         final_linked_order_id = None
@@ -11085,7 +11455,7 @@ def update_procurement_line(conn: sqlite3.Connection, line_id: int, payload: dic
     if final_status == "ORDERED" and final_linked_order_id is None:
         raise AppError(
             code="PROCUREMENT_LINKED_ORDER_REQUIRED",
-            message="linked_order_id is required before a procurement line can be marked ORDERED",
+            message="linked_purchase_order_line_id is required before a procurement line can be marked ORDERED",
             status_code=422,
         )
     if final_status == "ORDERED":
@@ -11263,7 +11633,7 @@ def confirm_procurement_links(conn: sqlite3.Connection, *, links: list[dict[str,
         update_procurement_line(
             conn,
             int(link["line_id"]),
-            {"linked_order_id": int(link["order_id"]), "status": "ORDERED"},
+            {"linked_purchase_order_line_id": int(link["purchase_order_line_id"]), "status": "ORDERED"},
         )
         confirmed_count += 1
     return {"confirmed_count": confirmed_count}
@@ -12025,8 +12395,9 @@ def dashboard_summary(conn: sqlite3.Connection, low_stock_threshold: int = 5) ->
                 s.name AS supplier_name
             FROM orders o
             JOIN items_master im ON im.item_id = o.item_id
-            JOIN quotations q ON q.quotation_id = o.quotation_id
-            JOIN suppliers s ON s.supplier_id = q.supplier_id
+            JOIN purchase_orders po ON po.purchase_order_id = o.purchase_order_id
+            JOIN suppliers s ON s.supplier_id = po.supplier_id
+            LEFT JOIN quotations q ON q.quotation_id = o.quotation_id
             WHERE o.status = 'Ordered'
               AND o.expected_arrival IS NOT NULL
               AND o.expected_arrival < ?

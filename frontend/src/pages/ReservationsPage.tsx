@@ -97,8 +97,8 @@ export function ReservationsPage() {
   const { data: projectsResp } = useSWR("/projects-options-reservations", () =>
     apiGetAllPages<ProjectRow>("/projects?per_page=200")
   );
-  const { data: openOrders } = useSWR("/orders-open-options-reservations", () =>
-    apiGetAllPages<Order>("/orders?include_arrived=false&per_page=200")
+  const { data: openOrders } = useSWR("/purchase-order-lines-open-options-reservations", () =>
+    apiGetAllPages<Order>("/purchase-order-lines?include_arrived=false&per_page=200")
   );
   const { data: allReservations, mutate: mutateReservationSummary } = useSWR(
     "/reservations-summary-options",
@@ -191,7 +191,7 @@ export function ReservationsPage() {
     const itemIdRaw = params.get("item_id");
     const quantityRaw = params.get("quantity");
     const projectIdRaw = params.get("project_id");
-    const sourceOrderIdRaw = params.get("source_order_id");
+    const sourceOrderIdRaw = params.get("source_purchase_order_line_id");
 
     const next: ReservationRow = {
       ...blankRow(),
@@ -217,7 +217,7 @@ export function ReservationsPage() {
 
     if (sourceOrderIdRaw && Number.isFinite(Number(sourceOrderIdRaw))) {
       setReservationMessage(
-        `Prefilled from Order #${sourceOrderIdRaw}. Confirm item/qty/project before submitting.`
+        `Prefilled from purchase order line #${sourceOrderIdRaw}. Confirm item/qty/project before submitting.`
       );
     } else {
       setReservationMessage("Prefilled reservation entry. Confirm values before submitting.");

@@ -16,7 +16,7 @@ export type RfqLineDraft = {
   supplier_name: string;
   lead_time_days: string;
   expected_arrival: string;
-  linked_order_id: string;
+  linked_purchase_order_line_id: string;
   linked_quotation_id: string;
   status: ProcurementLineStatus;
   note: string;
@@ -80,7 +80,8 @@ export function createRfqLineDraft(line: ProcurementLine): RfqLineDraft {
     supplier_name: line.supplier_name ?? "",
     lead_time_days: line.lead_time_days == null ? "" : String(line.lead_time_days),
     expected_arrival: line.expected_arrival ?? "",
-    linked_order_id: line.linked_order_id == null ? "" : String(line.linked_order_id),
+    linked_purchase_order_line_id:
+      line.linked_purchase_order_line_id == null ? "" : String(line.linked_purchase_order_line_id),
     linked_quotation_id: line.linked_quotation_id == null ? "" : String(line.linked_quotation_id),
     status: line.status,
     note: line.note ?? "",
@@ -98,7 +99,7 @@ export function areRfqLineDraftsEqual(
     left.supplier_name === right.supplier_name &&
     left.lead_time_days === right.lead_time_days &&
     left.expected_arrival === right.expected_arrival &&
-    left.linked_order_id === right.linked_order_id &&
+    left.linked_purchase_order_line_id === right.linked_purchase_order_line_id &&
     left.linked_quotation_id === right.linked_quotation_id &&
     left.status === right.status &&
     left.note === right.note

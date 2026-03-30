@@ -46,13 +46,13 @@ describe("editorDrafts helpers", () => {
       supplier_name: "Supplier A",
       lead_time_days: 14,
       expected_arrival: "2026-03-30",
-      linked_order_id: 8,
+      linked_purchase_order_line_id: 8,
       status: "QUOTED",
       note: "quoted",
-      linked_order_project_id: 2,
-      linked_order_expected_arrival: "2026-03-30",
+      linked_purchase_order_line_project_id: 2,
+      linked_purchase_order_line_expected_arrival: "2026-03-30",
       linked_quotation_number: "Q-1",
-      linked_order_supplier_name: "Supplier A",
+      linked_purchase_order_line_supplier_name: "Supplier A",
     };
 
     const draft = createRfqLineDraft(line);

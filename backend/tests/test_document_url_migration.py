@@ -39,7 +39,7 @@ def test_manual_order_import_accepts_external_document_urls(client):
     )
 
     response = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={
             "file": (
                 "orders.csv",
@@ -69,7 +69,7 @@ def test_manual_order_import_accepts_external_document_urls(client):
     assert payload["data"]["imported_count"] == 1
     assert isinstance(payload["data"]["import_job_id"], int)
 
-    orders = client.get("/api/orders").json()["data"]
+    orders = client.get("/api/purchase-order-lines").json()["data"]
     order = next(row for row in orders if row["quotation_number"] == "Q-DOC-001")
     assert order["quotation_document_url"] == "https://example.sharepoint.com/sites/procurement/Q-DOC-001"
     assert order["purchase_order_document_url"] == "https://example.sharepoint.com/sites/procurement/PO-DOC-001"
@@ -78,13 +78,13 @@ def test_manual_order_import_accepts_external_document_urls(client):
     quotation = next(row for row in quotations if row["quotation_number"] == "Q-DOC-001")
     assert quotation["quotation_document_url"] == "https://example.sharepoint.com/sites/procurement/Q-DOC-001"
 
-    jobs = client.get("/api/orders/import-jobs")
+    jobs = client.get("/api/purchase-order-lines/import-jobs")
     assert jobs.status_code == 200
     job = next(row for row in jobs.json()["data"] if row["import_job_id"] == payload["data"]["import_job_id"])
     assert job["import_type"] == "orders"
     assert job["status"] == "ok"
 
-    detail = client.get(f"/api/orders/import-jobs/{payload['data']['import_job_id']}")
+    detail = client.get(f"/api/purchase-order-lines/import-jobs/{payload['data']['import_job_id']}")
     assert detail.status_code == 200
     detail_payload = detail.json()["data"]
     assert detail_payload["job"]["import_type"] == "orders"
@@ -103,7 +103,7 @@ def test_manual_order_import_requires_quotation_document_url(client):
     )
 
     response = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={
             "file": (
                 "orders.csv",
@@ -133,7 +133,7 @@ def test_manual_order_import_requires_quotation_document_url(client):
     assert payload["error"]["code"] == "INVALID_FIELD"
     assert "quotation_document_url" in payload["error"]["message"]
 
-    jobs = client.get("/api/orders/import-jobs")
+    jobs = client.get("/api/purchase-order-lines/import-jobs")
     assert jobs.status_code == 200
     rows = jobs.json()["data"]
     assert len(rows) == 1
@@ -144,7 +144,7 @@ def test_manual_order_import_requires_quotation_document_url(client):
 
 def test_generated_artifact_metadata_hides_workspace_paths(client):
     response = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={
             "file": (
                 "orders.csv",
@@ -179,7 +179,7 @@ def test_generated_artifact_metadata_hides_workspace_paths(client):
     assert artifact["detail_path"] == f"/api/artifacts/{artifact['artifact_id']}"
     assert artifact["download_path"] == f"/api/artifacts/{artifact['artifact_id']}/download"
 
-    detail = client.get(f"/api/orders/import-jobs/{payload['import_job_id']}")
+    detail = client.get(f"/api/purchase-order-lines/import-jobs/{payload['import_job_id']}")
     assert detail.status_code == 200
     assert any(effect["effect_type"] == "order_missing_item" for effect in detail.json()["data"]["effects"])
 
@@ -196,7 +196,7 @@ def test_order_import_preview_rejects_non_https_document_url(client):
     )
 
     response = client.post(
-        "/api/orders/import-preview",
+        "/api/purchase-order-lines/import-preview",
         files={
             "file": (
                 "orders.csv",
@@ -238,7 +238,7 @@ def test_order_import_job_undo_and_redo_flow(client):
     ).json()["data"]
 
     response = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={
             "file": (
                 "order_undo.csv",
@@ -288,7 +288,7 @@ def test_order_import_job_undo_and_redo_flow(client):
     assert payload["saved_alias_count"] == 1
     import_job_id = int(payload["import_job_id"])
 
-    detail = client.get(f"/api/orders/import-jobs/{import_job_id}")
+    detail = client.get(f"/api/purchase-order-lines/import-jobs/{import_job_id}")
     assert detail.status_code == 200
     detail_payload = detail.json()["data"]
     assert detail_payload["job"]["request_metadata"]["row_overrides"]["2"]["item_id"] == item["item_id"]
@@ -296,7 +296,7 @@ def test_order_import_job_undo_and_redo_flow(client):
     effect_types = {effect["effect_type"] for effect in detail_payload["effects"]}
     assert {"order_created", "quotation_created", "alias_created"} <= effect_types
 
-    orders = client.get("/api/orders?supplier=SupplierOrderUndo&per_page=50")
+    orders = client.get("/api/purchase-order-lines?supplier=SupplierOrderUndo&per_page=50")
     assert orders.status_code == 200
     assert len(orders.json()["data"]) == 1
 
@@ -311,7 +311,7 @@ def test_order_import_job_undo_and_redo_flow(client):
     assert aliases.status_code == 200
     assert len(aliases.json()["data"]) == 1
 
-    undo = client.post(f"/api/orders/import-jobs/{import_job_id}/undo")
+    undo = client.post(f"/api/purchase-order-lines/import-jobs/{import_job_id}/undo")
     assert undo.status_code == 200
     undo_data = undo.json()["data"]
     assert undo_data["status"] == "undone"
@@ -319,7 +319,7 @@ def test_order_import_job_undo_and_redo_flow(client):
     assert undo_data["removed_quotations"] == 1
     assert undo_data["removed_aliases"] == 1
 
-    orders_after_undo = client.get("/api/orders?supplier=SupplierOrderUndo&per_page=50")
+    orders_after_undo = client.get("/api/purchase-order-lines?supplier=SupplierOrderUndo&per_page=50")
     assert orders_after_undo.status_code == 200
     assert orders_after_undo.json()["data"] == []
 
@@ -331,7 +331,7 @@ def test_order_import_job_undo_and_redo_flow(client):
     assert aliases_after_undo.status_code == 200
     assert aliases_after_undo.json()["data"] == []
 
-    redo = client.post(f"/api/orders/import-jobs/{import_job_id}/redo")
+    redo = client.post(f"/api/purchase-order-lines/import-jobs/{import_job_id}/redo")
     assert redo.status_code == 200
     redo_data = redo.json()["data"]
     assert redo_data["source_job_id"] == import_job_id
@@ -340,7 +340,7 @@ def test_order_import_job_undo_and_redo_flow(client):
     assert redo_data["import_result"]["imported_count"] == 1
     assert redo_data["import_result"]["saved_alias_count"] == 1
 
-    orders_after_redo = client.get("/api/orders?supplier=SupplierOrderUndo&per_page=50")
+    orders_after_redo = client.get("/api/purchase-order-lines?supplier=SupplierOrderUndo&per_page=50")
     assert orders_after_redo.status_code == 200
     assert len(orders_after_redo.json()["data"]) == 1
 
@@ -372,7 +372,7 @@ def test_order_import_job_redo_hides_nested_missing_item_paths(client, monkeypat
 
     monkeypatch.setattr(service, "redo_orders_import_job", _fake_redo_orders_import_job)
 
-    response = client.post("/api/orders/import-jobs/41/redo")
+    response = client.post("/api/purchase-order-lines/import-jobs/41/redo")
 
     assert response.status_code == 200
     payload = response.json()["data"]
@@ -396,7 +396,7 @@ def test_order_import_job_undo_blocks_when_order_changed_after_import(client):
     )
 
     response = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={
             "file": (
                 "order_undo_blocked.csv",
@@ -426,19 +426,19 @@ def test_order_import_job_undo_blocks_when_order_changed_after_import(client):
     order_id = int(payload["order_ids"][0])
 
     mutate = client.put(
-        f"/api/orders/{order_id}",
+        f"/api/purchase-order-lines/{order_id}",
         json={
             "purchase_order_document_url": "https://example.sharepoint.com/sites/procurement/PO-ORDER-UNDO-BLOCKED-UPDATED",
         },
     )
     assert mutate.status_code == 200
 
-    undo = client.post(f"/api/orders/import-jobs/{import_job_id}/undo")
+    undo = client.post(f"/api/purchase-order-lines/import-jobs/{import_job_id}/undo")
     assert undo.status_code == 409
     undo_payload = undo.json()
     assert undo_payload["status"] == "error"
     assert undo_payload["error"]["code"] == "IMPORT_UNDO_CONFLICT"
 
-    detail = client.get(f"/api/orders/import-jobs/{import_job_id}")
+    detail = client.get(f"/api/purchase-order-lines/import-jobs/{import_job_id}")
     assert detail.status_code == 200
     assert detail.json()["data"]["job"]["lifecycle_state"] == "active"

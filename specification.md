@@ -72,8 +72,9 @@ When statements conflict, interpret in this order:
 | `suppliers` | Supplier registry (Vendors) | supplier_id, name |
 | `items_master` | Component definitions | item_id, item_number, manufacturer_id |
 | `inventory_ledger` | Current inventory by location | item_id, location, quantity |
-| `quotations` | Quotation metadata | quotation_id, quotation_number |
-| `orders` | Purchase orders | order_id, item_id, status |
+| `quotations` | Quotation headers | quotation_id, quotation_number |
+| `purchase_orders` | Purchase order headers | purchase_order_id, supplier_id |
+| `orders` | Purchase order lines | order_id, purchase_order_id, item_id |
 | `supplier_item_aliases` | Supplier SKU alias mappings | alias_id, supplier_id, ordered_item_number |
 | `category_aliases` | Category soft-merge aliases | alias_category, canonical_category |
 | `transaction_log` | All inventory operations | log_id, operation_type, item_id |
@@ -122,8 +123,15 @@ erDiagram
     TEXT quotation_document_url
   }
 
+  purchase_orders {
+    INTEGER purchase_order_id PK
+    INTEGER supplier_id FK
+    TEXT purchase_order_document_url
+  }
+
   orders {
     INTEGER order_id PK
+    INTEGER purchase_order_id FK
     INTEGER item_id FK
     INTEGER quotation_id FK
     INTEGER order_amount
@@ -132,7 +140,6 @@ erDiagram
     TEXT order_date
     TEXT expected_arrival
     TEXT arrival_date
-    TEXT purchase_order_document_url
     TEXT status
   }
 
@@ -340,16 +347,27 @@ Stores quotation metadata.
 
 **Unique Constraint:** `(supplier_id, quotation_number)`
 
-### **3.6 orders**
+### **3.6 purchase_orders**
 
-Tracks purchasing and delivery status.
+Stores purchase-order header metadata.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| purchase_order_id | INTEGER | PK, AUTOINCREMENT | Internal header ID |
+| supplier_id | INTEGER | FK -> suppliers | Supplier reference |
+| purchase_order_document_url | TEXT | | External purchase order document URL (for example SharePoint) |
+
+### **3.7 orders**
+
+Tracks purchase-order lines and delivery status.
 
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
 | order_id | INTEGER | PK, AUTOINCREMENT | Internal ID |
+| purchase_order_id | INTEGER | FK -> purchase_orders, NOT NULL | Purchase-order header reference |
 | project_id | INTEGER | FK -> projects, Nullable | Dedicated project assignment for planning |
 | item_id | INTEGER | FK ↁEitems_master | Item reference |
-| quotation_id | INTEGER | FK ↁEquotations | Quotation reference |
+| quotation_id | INTEGER | FK ↁEquotations, Nullable | Quotation reference |
 | order_amount | INTEGER | NOT NULL | Canonical-item quantity used for inventory math |
 | ordered_quantity | INTEGER | Legacy nullable; auto-filled and validated | Original quantity from supplier order line |
 | ordered_item_number | TEXT | Legacy nullable; auto-filled and validated | Original supplier order SKU |
@@ -519,14 +537,14 @@ Stores project-dedicated quote / order-planning line items.
 | supplier_name | TEXT | Nullable | Supplier label selected during RFQ |
 | lead_time_days | INTEGER | Nullable, CHECK >= 0 | Lead time captured during RFQ |
 | expected_arrival | TEXT | Nullable | Planned arrival date used by planning |
-| linked_order_id | INTEGER | FK -> orders, Nullable | Real order row linked after purchasing |
+| linked_purchase_order_line_id | INTEGER | FK -> purchase order line, Nullable | Real purchase-order line linked after purchasing |
 | status | TEXT | NOT NULL, DEFAULT `DRAFT` | `DRAFT`, `SENT`, `QUOTED`, `ORDERED`, `CANCELLED` |
 | note | TEXT | Nullable | Operator note |
 | created_at | TEXT | NOT NULL | Creation timestamp |
 | updated_at | TEXT | NOT NULL | Last update timestamp |
 
 **Planning Rule:**
-- `QUOTED` lines with `expected_arrival` count as project-dedicated planned supply and must not retain a `linked_order_id`.
+- `QUOTED` lines with `expected_arrival` count as project-dedicated planned supply and must not retain a `linked_purchase_order_line_id`.
 - `ORDERED` lines must link to an actual order row; only the ordered link drives `orders.project_id`, and any reassignment or clearing of that dedicated ownership must happen by changing the RFQ line link/status.
 
 ### **3.16 purchase_candidates**
@@ -590,7 +608,7 @@ Maps raw category names to canonical category names for soft-merge behavior.
 
 **Order Import:**
 1. User uploads one or more order CSV files; each CSV row must include `supplier`
-2. Manual Orders UI first calls `POST /orders/import-preview`
+2. Manual Purchase Order Lines UI first calls `POST /purchase-order-lines/import-preview`
    - classify each row as `exact`, `high_confidence`, `needs_review`, or `unresolved`
    - prefer direct item-number and supplier-alias matches before fuzzy ranking
    - surface duplicate quotation conflicts before commit without creating a supplier during preview
@@ -616,8 +634,8 @@ Maps raw category names to canonical category names for soft-merge behavior.
    - apply requested alias saves only after duplicate-quotation checks pass
 9. Normalize date fields to `YYYY-MM-DD`; reject invalid date strings
 10. For manual CSV import, `quotation_document_url` is required and must be a valid `https://...` URL
-11. `purchase_order_document_url` is optional and, when provided, must also be a valid `https://...` URL
-12. Manual `POST /orders/import` creates an `import_jobs` row with `import_type='orders'` and records row-level `import_job_effects`
+11. `purchase_order_document_url` is optional and, when provided, must also be a valid `https://...` URL; it identifies the purchase-order header attached to imported lines
+12. Manual `POST /purchase-order-lines/import` creates an `import_jobs` row with `import_type='orders'` and records row-level `import_job_effects`
    - created rows use `effect_type='order_created'`
    - duplicate quotation rejection uses `effect_type='order_duplicate_quotation'`
    - unresolved item output uses `effect_type='order_missing_item'`
@@ -778,11 +796,13 @@ Projected Available =
 | Function | Purpose | Parameters |
 |----------|---------|------------|
 | `list_orders()` | Query orders with filters | status, supplier, include_arrived |
-| `update_order()` | Edit open order or split partial ETA | order_id, expected_arrival, status, split_quantity |
-| `merge_open_orders()` | Merge two open split-compatible orders | source_order_id, target_order_id, expected_arrival |
-| `list_order_lineage_events()` | Retrieve split/merge lineage events for one order | order_id |
+| `update_order()` | Edit open purchase-order line or split partial ETA | order_id, expected_arrival, status, split_quantity |
+| `merge_open_orders()` | Merge two open split-compatible purchase-order lines | source_purchase_order_line_id, target_purchase_order_line_id, expected_arrival |
+| `list_order_lineage_events()` | Retrieve split/merge lineage events for one purchase-order line | order_id |
 | `list_quotations()` | Query quotations with filters | supplier |
 | `update_quotation()` | Edit quotation | quotation_id, issue_date, quotation_document_url |
+| `list_purchase_orders()` | Query purchase-order headers with filters | supplier |
+| `update_purchase_order()` | Edit purchase-order header | purchase_order_id, purchase_order_document_url |
 | `list_supplier_item_aliases()` | Query alias mappings | supplier |
 | `upsert_supplier_item_alias()` | Create/update one alias | supplier, ordered_item_number, canonical_item_number, units_per_order |
 | `register_supplier_item_aliases_df()` | Bulk import aliases | supplier, dataframe |
@@ -800,7 +820,15 @@ Projected Available =
 - Merge is allowed only when open orders share `item_id`, `quotation_id`, and `ordered_item_number`
 - Split/merge updates must append lineage events for auditability
 - All quotations can be edited
+- All purchase-order headers can be edited independently from line rows
 - Date fields must be YYYY-MM-DD format
+
+**Frontend workflow requirement:**
+- The Orders screen should be browseable at three domain levels without forcing one long vertical row form:
+  - `Purchase Order Lines` for operational line edits and arrivals
+  - `Quotations` for quotation-header review/edit
+  - `Purchase Orders` for purchase-order-header review/edit
+- The line-management area should prefer dense cards plus a side detail pane over a long single-column field stack so operators do not need excessive vertical scrolling to reach lower fields.
 
 
 
@@ -1021,19 +1049,19 @@ Base URL: `http://localhost:8000/api`
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/orders` | List orders (supports `?status=`, `?supplier=`, `?item_id=`, `?project_id=`) |
-| GET | `/orders/import-template` | Download header-only order import template CSV (UTF-8 with BOM) |
-| GET | `/orders/import-reference` | Download live order reference CSV; optional `?supplier_name=` remains available for alias lookup narrowing |
-| POST | `/orders/import-preview` | Preview order CSV reconciliation from uploaded CSV content; each row must carry `supplier` |
-| GET | `/orders/import-jobs` | List manual order import jobs recorded in `import_jobs` (`import_type='orders'`) |
-| GET | `/orders/import-jobs/{import_job_id}` | Get one manual order import job with row-level `import_job_effects` |
-| GET | `/orders/{order_id}` | Get order details |
-| PUT | `/orders/{order_id}` | Update order ETA, project assignment for non-RFQ-managed orders, or split partial ETA via `split_quantity` |
-| POST | `/orders/merge` | Merge two open compatible orders |
-| GET | `/orders/{order_id}/lineage` | List split/merge lineage events for the order |
-| POST | `/orders/import` | Import orders from CSV; accepts optional preview-confirmation `row_overrides` and `alias_saves` form fields with strict `422` validation for malformed or invalid payloads. Each row must include `supplier`. Primary contract is metadata-only document URLs: `quotation_document_url` is required and `purchase_order_document_url` is optional. Successful and missing-item responses include `import_job_id` |
-| POST | `/orders/{order_id}/arrival` | Process order arrival |
-| POST | `/orders/{order_id}/partial-arrival` | Process partial arrival |
+| GET | `/purchase-order-lines` | List purchase-order lines (supports `?status=`, `?supplier=`, `?item_id=`, `?project_id=`) |
+| GET | `/purchase-order-lines/import-template` | Download header-only purchase-order-line import template CSV (UTF-8 with BOM) |
+| GET | `/purchase-order-lines/import-reference` | Download live purchase-order-line reference CSV; optional `?supplier_name=` remains available for alias lookup narrowing |
+| POST | `/purchase-order-lines/import-preview` | Preview purchase-order-line CSV reconciliation from uploaded CSV content; each row must carry `supplier` |
+| GET | `/purchase-order-lines/import-jobs` | List manual purchase-order-line import jobs recorded in `import_jobs` (`import_type='orders'`) |
+| GET | `/purchase-order-lines/import-jobs/{import_job_id}` | Get one manual purchase-order-line import job with row-level `import_job_effects` |
+| GET | `/purchase-order-lines/{order_id}` | Get purchase-order-line details |
+| PUT | `/purchase-order-lines/{order_id}` | Update purchase-order-line ETA, project assignment for non-RFQ-managed lines, or split partial ETA via `split_quantity` |
+| POST | `/purchase-order-lines/merge` | Merge two open compatible purchase-order lines |
+| GET | `/purchase-order-lines/{order_id}/lineage` | List split/merge lineage events for the purchase-order line |
+| POST | `/purchase-order-lines/import` | Import purchase-order lines from CSV; accepts optional preview-confirmation `row_overrides` and `alias_saves` form fields with strict `422` validation for malformed or invalid payloads. Each row must include `supplier`. `quotation_document_url` updates/creates quotation headers; optional `purchase_order_document_url` updates/creates purchase-order headers. Successful and missing-item responses include `import_job_id` |
+| POST | `/purchase-order-lines/{order_id}/arrival` | Process purchase-order-line arrival |
+| POST | `/purchase-order-lines/{order_id}/partial-arrival` | Process partial purchase-order-line arrival |
 | GET | `/quotations` | List quotations |
 | PUT | `/quotations/{quotation_id}` | Update quotation |
 
@@ -1088,7 +1116,7 @@ Base URL: `http://localhost:8000/api`
 | GET | `/rfq-batches` | List RFQ batches |
 | GET | `/rfq-batches/{rfq_id}` | Get RFQ batch with line items |
 | PUT | `/rfq-batches/{rfq_id}` | Update RFQ batch metadata/status |
-| PUT | `/rfq-lines/{line_id}` | Update RFQ line quantities, dates, status, or linked order (`linked_order_id` is cleared automatically unless the final status is `ORDERED`) |
+| PUT | `/rfq-lines/{line_id}` | Update RFQ line quantities, dates, status, or linked purchase-order line (`linked_purchase_order_line_id` is cleared automatically unless the final status is `ORDERED`) |
 
 #### **BOM Analysis**
 
@@ -1264,7 +1292,7 @@ Compatibility rule:
 Browser/shared-server contract:
 - `supplier` is required on every order-import CSV row; browser flows should not rely on supplier folder names or a top-level supplier form field
 - `quotation_document_url` is required for manual CSV import and should point to the external quotation document
-- `purchase_order_document_url` is optional and stores the external PO document when available
+- `purchase_order_document_url` is optional and updates or creates the referenced purchase-order header when available
 - legacy ZIP/PDF batch flows remain compatibility-only for deployments that still manage PDFs inside this application, and are out of scope for the GCP-target browser workflow
 
 ### **6.2 missing_items_registration.csv**

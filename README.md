@@ -202,7 +202,7 @@ For targeted backend slices from the repo root, keep the same `TEST_DATABASE_URL
 - Header-only template downloads (UTF-8 with BOM):
   - `GET /api/items/import-template`
   - `GET /api/inventory/import-template`
-  - `GET /api/orders/import-template`
+  - `GET /api/purchase-order-lines/import-template`
   - `GET /api/reservations/import-template`
 - Preview-first manual imports:
   - `POST /api/items/import-preview`
@@ -212,11 +212,11 @@ For targeted backend slices from the repo root, keep the same `TEST_DATABASE_URL
   - final item import accepts optional per-row `row_overrides` (`canonical_item_number`, `units_per_order`) and archives successful manual-import CSV content into `imports/items/registered/<YYYY-MM>/` as durable history without a follow-up folder rescan
   - `POST /api/inventory/import-preview`
   - validates movement rows, simulates stock balance changes, and allows per-row `item_id` correction before final `POST /api/inventory/import-csv`
-  - `POST /api/orders/import-preview`
+  - `POST /api/purchase-order-lines/import-preview`
   - classifies rows as `exact`, `high_confidence`, `needs_review`, or `unresolved`
   - requires `supplier` on every CSV row
   - surfaces duplicate quotation conflicts before commit
-  - supports per-row canonical item correction plus optional supplier-alias save on final `POST /api/orders/import`
+  - supports per-row canonical item correction plus optional supplier-alias save on final `POST /api/purchase-order-lines/import`
   - the Orders page can preview/import multiple CSV files in a single run
   - when orders still contain unresolved item numbers, the page exposes a downloadable missing-item CSV instead of routing into a dedicated Items resolver
   - `POST /api/reservations/import-preview`
@@ -232,7 +232,7 @@ For targeted backend slices from the repo root, keep the same `TEST_DATABASE_URL
 - Live reference CSV downloads:
   - `GET /api/items/import-reference`
   - `GET /api/inventory/import-reference`
-  - `GET /api/orders/import-reference` (optional `?supplier_name=...`)
+  - `GET /api/purchase-order-lines/import-reference` (optional `?supplier_name=...`)
   - `GET /api/reservations/import-reference`
 - Movements CSV upload: `POST /api/inventory/import-csv`
   - columns: `operation_type,item_id,quantity,from_location,to_location,location,note`

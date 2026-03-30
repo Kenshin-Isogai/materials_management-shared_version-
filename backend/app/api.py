@@ -83,6 +83,7 @@ from .schemas import (
     OrderMergeRequest,
     OrderUpdateRequest,
     PartialArrivalRequest,
+    PurchaseOrderUpdateRequest,
     ProcurementBatchAddLinesRequest,
     ProcurementBatchCreateRequest,
     ProcurementBatchUpdate,
@@ -1009,7 +1010,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         conn.commit()
         return ok(result)
 
-    @app.get("/api/orders")
+    @app.get("/api/purchase-order-lines")
     def get_orders(
         status: str | None = None,
         supplier: str | None = None,
@@ -1032,12 +1033,12 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         )
         return ok(data, pagination)
 
-    @app.get("/api/orders/import-template")
+    @app.get("/api/purchase-order-lines/import-template")
     def get_orders_import_template():
         filename, content = service.get_import_template_csv("orders")
         return csv_attachment(filename, content)
 
-    @app.get("/api/orders/import-reference")
+    @app.get("/api/purchase-order-lines/import-reference")
     def get_orders_import_reference(supplier_name: str | None = None, conn= db):
         filename, content = service.get_orders_import_reference_csv(
             conn,
@@ -1045,7 +1046,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         )
         return csv_attachment(filename, content)
 
-    @app.post("/api/orders/import-preview")
+    @app.post("/api/purchase-order-lines/import-preview")
     async def post_orders_import_preview(
         file: UploadFile = File(...),
         supplier_id: int | None = Form(default=None),
@@ -1064,7 +1065,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         )
         return ok(result)
 
-    @app.post("/api/orders/import")
+    @app.post("/api/purchase-order-lines/import")
     async def post_orders_import(
         file: UploadFile = File(...),
         supplier_id: int | None = Form(default=None),
@@ -1093,7 +1094,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         conn.commit()
         return ok(_public_order_import_result(result))
 
-    @app.get("/api/orders/import-jobs")
+    @app.get("/api/purchase-order-lines/import-jobs")
     def get_order_import_jobs(
         page: int = 1,
         per_page: int = 50,
@@ -1106,54 +1107,54 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         )
         return ok(data, pagination)
 
-    @app.get("/api/orders/import-jobs/{import_job_id}")
+    @app.get("/api/purchase-order-lines/import-jobs/{import_job_id}")
     def get_order_import_job(import_job_id: int, conn= db):
         return ok(service.get_order_import_job(conn, import_job_id))
 
-    @app.post("/api/orders/import-jobs/{import_job_id}/undo")
+    @app.post("/api/purchase-order-lines/import-jobs/{import_job_id}/undo")
     def post_undo_order_import_job(import_job_id: int, conn= db):
         result = service.undo_orders_import_job(conn, import_job_id)
         conn.commit()
         return ok(result)
 
-    @app.post("/api/orders/import-jobs/{import_job_id}/redo")
+    @app.post("/api/purchase-order-lines/import-jobs/{import_job_id}/redo")
     def post_redo_order_import_job(import_job_id: int, conn= db):
         result = service.redo_orders_import_job(conn, import_job_id)
         conn.commit()
         return ok(_public_order_import_result(result))
 
-    @app.get("/api/orders/{order_id}")
+    @app.get("/api/purchase-order-lines/{order_id}")
     def get_order(order_id: int, conn= db):
         return ok(service.get_order(conn, order_id))
 
-    @app.put("/api/orders/{order_id}")
+    @app.put("/api/purchase-order-lines/{order_id}")
     def put_order(order_id: int, body: OrderUpdateRequest, conn= db):
         result = service.update_order(conn, order_id, body.model_dump(exclude_unset=True))
         conn.commit()
         return ok(result)
 
-    @app.delete("/api/orders/{order_id}")
+    @app.delete("/api/purchase-order-lines/{order_id}")
     def delete_order(order_id: int, conn= db):
         result = service.delete_order(conn, order_id)
         conn.commit()
         return ok(result)
 
-    @app.post("/api/orders/merge")
+    @app.post("/api/purchase-order-lines/merge")
     def post_merge_orders(body: OrderMergeRequest, conn= db):
         result = service.merge_open_orders(
             conn,
-            source_order_id=body.source_order_id,
-            target_order_id=body.target_order_id,
+            source_purchase_order_line_id=body.source_purchase_order_line_id,
+            target_purchase_order_line_id=body.target_purchase_order_line_id,
             expected_arrival=body.expected_arrival,
         )
         conn.commit()
         return ok(result)
 
-    @app.get("/api/orders/{order_id}/lineage")
+    @app.get("/api/purchase-order-lines/{order_id}/lineage")
     def get_order_lineage(order_id: int, conn= db):
         return ok(service.list_order_lineage_events(conn, order_id=order_id))
 
-    @app.post("/api/orders/import/confirm-procurement-links")
+    @app.post("/api/purchase-order-lines/import/confirm-procurement-links")
     def post_confirm_procurement_links(body: ConfirmProcurementLinksRequest, conn= db):
         result = service.confirm_procurement_links(
             conn,
@@ -1162,7 +1163,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         conn.commit()
         return ok(result)
 
-    @app.post("/api/orders/{order_id}/arrival")
+    @app.post("/api/purchase-order-lines/{order_id}/arrival")
     def post_order_arrival(order_id: int, body: PartialArrivalRequest | None = None, conn= db):
         quantity = None
         if body is not None:
@@ -1171,7 +1172,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         conn.commit()
         return ok(result)
 
-    @app.post("/api/orders/{order_id}/partial-arrival")
+    @app.post("/api/purchase-order-lines/{order_id}/partial-arrival")
     def post_order_partial_arrival(order_id: int, body: PartialArrivalRequest, conn= db):
         result = service.process_order_arrival(conn, order_id=order_id, quantity=body.quantity)
         conn.commit()
@@ -1201,6 +1202,33 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
     @app.delete("/api/quotations/{quotation_id}")
     def delete_quotation(quotation_id: int, conn= db):
         result = service.delete_quotation(conn, quotation_id)
+        conn.commit()
+        return ok(result)
+
+    @app.get("/api/purchase-orders")
+    def get_purchase_orders(
+        supplier: str | None = None,
+        page: int = 1,
+        per_page: int = 50,
+        conn= db,
+    ):
+        data, pagination = service.list_purchase_orders(
+            conn,
+            supplier=supplier,
+            page=page,
+            per_page=per_page,
+        )
+        return ok(data, pagination)
+
+    @app.put("/api/purchase-orders/{purchase_order_id}")
+    def put_purchase_order(purchase_order_id: int, payload: PurchaseOrderUpdateRequest, conn= db):
+        result = service.update_purchase_order(conn, purchase_order_id, payload.model_dump(exclude_unset=True))
+        conn.commit()
+        return ok(result)
+
+    @app.delete("/api/purchase-orders/{purchase_order_id}")
+    def delete_purchase_order(purchase_order_id: int, conn= db):
+        result = service.delete_purchase_order(conn, purchase_order_id)
         conn.commit()
         return ok(result)
 

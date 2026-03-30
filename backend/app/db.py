@@ -34,6 +34,7 @@ _PRIMARY_KEY_BY_TABLE = {
     "items_master": "item_id",
     "inventory_ledger": "ledger_id",
     "quotations": "quotation_id",
+    "purchase_orders": "purchase_order_id",
     "orders": "order_id",
     "order_lineage_events": "event_id",
     "transaction_log": "log_id",

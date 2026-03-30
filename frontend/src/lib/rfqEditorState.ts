@@ -3,7 +3,7 @@ import {
   createRfqLineDraft,
   type RfqLineDraft,
 } from "./editorDrafts";
-import type { Order, RfqBatchDetail, RfqBatchStatus, RfqLine } from "./types";
+import type { PurchaseOrderLine, RfqBatchDetail, RfqBatchStatus, RfqLine } from "./types";
 
 export type RfqBatchBaseline = {
   title: string;
@@ -43,7 +43,7 @@ export function paginateRfqLines(lines: RfqLine[], page: number, pageSize: numbe
   return lines.slice(startIndex, startIndex + normalizedPageSize);
 }
 
-function parseLinkedOrderId(value: string | null | undefined): number | null {
+function parseLinkedPurchaseOrderLineId(value: string | null | undefined): number | null {
   const trimmed = String(value ?? "").trim();
   if (!trimmed) return null;
   const parsed = Number(trimmed);
@@ -51,7 +51,7 @@ function parseLinkedOrderId(value: string | null | undefined): number | null {
 }
 
 export function formatRfqLinkedOrderOptionLabel(
-  order: Pick<Order, "order_id" | "supplier_name" | "order_amount" | "expected_arrival" | "project_name">,
+  order: Pick<PurchaseOrderLine, "order_id" | "supplier_name" | "order_amount" | "expected_arrival" | "project_name">,
 ): string {
   return `#${order.order_id} / ${order.supplier_name} / qty ${order.order_amount} / ETA ${
     order.expected_arrival ?? "-"
@@ -61,16 +61,21 @@ export function formatRfqLinkedOrderOptionLabel(
 function formatFallbackLinkedOrderLabel(
   line: Pick<
     RfqLine,
-    "linked_order_id" | "linked_order_supplier_name" | "linked_order_expected_arrival" | "linked_quotation_number"
+    | "linked_purchase_order_line_id"
+    | "linked_purchase_order_line_supplier_name"
+    | "linked_purchase_order_line_expected_arrival"
+    | "linked_quotation_number"
   >,
   selectedOrderId: number,
 ): string {
-  if (line.linked_order_id !== selectedOrderId) {
+  if (line.linked_purchase_order_line_id !== selectedOrderId) {
     return `#${selectedOrderId} / Selected order`;
   }
   const parts = [`#${selectedOrderId}`];
-  if (line.linked_order_supplier_name) parts.push(line.linked_order_supplier_name);
-  if (line.linked_order_expected_arrival) parts.push(`ETA ${line.linked_order_expected_arrival}`);
+  if (line.linked_purchase_order_line_supplier_name) parts.push(line.linked_purchase_order_line_supplier_name);
+  if (line.linked_purchase_order_line_expected_arrival) {
+    parts.push(`ETA ${line.linked_purchase_order_line_expected_arrival}`);
+  }
   if (line.linked_quotation_number) parts.push(`Quote ${line.linked_quotation_number}`);
   return parts.join(" / ");
 }
@@ -85,17 +90,20 @@ export function buildLinkedOrderSelectOptions({
 }: {
   line: Pick<
     RfqLine,
-    "linked_order_id" | "linked_order_supplier_name" | "linked_order_expected_arrival" | "linked_quotation_number"
+    | "linked_purchase_order_line_id"
+    | "linked_purchase_order_line_supplier_name"
+    | "linked_purchase_order_line_expected_arrival"
+    | "linked_quotation_number"
   >;
   draftLinkedOrderId: string;
-  matchingOrders: Order[];
+  matchingOrders: PurchaseOrderLine[];
   isActive: boolean;
   isLoading: boolean;
   loadError: string | null;
 }): RfqLinkedOrderSelectOption[] {
   const options: RfqLinkedOrderSelectOption[] = [{ value: "", label: "No linked order" }];
   const seen = new Set<string>([""]);
-  const selectedOrderId = parseLinkedOrderId(draftLinkedOrderId);
+  const selectedOrderId = parseLinkedPurchaseOrderLineId(draftLinkedOrderId);
 
   if (selectedOrderId != null) {
     const selectedKey = String(selectedOrderId);

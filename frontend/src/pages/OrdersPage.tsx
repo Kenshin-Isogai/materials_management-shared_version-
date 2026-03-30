@@ -4,7 +4,15 @@ import useSWR from "swr";
 import { CatalogPicker } from "../components/CatalogPicker";
 import { apiDownload, apiGet, apiGetAllPages, apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
 import { formatActionError, resolvePreviewSelection } from "../lib/previewState";
-import type { CatalogSearchResult, Item, MissingItemResolverRow, Order, ProjectRow, Quotation } from "../lib/types";
+import type {
+  CatalogSearchResult,
+  Item,
+  MissingItemResolverRow,
+  Order,
+  ProjectRow,
+  PurchaseOrder,
+  Quotation,
+} from "../lib/types";
 
 function normalizeMissingRows(
   rows: MissingItemResolverRow[] | undefined
@@ -286,6 +294,23 @@ function formatTimestamp(value: string): string {
   return parsed.toLocaleString();
 }
 
+function summaryMetric(label: string, value: string | number, tone: "slate" | "sky" | "emerald" | "amber" = "slate") {
+  const toneClass =
+    tone === "sky"
+      ? "border-sky-200 bg-sky-50 text-sky-900"
+      : tone === "emerald"
+        ? "border-emerald-200 bg-emerald-50 text-emerald-900"
+        : tone === "amber"
+          ? "border-amber-200 bg-amber-50 text-amber-900"
+          : "border-slate-200 bg-slate-50 text-slate-900";
+  return (
+    <div className={`rounded-xl border px-3 py-3 ${toneClass}`}>
+      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{label}</p>
+      <p className="mt-1 text-lg font-bold">{value}</p>
+    </div>
+  );
+}
+
 export function OrdersPage() {
   const navigate = useNavigate();
   const [defaultDate, setDefaultDate] = useState("");
@@ -309,19 +334,22 @@ export function OrdersPage() {
   const [orderFilter, setOrderFilter] = useState("");
   const [quotationNumberSearch, setQuotationNumberSearch] = useState("");
   const [quotationFilter, setQuotationFilter] = useState("");
-  const [isOrderListExpanded, setIsOrderListExpanded] = useState(false);
-  const [isImportedQuotationsExpanded, setIsImportedQuotationsExpanded] = useState(false);
+  const [purchaseOrderSearch, setPurchaseOrderSearch] = useState("");
   const [editingOrderId, setEditingOrderId] = useState<number | null>(null);
   const [editingOrderExpectedArrival, setEditingOrderExpectedArrival] = useState("");
   const [editingOrderSplitQuantity, setEditingOrderSplitQuantity] = useState("");
   const [editingOrderProjectId, setEditingOrderProjectId] = useState("");
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
   const [selectedQuotationId, setSelectedQuotationId] = useState<number | null>(null);
-  const orderDetailsRef = useRef<HTMLElement | null>(null);
-  const quotationDetailsRef = useRef<HTMLElement | null>(null);
+  const [selectedPurchaseOrderId, setSelectedPurchaseOrderId] = useState<number | null>(null);
+  const [editingPurchaseOrderId, setEditingPurchaseOrderId] = useState<number | null>(null);
+  const [editingPurchaseOrderDocumentUrl, setEditingPurchaseOrderDocumentUrl] = useState("");
+  const orderDetailsRef = useRef<HTMLDivElement | null>(null);
+  const quotationDetailsRef = useRef<HTMLDivElement | null>(null);
+  const purchaseOrderDetailsRef = useRef<HTMLDivElement | null>(null);
 
-  const { data: ordersData, error, isLoading, mutate: mutateOrders } = useSWR("/orders", () =>
-    apiGetAllPages<Order>("/orders?per_page=200")
+  const { data: ordersData, error, isLoading, mutate: mutateOrders } = useSWR("/purchase-order-lines", () =>
+    apiGetAllPages<Order>("/purchase-order-lines?per_page=200")
   );
   const {
     data: quotationsData,
@@ -329,6 +357,12 @@ export function OrdersPage() {
     isLoading: quotationsLoading,
     mutate: mutateQuotations,
   } = useSWR("/quotations", () => apiGetAllPages<Quotation>("/quotations?per_page=200"));
+  const {
+    data: purchaseOrdersData,
+    error: purchaseOrdersError,
+    isLoading: purchaseOrdersLoading,
+    mutate: mutatePurchaseOrders,
+  } = useSWR("/purchase-orders", () => apiGetAllPages<PurchaseOrder>("/purchase-orders?per_page=200"));
   const { data: generatedArtifacts = [], mutate: mutateGeneratedArtifacts } = useSWR(
     "/artifacts?artifact_type=missing_items_register",
     apiGet<GeneratedArtifact[]>
@@ -419,6 +453,29 @@ export function OrdersPage() {
     return counts;
   }, [sortedOrders]);
 
+  const sortedPurchaseOrders = useMemo(() => {
+    const rows = [...(purchaseOrdersData ?? [])];
+    rows.sort((a, b) => b.purchase_order_id - a.purchase_order_id);
+    return rows;
+  }, [purchaseOrdersData]);
+
+  const filteredPurchaseOrders = useMemo(() => {
+    const query = purchaseOrderSearch.trim().toLowerCase();
+    if (!query) return sortedPurchaseOrders;
+    return sortedPurchaseOrders.filter((row) =>
+      [
+        row.purchase_order_id,
+        row.supplier_name,
+        row.purchase_order_document_url ?? "",
+        row.first_order_date ?? "",
+        row.last_order_date ?? "",
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(query)
+    );
+  }, [purchaseOrderSearch, sortedPurchaseOrders]);
+
   const itemByNumber = useMemo(() => {
     return new Map((itemsData?.data ?? []).map((item) => [item.item_number, item]));
   }, [itemsData?.data]);
@@ -451,6 +508,22 @@ export function OrdersPage() {
     return sortedOrders.filter((row) => row.quotation_id === selectedQuotationId);
   }, [selectedQuotationId, sortedOrders]);
 
+  const selectedPurchaseOrder = useMemo(
+    () => (purchaseOrdersData ?? []).find((row) => row.purchase_order_id === selectedPurchaseOrderId) ?? null,
+    [purchaseOrdersData, selectedPurchaseOrderId]
+  );
+
+  const purchaseOrderLines = useMemo(() => {
+    if (!selectedPurchaseOrderId) return [];
+    return sortedOrders.filter((row) => row.purchase_order_id === selectedPurchaseOrderId);
+  }, [selectedPurchaseOrderId, sortedOrders]);
+
+  const purchaseOrderQuotations = useMemo(() => {
+    if (!purchaseOrderLines.length) return [];
+    const quotationIds = new Set(purchaseOrderLines.map((row) => row.quotation_id));
+    return (quotationsData ?? []).filter((row) => quotationIds.has(row.quotation_id));
+  }, [purchaseOrderLines, quotationsData]);
+
   function scrollToSection(ref: { current: HTMLElement | null }) {
     requestAnimationFrame(() => {
       ref.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -459,7 +532,6 @@ export function OrdersPage() {
 
   function openOrderDetails(orderId: number) {
     setSelectedOrderId(orderId);
-    setIsOrderListExpanded(false);
     scrollToSection(orderDetailsRef);
   }
 
@@ -467,8 +539,8 @@ export function OrdersPage() {
     const params = new URLSearchParams({
       item_id: String(order.item_id),
       quantity: String(order.order_amount),
-      source_order_id: String(order.order_id),
-      purpose: `Provisional reserve from order #${order.order_id}`,
+      source_purchase_order_line_id: String(order.order_id),
+      purpose: `Provisional reserve from purchase order line #${order.order_id}`,
     });
     if (order.project_id) {
       params.set("project_id", String(order.project_id));
@@ -479,8 +551,13 @@ export function OrdersPage() {
   function openQuotationDetails(quotationId: number) {
     setMessage("");
     setSelectedQuotationId(quotationId);
-    setIsImportedQuotationsExpanded(false);
     scrollToSection(quotationDetailsRef);
+  }
+
+  function openPurchaseOrderDetails(purchaseOrderId: number) {
+    setMessage("");
+    setSelectedPurchaseOrderId(purchaseOrderId);
+    scrollToSection(purchaseOrderDetailsRef);
   }
 
   function toggleSort(nextKey: typeof sortKey) {
@@ -587,7 +664,7 @@ export function OrdersPage() {
         const form = new FormData();
         form.append("file", file);
         if (defaultDate.trim()) form.append("default_order_date", defaultDate.trim());
-        previews.push(await apiSendForm<OrderImportPreview>("/orders/import-preview", form));
+        previews.push(await apiSendForm<OrderImportPreview>("/purchase-order-lines/import-preview", form));
       }
       const result = mergeOrderImportPreviews(previews);
       applyImportPreview(result);
@@ -675,7 +752,7 @@ export function OrdersPage() {
           form.append("alias_saves", JSON.stringify(aliasSaves));
         }
 
-        const result = await apiSendForm<ImportResult>("/orders/import", form);
+        const result = await apiSendForm<ImportResult>("/purchase-order-lines/import", form);
         if (result.status === "missing_items") {
           const unresolved = normalizeMissingRows(result.rows);
           setMissingRows(unresolved);
@@ -719,7 +796,7 @@ export function OrdersPage() {
   async function markArrived(orderId: number) {
     setLoading(true);
     try {
-      await apiSend(`/orders/${orderId}/arrival`, { method: "POST", body: JSON.stringify({}) });
+      await apiSend(`/purchase-order-lines/${orderId}/arrival`, { method: "POST", body: JSON.stringify({}) });
       await Promise.all([mutateOrders(), mutateQuotations()]);
     } finally {
       setLoading(false);
@@ -729,7 +806,7 @@ export function OrdersPage() {
   async function deleteOrder(orderId: number) {
     setLoading(true);
     try {
-      await apiSend(`/orders/${orderId}`, { method: "DELETE" });
+      await apiSend(`/purchase-order-lines/${orderId}`, { method: "DELETE" });
       setMessage(`Deleted order #${orderId}.`);
       await Promise.all([mutateOrders(), mutateQuotations()]);
     } catch (error) {
@@ -776,7 +853,7 @@ export function OrdersPage() {
       const shouldClearProjectOnSplit =
         hasSplit && currentOrder?.project_id != null && projectId == null;
       if (hasSplit) {
-        const splitResult = await apiSend<OrderSplitUpdateResult>(`/orders/${orderId}`, {
+        const splitResult = await apiSend<OrderSplitUpdateResult>(`/purchase-order-lines/${orderId}`, {
           method: "PUT",
           body: JSON.stringify({
             expected_arrival: expectedArrival,
@@ -785,7 +862,7 @@ export function OrdersPage() {
           }),
         });
         if (Number.isFinite(projectId)) {
-          await apiSend(`/orders/${splitResult.created_order.order_id}`, {
+          await apiSend(`/purchase-order-lines/${splitResult.created_order.order_id}`, {
             method: "PUT",
             body: JSON.stringify({
               project_id: projectId,
@@ -793,7 +870,7 @@ export function OrdersPage() {
           });
         }
       } else {
-        await apiSend(`/orders/${orderId}`, {
+        await apiSend(`/purchase-order-lines/${orderId}`, {
           method: "PUT",
           body: JSON.stringify({
             expected_arrival: expectedArrival,
@@ -807,7 +884,7 @@ export function OrdersPage() {
           : `Updated order #${orderId}.`
       );
       cancelEditOrder();
-      await Promise.all([mutateOrders(), mutateQuotations()]);
+      await Promise.all([mutateOrders(), mutateQuotations(), mutatePurchaseOrders()]);
     } catch (error) {
       setMessage(formatOrderUpdateError(error));
     } finally {
@@ -833,7 +910,7 @@ export function OrdersPage() {
       });
       setMessage(`Updated quotation #${quotationId}.`);
       setEditingQuotationId(null);
-      await Promise.all([mutateOrders(), mutateQuotations()]);
+      await Promise.all([mutateOrders(), mutateQuotations(), mutatePurchaseOrders()]);
     } catch (error) {
       setMessage(`Quotation update failed: ${String(error ?? "")}`);
     } finally {
@@ -847,9 +924,48 @@ export function OrdersPage() {
       await apiSend(`/quotations/${quotationId}`, { method: "DELETE" });
       setMessage(`Deleted quotation #${quotationId} and related orders.`);
       if (editingQuotationId === quotationId) setEditingQuotationId(null);
-      await Promise.all([mutateOrders(), mutateQuotations()]);
+      await Promise.all([mutateOrders(), mutateQuotations(), mutatePurchaseOrders()]);
     } catch (error) {
       setMessage(`Quotation delete failed: ${String(error ?? "")}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function beginEditPurchaseOrder(row: PurchaseOrder) {
+    setEditingPurchaseOrderId(row.purchase_order_id);
+    setEditingPurchaseOrderDocumentUrl(row.purchase_order_document_url ?? "");
+  }
+
+  async function savePurchaseOrderEdit(purchaseOrderId: number) {
+    setLoading(true);
+    try {
+      await apiSend(`/purchase-orders/${purchaseOrderId}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          purchase_order_document_url: editingPurchaseOrderDocumentUrl.trim() || null,
+        }),
+      });
+      setMessage(`Updated purchase order #${purchaseOrderId}.`);
+      setEditingPurchaseOrderId(null);
+      await Promise.all([mutateOrders(), mutateQuotations(), mutatePurchaseOrders()]);
+    } catch (error) {
+      setMessage(`Purchase order update failed: ${String(error ?? "")}`);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function deletePurchaseOrder(purchaseOrderId: number) {
+    setLoading(true);
+    try {
+      await apiSend(`/purchase-orders/${purchaseOrderId}`, { method: "DELETE" });
+      setMessage(`Deleted purchase order #${purchaseOrderId}.`);
+      if (editingPurchaseOrderId === purchaseOrderId) setEditingPurchaseOrderId(null);
+      if (selectedPurchaseOrderId === purchaseOrderId) setSelectedPurchaseOrderId(null);
+      await Promise.all([mutateOrders(), mutateQuotations(), mutatePurchaseOrders()]);
+    } catch (error) {
+      setMessage(`Purchase order delete failed: ${String(error ?? "")}`);
     } finally {
       setLoading(false);
     }
@@ -859,12 +975,12 @@ export function OrdersPage() {
       <section>
         <h1 className="font-display text-3xl font-bold">Orders</h1>
         <p className="mt-1 text-sm text-slate-600">
-          CSV order import, missing-item workflow, and arrival processing.
+          Purchase-order-line CSV import, missing-item workflow, and arrival processing.
         </p>
       </section>
 
       <section className="panel p-4">
-        <h2 className="mb-3 font-display text-lg font-semibold">Import Orders CSV</h2>
+        <h2 className="mb-3 font-display text-lg font-semibold">Import Purchase Order Lines CSV</h2>
         <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
           <p className="font-semibold text-slate-900">CSV Format</p>
           <p className="mt-1">
@@ -888,14 +1004,14 @@ export function OrdersPage() {
             <button
               className="button-subtle"
               type="button"
-              onClick={() => downloadImportCsv("/orders/import-template", "orders_import_template.csv")}
+              onClick={() => downloadImportCsv("/purchase-order-lines/import-template", "purchase_order_lines_import_template.csv")}
             >
               Download Template CSV
             </button>
             <button
               className="button-subtle"
               type="button"
-              onClick={() => downloadImportCsv("/orders/import-reference", "orders_import_reference.csv")}
+              onClick={() => downloadImportCsv("/purchase-order-lines/import-reference", "purchase_order_lines_import_reference.csv")}
             >
               Download Reference CSV
             </button>
@@ -1232,448 +1348,364 @@ export function OrdersPage() {
       </section>
 
       <section className="panel p-4">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="font-display text-lg font-semibold">Order List</h2>
-          <button
-            type="button"
-            className="button-subtle"
-            onClick={() => setIsOrderListExpanded((prev) => !prev)}
-            aria-expanded={isOrderListExpanded}
-          >
-            {isOrderListExpanded ? "Collapse" : "Expand"}
-          </button>
+        <div className="mb-3">
+          <h2 className="font-display text-lg font-semibold">Purchase Order Lines</h2>
+          <p className="mt-1 text-sm text-slate-500">Line-level ETA, arrival, split, and project assignment.</p>
         </div>
-        {isOrderListExpanded && (
-          <>
-            <div className="mb-3 grid gap-2 md:grid-cols-2">
-              <input
-                className="input"
-                value={orderPrimarySearch}
-                onChange={(event) => setOrderPrimarySearch(event.target.value)}
-                placeholder="Search by order #, item, or quotation number"
-              />
-              <input
-                className="input"
-                value={orderFilter}
-                onChange={(event) => setOrderFilter(event.target.value)}
-                placeholder="Filter by supplier, project, expected date, or status"
-              />
-            </div>
-            {isLoading && <p className="text-sm text-slate-500">Loading...</p>}
-            {error && <p className="text-sm text-red-600">{String(error)}</p>}
-            {ordersData && (
-              <>
-                <p className="mb-2 text-xs text-slate-500">Showing {filteredSortedOrders.length} / {ordersData.length} orders</p>
-                <div className="overflow-x-auto">
-                  <table className="min-w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-slate-200 text-left text-slate-500">
-                        <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("order_id")}>Order {sortIndicator("order_id")}</button></th>
-                        <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("supplier_name")}>Supplier {sortIndicator("supplier_name")}</button></th>
-                        <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("project_name")}>Project {sortIndicator("project_name")}</button></th>
-                        <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("canonical_item_number")}>Item {sortIndicator("canonical_item_number")}</button></th>
-                        <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("order_amount")}>Qty {sortIndicator("order_amount")}</button></th>
-                        <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("expected_arrival")}>Expected {sortIndicator("expected_arrival")}</button></th>
-                        <th className="px-2 py-2"><button type="button" onClick={() => toggleSort("status")}>Status {sortIndicator("status")}</button></th>
-                        <th className="px-2 py-2">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredSortedOrders.map((row) => (
-                        <tr key={row.order_id} className="border-b border-slate-100">
-                          <td className="px-2 py-2">#{row.order_id}</td>
-                          <td className="px-2 py-2">{row.supplier_name}</td>
-                          <td className="px-2 py-2">{row.project_name ?? "-"}</td>
-                          <td className="px-2 py-2 font-semibold">{row.canonical_item_number}</td>
-                          <td className="px-2 py-2">{row.order_amount}</td>
-                          <td className="px-2 py-2">
+        <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+          {summaryMetric("Total lines", ordersData?.length ?? 0, "amber")}
+          {summaryMetric("Filtered", filteredSortedOrders.length, "slate")}
+          {summaryMetric("Selected item family", sameItemOrders.length, "slate")}
+          {summaryMetric("Selected status", selectedOrder?.status ?? "-", "sky")}
+        </div>
+        <div className="mt-3 grid gap-2 md:grid-cols-2">
+          <input
+            className="input"
+            value={orderPrimarySearch}
+            onChange={(event) => setOrderPrimarySearch(event.target.value)}
+            placeholder="Search by order #, item, or quotation number"
+          />
+          <input
+            className="input"
+            value={orderFilter}
+            onChange={(event) => setOrderFilter(event.target.value)}
+            placeholder="Filter by supplier, project, expected date, or status"
+          />
+        </div>
+        {isLoading && <p className="mt-3 text-sm text-slate-500">Loading...</p>}
+        {error && <p className="mt-3 text-sm text-red-600">{String(error)}</p>}
+        {ordersData && (
+          <div className="mt-3 grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+            <div className="max-h-[42rem] overflow-y-auto pr-1">
+              <p className="mb-2 text-xs text-slate-500">Showing {filteredSortedOrders.length} / {ordersData.length} orders</p>
+              <div className="space-y-2">
+                {filteredSortedOrders.map((row) => (
+                  <div key={row.order_id} className={`rounded-2xl border px-4 py-3 ${row.order_id === selectedOrderId ? "border-amber-400 bg-amber-50" : "border-slate-200 bg-white"}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="font-semibold">Line #{row.order_id} · {row.canonical_item_number}</p>
+                        <p className="text-sm text-slate-600">{row.supplier_name} · PO #{row.purchase_order_id} · Quote {row.quotation_number}</p>
+                        <p className="text-xs text-slate-500">
+                          Qty {row.order_amount} · ETA {row.expected_arrival ?? "-"} · {row.status}
+                          {row.project_name ? ` · ${row.project_name}` : ""}
+                        </p>
+                      </div>
+                      <button className="button-subtle" onClick={() => openOrderDetails(row.order_id)} disabled={loading}>Line Details</button>
+                    </div>
+                    <div className="mt-3 grid gap-2 md:grid-cols-2">
+                      <div>
+                        {editingOrderId === row.order_id ? (
+                          <div className="space-y-2">
+                            <input className="input" type="date" value={editingOrderExpectedArrival} onChange={(event) => setEditingOrderExpectedArrival(event.target.value)} />
+                            <input className="input" type="number" min={1} max={row.order_amount - 1} placeholder={`Split qty (1-${row.order_amount - 1})`} value={editingOrderSplitQuantity} onChange={(event) => setEditingOrderSplitQuantity(event.target.value)} />
+                            <select className="input" value={editingOrderProjectId} onChange={(event) => setEditingOrderProjectId(event.target.value)}>
+                              <option value="">No project assignment</option>
+                              {(projectsData ?? []).map((project) => (
+                                <option key={project.project_id} value={project.project_id}>
+                                  #{project.project_id} {project.name} ({project.status})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        ) : null}
+                      </div>
+                      <div className="flex flex-wrap items-start justify-end gap-2">
+                        {row.status === "Ordered" ? (
+                          <>
+                            <button className="button-subtle" onClick={() => markArrived(row.order_id)} disabled={loading}>Mark Arrived</button>
                             {editingOrderId === row.order_id ? (
-                              <div className="space-y-2">
-                                <input
-                                  className="input"
-                                  type="date"
-                                  value={editingOrderExpectedArrival}
-                                  onChange={(event) => setEditingOrderExpectedArrival(event.target.value)}
-                                />
-                                <input
-                                  className="input"
-                                  type="number"
-                                  min={1}
-                                  max={row.order_amount - 1}
-                                  placeholder={`Split qty (1-${row.order_amount - 1})`}
-                                  value={editingOrderSplitQuantity}
-                                  onChange={(event) => setEditingOrderSplitQuantity(event.target.value)}
-                                />
-                                <select
-                                  className="input"
-                                  value={editingOrderProjectId}
-                                  onChange={(event) => setEditingOrderProjectId(event.target.value)}
-                                >
-                                  <option value="">No project assignment</option>
-                                  {(projectsData ?? []).map((project) => (
-                                    <option key={project.project_id} value={project.project_id}>
-                                      #{project.project_id} {project.name} ({project.status})
-                                    </option>
-                                  ))}
-                                </select>
-                              </div>
+                              <>
+                                <button className="button-subtle" onClick={() => saveOrderEdit(row.order_id)} disabled={loading}>Save Order</button>
+                                <button className="button-subtle" onClick={cancelEditOrder} disabled={loading}>Cancel</button>
+                              </>
                             ) : (
-                              row.expected_arrival ?? "-"
+                              <button className="button-subtle" onClick={() => beginEditOrder(row)} disabled={loading}>Edit Order</button>
                             )}
-                          </td>
-                          <td className="px-2 py-2">{row.status}</td>
-                          <td className="px-2 py-2">
-                            <div className="flex gap-2">
-                              {row.status === "Ordered" ? (
-                                <>
-                                  <button
-                                    className="button-subtle"
-                                    onClick={() => markArrived(row.order_id)}
-                                    disabled={loading}
-                                  >
-                                    Mark Arrived
-                                  </button>
-                                  {editingOrderId === row.order_id ? (
-                                    <>
-                                      <button
-                                        className="button-subtle"
-                                        onClick={() => saveOrderEdit(row.order_id)}
-                                        disabled={loading}
-                                      >
-                                        Save Order
-                                      </button>
-                                      <button className="button-subtle" onClick={cancelEditOrder} disabled={loading}>
-                                        Cancel
-                                      </button>
-                                    </>
-                                  ) : (
-                                    <button
-                                      className="button-subtle"
-                                      onClick={() => beginEditOrder(row)}
-                                      disabled={loading}
-                                    >
-                                      Edit Order
-                                    </button>
-                                  )}
-                                </>
-                              ) : (
-                                <span className="text-slate-400">-</span>
-                              )}
-                              <button
-                                className="button-subtle"
-                                onClick={() => openOrderDetails(row.order_id)}
-                                disabled={loading}
-                              >
-                                Order Details
-                              </button>
-                              <button
-                                className="button-subtle"
-                                onClick={() => deleteOrder(row.order_id)}
-                                disabled={loading || row.status === "Arrived"}
-                                title={row.status === "Arrived" ? "Arrived orders cannot be deleted" : "Delete this order"}
-                              >
-                                Delete
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </>
-            )}
-          </>
-        )}
-      </section>
-
-      <section className="panel p-4" ref={orderDetailsRef}>
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="font-display text-lg font-semibold">Order Details</h2>
-          {selectedOrder && (
-            <button type="button" className="button-subtle" onClick={() => setSelectedOrderId(null)}>
-              Clear
-            </button>
-          )}
-        </div>
-        {!selectedOrder && (
-          <p className="text-sm text-slate-500">
-            Select <strong>Order Details</strong> from any order row to review the selected order, item metadata, and
-            same-item purchasing history. Use <strong>Edit Order</strong> to change ETA, split an open order, or set a
-            manual project assignment.
-          </p>
-        )}
-        {selectedOrder && (
-          <div className="space-y-3 text-sm">
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p>
-                <strong>Order:</strong> #{selectedOrder.order_id}
-              </p>
-              <p>
-                <strong>Item:</strong> {selectedOrder.canonical_item_number}
-              </p>
-              <p>
-                <strong>Supplier:</strong> {selectedOrder.supplier_name} / <strong>Quotation:</strong>{" "}
-                {selectedOrder.quotation_number}
-              </p>
-              <p>
-                <strong>Quotation document:</strong>{" "}
-                {renderDocumentLink(selectedOrder.quotation_document_url)}
-              </p>
-              <p>
-                <strong>Purchase-order document:</strong>{" "}
-                {renderDocumentLink(selectedOrder.purchase_order_document_url)}
-              </p>
-              <p>
-                <strong>Expected arrival:</strong> {selectedOrder.expected_arrival ?? "-"}
-              </p>
-              <p>
-                <strong>Project:</strong> {selectedOrder.project_name ?? "-"} / <strong>Status:</strong>{" "}
-                {selectedOrder.status}
-              </p>
-              <p>
-                <strong>Category:</strong> {selectedOrderItem?.category ?? "-"} / <strong>Description:</strong>{" "}
-                {selectedOrderItem?.description ?? "-"}
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                className="button-subtle"
-                onClick={() => openReservationPrefill(selectedOrder)}
-              >
-                Create Provisional Reservation…
-              </button>
-              <p className="text-xs text-slate-500">
-                Creates a stock-backed reservation draft on the Reservations page. Order dedication remains managed from
-                order/procurement linkage rules.
-              </p>
-            </div>
-
-            <div className="space-y-2">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Same-item orders</p>
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-200 text-left text-slate-500">
-                      <th className="px-2 py-2">Order</th>
-                      <th className="px-2 py-2">Supplier</th>
-                      <th className="px-2 py-2">Quotation</th>
-                      <th className="px-2 py-2">Qty</th>
-                      <th className="px-2 py-2">Expected</th>
-                      <th className="px-2 py-2">Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {sameItemOrders.map((row) => (
-                      <tr key={`related-${row.order_id}`} className="border-b border-slate-100">
-                        <td className="px-2 py-2">#{row.order_id}</td>
-                        <td className="px-2 py-2">{row.supplier_name}</td>
-                        <td className="px-2 py-2">{row.quotation_number}</td>
-                        <td className="px-2 py-2">{row.order_amount}</td>
-                        <td className="px-2 py-2">{row.expected_arrival ?? "-"}</td>
-                        <td className="px-2 py-2">{row.status}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+                          </>
+                        ) : (
+                          <span className="text-slate-400">-</span>
+                        )}
+                        <button className="button-subtle" onClick={() => deleteOrder(row.order_id)} disabled={loading || row.status === "Arrived"} title={row.status === "Arrived" ? "Arrived orders cannot be deleted" : "Delete this order"}>
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
 
-            <div className="space-y-1">
-              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Same-item quotations</p>
-              {sameItemQuotations.length ? (
-                sameItemQuotations.map((row) => (
-                  <p key={`q-${row.quotation_id}`} className="text-sm text-slate-700">
-                    #{row.quotation_id} {row.quotation_number} ({row.supplier_name}) / issue: {row.issue_date ?? "-"}
-                    {row.quotation_document_url ? " / linked document" : ""}
-                  </p>
-                ))
+            <div className="border-t border-slate-200 pt-4 xl:border-l xl:border-t-0 xl:pl-4 xl:pt-0" ref={orderDetailsRef}>
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <h3 className="font-display text-base font-semibold">Purchase Order Line Details</h3>
+                {selectedOrder && (
+                  <button type="button" className="button-subtle" onClick={() => setSelectedOrderId(null)}>
+                    Clear
+                  </button>
+                )}
+              </div>
+              {!selectedOrder ? (
+                <p className="text-sm text-slate-500">Select a line to inspect item metadata and linked quotation / purchase-order headers.</p>
               ) : (
-                <p className="text-sm text-slate-500">No related quotation metadata loaded.</p>
+                <div className="space-y-3 text-sm">
+                  <div className="grid gap-3 md:grid-cols-2">
+                    {summaryMetric("Line ID", `#${selectedOrder.order_id}`, "amber")}
+                    {summaryMetric("Qty", selectedOrder.order_amount, "slate")}
+                    {summaryMetric("Status", selectedOrder.status, "sky")}
+                    {summaryMetric("Same-item rows", sameItemOrders.length, "slate")}
+                  </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="grid gap-3 md:grid-cols-2">
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Item</p>
+                        <p className="mt-1 font-medium text-slate-900">{selectedOrder.canonical_item_number}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Supplier</p>
+                        <p className="mt-1 font-medium text-slate-900">{selectedOrder.supplier_name}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Quotation</p>
+                        <p className="mt-1 font-medium text-slate-900">{selectedOrder.quotation_number}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Purchase Order</p>
+                        <p className="mt-1 font-medium text-slate-900">#{selectedOrder.purchase_order_id}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Expected Arrival</p>
+                        <p className="mt-1 font-medium text-slate-900">{selectedOrder.expected_arrival ?? "-"}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Project</p>
+                        <p className="mt-1 font-medium text-slate-900">{selectedOrder.project_name ?? "-"}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Quotation Document</p>
+                        <p className="mt-1">{renderDocumentLink(selectedOrder.quotation_document_url)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Purchase-order Document</p>
+                        <p className="mt-1">{renderDocumentLink(selectedOrder.purchase_order_document_url)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Category</p>
+                        <p className="mt-1 font-medium text-slate-900">{selectedOrderItem?.category ?? "-"}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Description</p>
+                        <p className="mt-1 font-medium text-slate-900">{selectedOrderItem?.description ?? "-"}</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button type="button" className="button-subtle" onClick={() => openReservationPrefill(selectedOrder)}>
+                      Create Provisional Reservation…
+                    </button>
+                    <p className="text-xs text-slate-500">
+                      Creates a stock-backed reservation draft on the Reservations page. Order dedication remains managed from
+                      order/procurement linkage rules.
+                    </p>
+                  </div>
+                </div>
               )}
             </div>
           </div>
         )}
       </section>
 
-      <section className="panel p-4">
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="font-display text-lg font-semibold">Imported Quotations</h2>
-          <button
-            type="button"
-            className="button-subtle"
-            onClick={() => setIsImportedQuotationsExpanded((prev) => !prev)}
-            aria-expanded={isImportedQuotationsExpanded}
-          >
-            {isImportedQuotationsExpanded ? "Collapse" : "Expand"}
-          </button>
-        </div>
-        {isImportedQuotationsExpanded && (
-          <>
-            <div className="mb-3 grid gap-2 md:grid-cols-2">
-              <input
-                className="input"
-                value={quotationNumberSearch}
-                onChange={(event) => setQuotationNumberSearch(event.target.value)}
-                placeholder="Search by quotation number"
-              />
-              <input
-                className="input"
-                value={quotationFilter}
-                onChange={(event) => setQuotationFilter(event.target.value)}
-                placeholder="Filter by supplier, issue date, or PDF link"
-              />
-            </div>
+      <section className="grid gap-4 xl:grid-cols-2 xl:items-start">
+        <div className="panel flex min-h-[46rem] flex-col p-4">
+          <div className="mb-3">
+            <h2 className="font-display text-lg font-semibold">Quotations</h2>
+            <p className="mt-1 text-sm text-slate-500">Quotation headers and the purchase-order lines created from them.</p>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2">
+            {summaryMetric("Total quotations", quotationsData?.length ?? 0, "sky")}
+            {summaryMetric("Selected linked lines", quotationOrders.length, "slate")}
+          </div>
+          <div className="mt-3 grid gap-2">
+            <input className="input" value={quotationNumberSearch} onChange={(event) => setQuotationNumberSearch(event.target.value)} placeholder="Search by quotation number" />
+            <input className="input" value={quotationFilter} onChange={(event) => setQuotationFilter(event.target.value)} placeholder="Filter by supplier, issue date, or document URL" />
+          </div>
+          <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
             {quotationsLoading && <p className="text-sm text-slate-500">Loading...</p>}
             {quotationsError && <p className="text-sm text-red-600">{String(quotationsError)}</p>}
             {quotationsData && (
               <>
                 <p className="mb-2 text-xs text-slate-500">Showing {filteredSortedQuotations.length} / {quotationsData.length} quotations</p>
-                <div className="overflow-x-auto">
-                  <table className="min-w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-slate-200 text-left text-slate-500">
-                        <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("quotation_id")}>ID {quotationSortIndicator("quotation_id")}</button></th>
-                        <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("supplier_name")}>Supplier {quotationSortIndicator("supplier_name")}</button></th>
-                        <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("quotation_number")}>Quotation # {quotationSortIndicator("quotation_number")}</button></th>
-                        <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("issue_date")}>Issue Date {quotationSortIndicator("issue_date")}</button></th>
-                        <th className="px-2 py-2"><button type="button" onClick={() => toggleQuotationSort("quotation_document_url")}>Document URL {quotationSortIndicator("quotation_document_url")}</button></th>
-                        <th className="px-2 py-2">Orders</th>
-                        <th className="px-2 py-2">Action</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredSortedQuotations.map((row) => (
-                        <tr key={row.quotation_id} className="border-b border-slate-100">
-                          <td className="px-2 py-2">#{row.quotation_id}</td>
-                          <td className="px-2 py-2">{row.supplier_name}</td>
-                          <td className="px-2 py-2 font-semibold">{row.quotation_number}</td>
-                          <td className="px-2 py-2">
-                            {editingQuotationId === row.quotation_id ? (
-                              <input
-                                className="input"
-                                value={editingQuotationIssueDate}
-                                onChange={(event) => setEditingQuotationIssueDate(event.target.value)}
-                                placeholder="YYYY-MM-DD"
-                              />
-                            ) : (
-                              row.issue_date ?? "-"
-                            )}
-                          </td>
-                          <td className="px-2 py-2 text-slate-600">
-                            {editingQuotationId === row.quotation_id ? (
-                              <input
-                                className="input"
-                                value={editingQuotationDocumentUrl}
-                                onChange={(event) => setEditingQuotationDocumentUrl(event.target.value)}
-                                placeholder="https://..."
-                              />
-                            ) : (
-                              renderDocumentLink(row.quotation_document_url)
-                            )}
-                          </td>
-                          <td className="px-2 py-2">{orderCountByQuotationId.get(row.quotation_id) ?? 0}</td>
-                          <td className="px-2 py-2">
-                            <div className="flex gap-2">
-                              <button className="button-subtle" onClick={() => openQuotationDetails(row.quotation_id)} disabled={loading}>View Orders</button>
-                              {editingQuotationId === row.quotation_id ? (
-                                <>
-                                  <button className="button-subtle" onClick={() => saveQuotationEdit(row.quotation_id)} disabled={loading}>Save</button>
-                                  <button className="button-subtle" onClick={() => setEditingQuotationId(null)} disabled={loading}>Cancel</button>
-                                </>
-                              ) : (
-                                <button className="button-subtle" onClick={() => beginEditQuotation(row)} disabled={loading}>Edit</button>
-                              )}
-                              <button className="button-subtle" onClick={() => deleteQuotation(row.quotation_id)} disabled={loading}>Delete</button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                <div className="space-y-2">
+                  {filteredSortedQuotations.map((row) => (
+                    <button key={row.quotation_id} type="button" onClick={() => openQuotationDetails(row.quotation_id)} className={`w-full rounded-2xl border px-4 py-3 text-left transition ${row.quotation_id === selectedQuotationId ? "border-sky-400 bg-sky-50" : "border-slate-200 bg-white hover:border-slate-300"}`}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-semibold">#{row.quotation_id} {row.quotation_number}</p>
+                          <p className="text-sm text-slate-600">{row.supplier_name}</p>
+                          <p className="text-xs text-slate-500">Issue {row.issue_date ?? "-"}</p>
+                        </div>
+                        <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">{orderCountByQuotationId.get(row.quotation_id) ?? 0} lines</span>
+                      </div>
+                    </button>
+                  ))}
                 </div>
               </>
             )}
-          </>
-        )}
-      </section>
-
-      <section className="panel p-4" ref={quotationDetailsRef}>
-        <div className="mb-3 flex items-center justify-between gap-3">
-          <h2 className="font-display text-lg font-semibold">Quotation Details</h2>
-          {selectedQuotation && (
-            <button type="button" className="button-subtle" onClick={() => setSelectedQuotationId(null)}>
-              Clear
-            </button>
-          )}
-        </div>
-        {!selectedQuotation && (
-          <p className="text-sm text-slate-500">
-            Select <strong>View Orders</strong> from any quotation row to review the quotation metadata and every order
-            linked to that quotation.
-          </p>
-        )}
-        {selectedQuotation && (
-          <div className="space-y-3 text-sm">
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-              <p>
-                <strong>Quotation:</strong> #{selectedQuotation.quotation_id} {selectedQuotation.quotation_number}
-              </p>
-              <p>
-                <strong>Supplier:</strong> {selectedQuotation.supplier_name}
-              </p>
-              <p>
-                <strong>Issue date:</strong> {selectedQuotation.issue_date ?? "-"}
-              </p>
-              <p>
-                <strong>Quotation document:</strong> {renderDocumentLink(selectedQuotation.quotation_document_url)}
-              </p>
-              <p>
-                <strong>Linked orders:</strong> {quotationOrders.length}
-              </p>
+          </div>
+          <div className="mt-4 border-t border-slate-200 pt-4" ref={quotationDetailsRef}>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h3 className="font-display text-base font-semibold">Quotation Details</h3>
+              {selectedQuotation && <button type="button" className="button-subtle" onClick={() => setSelectedQuotationId(null)}>Clear</button>}
             </div>
-
-            {quotationOrders.length ? (
-              <div className="overflow-x-auto">
-                <table className="min-w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-200 text-left text-slate-500">
-                      <th className="px-2 py-2">Order</th>
-                      <th className="px-2 py-2">Project</th>
-                      <th className="px-2 py-2">Supplier</th>
-                      <th className="px-2 py-2">Item</th>
-                      <th className="px-2 py-2">Qty</th>
-                      <th className="px-2 py-2">Expected</th>
-                      <th className="px-2 py-2">Status</th>
-                      <th className="px-2 py-2">Action</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {quotationOrders.map((row) => (
-                      <tr key={`quotation-${row.order_id}`} className="border-b border-slate-100">
-                        <td className="px-2 py-2">#{row.order_id}</td>
-                        <td className="px-2 py-2">{row.project_name ?? "-"}</td>
-                        <td className="px-2 py-2">{row.supplier_name}</td>
-                        <td className="px-2 py-2 font-semibold">{row.canonical_item_number}</td>
-                        <td className="px-2 py-2">{row.order_amount}</td>
-                        <td className="px-2 py-2">{row.expected_arrival ?? "-"}</td>
-                        <td className="px-2 py-2">{row.status}</td>
-                        <td className="px-2 py-2">
-                          <button className="button-subtle" type="button" onClick={() => openOrderDetails(row.order_id)}>
-                            Order Details
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+            {!selectedQuotation ? (
+              <p className="text-sm text-slate-500">Select a quotation to inspect its document metadata and linked lines.</p>
             ) : (
-              <p className="text-sm text-slate-500">No linked orders found for this quotation.</p>
+              <div className="space-y-3 text-sm">
+                <div className="grid gap-3 md:grid-cols-2">
+                  {summaryMetric("Quotation ID", `#${selectedQuotation.quotation_id}`, "sky")}
+                  {summaryMetric("Linked lines", quotationOrders.length, "slate")}
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Supplier</p>
+                      <p className="mt-1 font-medium text-slate-900">{selectedQuotation.supplier_name}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Quotation Number</p>
+                      <p className="mt-1 font-medium text-slate-900">{selectedQuotation.quotation_number}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Issue Date</p>
+                      <p className="mt-1 font-medium text-slate-900">{selectedQuotation.issue_date ?? "-"}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Document</p>
+                      <p className="mt-1">{renderDocumentLink(selectedQuotation.quotation_document_url)}</p>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex gap-2">
+                    {editingQuotationId === selectedQuotation.quotation_id ? (
+                      <>
+                        <button className="button-subtle" onClick={() => saveQuotationEdit(selectedQuotation.quotation_id)} disabled={loading}>Save</button>
+                        <button className="button-subtle" onClick={() => setEditingQuotationId(null)} disabled={loading}>Cancel</button>
+                      </>
+                    ) : (
+                      <button className="button-subtle" onClick={() => beginEditQuotation(selectedQuotation)} disabled={loading}>Edit</button>
+                    )}
+                    <button className="button-subtle" onClick={() => deleteQuotation(selectedQuotation.quotation_id)} disabled={loading}>Delete</button>
+                  </div>
+                  {editingQuotationId === selectedQuotation.quotation_id && (
+                    <div className="mt-3 grid gap-2">
+                      <input className="input" value={editingQuotationIssueDate} onChange={(event) => setEditingQuotationIssueDate(event.target.value)} placeholder="YYYY-MM-DD" />
+                      <input className="input" value={editingQuotationDocumentUrl} onChange={(event) => setEditingQuotationDocumentUrl(event.target.value)} placeholder="https://..." />
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
           </div>
-        )}
+        </div>
+
+        <div className="panel flex min-h-[46rem] flex-col p-4">
+          <div className="mb-3">
+            <h2 className="font-display text-lg font-semibold">Purchase Orders</h2>
+            <p className="mt-1 text-sm text-slate-500">Purchase-order headers, separated from the line rows they own.</p>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2">
+            {summaryMetric("Total purchase orders", purchaseOrdersData?.length ?? 0, "emerald")}
+            {summaryMetric("Selected linked lines", purchaseOrderLines.length, "slate")}
+          </div>
+          <div className="mt-3">
+            <input className="input" value={purchaseOrderSearch} onChange={(event) => setPurchaseOrderSearch(event.target.value)} placeholder="Search by supplier, PO id, date, or document URL" />
+          </div>
+          <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
+            {purchaseOrdersLoading && <p className="text-sm text-slate-500">Loading...</p>}
+            {purchaseOrdersError && <p className="text-sm text-red-600">{String(purchaseOrdersError)}</p>}
+            {purchaseOrdersData && (
+              <>
+                <p className="mb-2 text-xs text-slate-500">Showing {filteredPurchaseOrders.length} / {purchaseOrdersData.length} purchase orders</p>
+                <div className="space-y-2">
+                  {filteredPurchaseOrders.map((row) => (
+                    <button key={row.purchase_order_id} type="button" onClick={() => openPurchaseOrderDetails(row.purchase_order_id)} className={`w-full rounded-2xl border px-4 py-3 text-left transition ${row.purchase_order_id === selectedPurchaseOrderId ? "border-emerald-400 bg-emerald-50" : "border-slate-200 bg-white hover:border-slate-300"}`}>
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-semibold">PO #{row.purchase_order_id}</p>
+                          <p className="text-sm text-slate-600">{row.supplier_name}</p>
+                          <p className="text-xs text-slate-500">{row.first_order_date ?? "-"} to {row.last_order_date ?? "-"}</p>
+                        </div>
+                        <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700">{row.line_count} lines</span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+          <div className="mt-4 border-t border-slate-200 pt-4" ref={purchaseOrderDetailsRef}>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <h3 className="font-display text-base font-semibold">Purchase Order Details</h3>
+              {selectedPurchaseOrder && <button type="button" className="button-subtle" onClick={() => setSelectedPurchaseOrderId(null)}>Clear</button>}
+            </div>
+            {!selectedPurchaseOrder ? (
+              <p className="text-sm text-slate-500">Select a purchase order to inspect header metadata and included lines.</p>
+            ) : (
+              <div className="space-y-3 text-sm">
+                <div className="grid gap-3 md:grid-cols-2">
+                  {summaryMetric("PO ID", `#${selectedPurchaseOrder.purchase_order_id}`, "emerald")}
+                  {summaryMetric("Linked quotations", purchaseOrderQuotations.length, "slate")}
+                </div>
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="grid gap-3 md:grid-cols-2">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Supplier</p>
+                      <p className="mt-1 font-medium text-slate-900">{selectedPurchaseOrder.supplier_name}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Document</p>
+                      <p className="mt-1">{renderDocumentLink(selectedPurchaseOrder.purchase_order_document_url)}</p>
+                    </div>
+                  </div>
+                  <div className="mt-3 flex gap-2">
+                    {editingPurchaseOrderId === selectedPurchaseOrder.purchase_order_id ? (
+                      <>
+                        <button className="button-subtle" onClick={() => savePurchaseOrderEdit(selectedPurchaseOrder.purchase_order_id)} disabled={loading}>Save</button>
+                        <button className="button-subtle" onClick={() => setEditingPurchaseOrderId(null)} disabled={loading}>Cancel</button>
+                      </>
+                    ) : (
+                      <button className="button-subtle" onClick={() => beginEditPurchaseOrder(selectedPurchaseOrder)} disabled={loading}>Edit</button>
+                    )}
+                    <button className="button-subtle" onClick={() => deletePurchaseOrder(selectedPurchaseOrder.purchase_order_id)} disabled={loading}>Delete</button>
+                  </div>
+                  {editingPurchaseOrderId === selectedPurchaseOrder.purchase_order_id && (
+                    <div className="mt-3">
+                      <input className="input" value={editingPurchaseOrderDocumentUrl} onChange={(event) => setEditingPurchaseOrderDocumentUrl(event.target.value)} placeholder="https://..." />
+                    </div>
+                  )}
+                </div>
+                {purchaseOrderLines.length ? (
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Included Lines</p>
+                    <div className="space-y-2">
+                      {purchaseOrderLines.map((row) => (
+                        <div key={`po-line-${row.order_id}`} className="rounded-xl border border-slate-200 px-3 py-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div>
+                              <p className="font-semibold">Line #{row.order_id} · {row.canonical_item_number}</p>
+                              <p className="text-sm text-slate-600">Quote {row.quotation_number} · Qty {row.order_amount} · ETA {row.expected_arrival ?? "-"}</p>
+                            </div>
+                            <button className="button-subtle" type="button" onClick={() => openOrderDetails(row.order_id)}>Line Details</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-sm text-slate-500">No purchase-order lines are linked to this header.</p>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
       </section>
     </div>
   );

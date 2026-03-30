@@ -72,8 +72,9 @@ export type Reservation = {
   project_name?: string | null;
 };
 
-export type Order = {
+export type PurchaseOrderLine = {
   order_id: number;
+  purchase_order_id: number;
   item_id: number;
   quotation_id: number;
   project_id: number | null;
@@ -90,6 +91,18 @@ export type Order = {
   quotation_number: string;
   quotation_document_url?: string | null;
   purchase_order_document_url?: string | null;
+};
+
+export type Order = PurchaseOrderLine;
+
+export type PurchaseOrder = {
+  purchase_order_id: number;
+  supplier_id: number;
+  supplier_name: string;
+  purchase_order_document_url?: string | null;
+  line_count: number;
+  first_order_date?: string | null;
+  last_order_date?: string | null;
 };
 
 export type Quotation = {
@@ -404,14 +417,14 @@ export type ProcurementLine = {
   supplier_name: string | null;
   lead_time_days?: number | null;
   expected_arrival: string | null;
-  linked_order_id: number | null;
+  linked_purchase_order_line_id: number | null;
   linked_quotation_id: number | null;
   status: ProcurementLineStatus;
   note: string | null;
-  linked_order_project_id: number | null;
-  linked_order_expected_arrival: string | null;
+  linked_purchase_order_line_project_id: number | null;
+  linked_purchase_order_line_expected_arrival: string | null;
   linked_quotation_number: string | null;
-  linked_order_supplier_name: string | null;
+  linked_purchase_order_line_supplier_name: string | null;
 };
 
 export type ProcurementBatchDetail = ProcurementBatchSummary & {

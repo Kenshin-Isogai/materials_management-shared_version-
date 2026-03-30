@@ -554,6 +554,51 @@ def test_import_orders_resolves_alias_with_dash_variant_item_number(conn):
     assert int(order["ordered_quantity"]) == 2
     assert int(order["order_amount"]) == 20
 
+
+def test_import_orders_reuses_purchase_order_without_document_url(conn):
+    supplier = service.create_supplier(conn, "SupplierNoPoUrlReuse")
+    item = _create_basic_item(conn, item_number="ITEM-NO-PO-URL-REUSE")
+
+    result = service.import_orders_from_rows(
+        conn,
+        supplier_id=int(supplier["supplier_id"]),
+        rows=[
+            {
+                "item_number": item["item_number"],
+                "quantity": "2",
+                "quotation_number": "Q-NO-PO-URL-001",
+                "issue_date": "2026-03-02",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-NO-PO-URL-001.pdf",
+                "purchase_order_document_url": "",
+                "order_date": "2026-03-02",
+                "expected_arrival": "2026-03-12",
+            },
+            {
+                "item_number": item["item_number"],
+                "quantity": "3",
+                "quotation_number": "Q-NO-PO-URL-002",
+                "issue_date": "2026-03-03",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-NO-PO-URL-002.pdf",
+                "purchase_order_document_url": "",
+                "order_date": "2026-03-03",
+                "expected_arrival": "2026-03-13",
+            },
+        ],
+        source_name="reuse_purchase_order_without_url.csv",
+    )
+
+    assert result["status"] == "ok"
+    first_order = service.get_order(conn, int(result["order_ids"][0]))
+    second_order = service.get_order(conn, int(result["order_ids"][1]))
+    assert int(first_order["purchase_order_id"]) == int(second_order["purchase_order_id"])
+
+    purchase_order_count = conn.execute(
+        "SELECT COUNT(*) AS c FROM purchase_orders WHERE supplier_id = ?",
+        (int(supplier["supplier_id"]),),
+    ).fetchone()
+    assert int(purchase_order_count["c"]) == 1
+
+
 def test_update_and_delete_quotation_use_db_as_source_of_truth(conn, tmp_path: Path, monkeypatch):
     item = _create_basic_item(conn, item_number="SYNC-ITEM-001")
     roots = service.build_roots(
@@ -834,7 +879,7 @@ def test_update_order_rejects_manual_project_reassignment_for_ordered_rfq_link(c
         conn,
         line_id,
         {
-            "linked_order_id": order_id,
+            "linked_purchase_order_line_id": order_id,
             "status": "ORDERED",
         },
     )
@@ -918,8 +963,8 @@ def test_merge_open_orders_records_lineage_without_archive_sync(conn, tmp_path: 
     )
     merged = service.merge_open_orders(
         conn,
-        source_order_id=first_order_id,
-        target_order_id=second_order_id,
+        source_purchase_order_line_id=first_order_id,
+        target_purchase_order_line_id=second_order_id,
         expected_arrival="2026-05-30",
     )
     assert merged["merged"] is True
@@ -929,8 +974,8 @@ def test_merge_open_orders_records_lineage_without_archive_sync(conn, tmp_path: 
     lineage = service.list_order_lineage_events(conn, order_id=second_order_id)
     assert any(
         event["event_type"] == "ETA_MERGE"
-        and int(event["source_order_id"]) == first_order_id
-        and int(event["target_order_id"]) == second_order_id
+        and int(event["source_purchase_order_line_id"]) == first_order_id
+        and int(event["target_purchase_order_line_id"]) == second_order_id
         for event in lineage
     )
 
@@ -983,8 +1028,8 @@ def test_merge_open_orders_nonfirst_sibling_keeps_archived_csv_unchanged(conn, t
     )
     merged = service.merge_open_orders(
         conn,
-        source_order_id=second_order_id,
-        target_order_id=third_order_id,
+        source_purchase_order_line_id=second_order_id,
+        target_purchase_order_line_id=third_order_id,
         expected_arrival="2026-07-05",
     )
     assert merged["merged"] is True
@@ -1002,6 +1047,48 @@ def test_merge_open_orders_nonfirst_sibling_keeps_archived_csv_unchanged(conn, t
     assert conn.execute("SELECT COUNT(*) AS c FROM orders WHERE order_id = ?", (second_order_id,)).fetchone()["c"] == 0
     assert conn.execute("SELECT COUNT(*) AS c FROM orders WHERE order_id = ?", (first_order_id,)).fetchone()["c"] == 1
     assert conn.execute("SELECT COUNT(*) AS c FROM orders WHERE order_id = ?", (third_order_id,)).fetchone()["c"] == 1
+
+
+def test_merge_open_orders_rejects_different_purchase_orders(conn):
+    item = _create_basic_item(conn, item_number="SYNC-MERGE-PO-MISMATCH-001")
+    imported = service.import_orders_from_rows(
+        conn,
+        supplier_name="SupplierMergePurchaseOrderMismatch",
+        rows=[
+            {
+                "item_number": item["item_number"],
+                "quantity": "10",
+                "quotation_number": "Q-MERGE-PO-MISMATCH-001",
+                "issue_date": "2026-06-01",
+                "order_date": "2026-06-01",
+                "expected_arrival": "2026-06-10",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-MERGE-PO-MISMATCH-001.pdf",
+                "purchase_order_document_url": "https://example.sharepoint.com/sites/procurement/PO-MERGE-PO-MISMATCH-001.pdf",
+            },
+            {
+                "item_number": item["item_number"],
+                "quantity": "20",
+                "quotation_number": "Q-MERGE-PO-MISMATCH-001",
+                "issue_date": "2026-06-01",
+                "order_date": "2026-06-01",
+                "expected_arrival": "2026-06-20",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-MERGE-PO-MISMATCH-001.pdf",
+                "purchase_order_document_url": "https://example.sharepoint.com/sites/procurement/PO-MERGE-PO-MISMATCH-002.pdf",
+            },
+        ],
+        source_name="merge_purchase_order_mismatch.csv",
+    )
+    first_order_id, second_order_id = [int(v) for v in imported["order_ids"]]
+
+    with pytest.raises(AppError) as exc_info:
+        service.merge_open_orders(
+            conn,
+            source_purchase_order_line_id=first_order_id,
+            target_purchase_order_line_id=second_order_id,
+        )
+
+    assert exc_info.value.code == "ORDER_MERGE_SCOPE_MISMATCH"
+    assert "purchase_order_id" in exc_info.value.message
 
 
 def test_split_order_keeps_archived_csv_unchanged(conn, tmp_path: Path, monkeypatch):
@@ -1745,34 +1832,34 @@ def test_update_rfq_line_only_dedicates_ordered_links_and_clears_replaced_orders
         {
             "expected_arrival": FUTURE_TARGET_DATE,
             "status": "QUOTED",
-            "linked_order_id": first_order_id,
+            "linked_purchase_order_line_id": first_order_id,
         },
     )
     assert quoted["line"]["status"] == "QUOTED"
-    assert quoted["line"]["linked_order_id"] is None
+    assert quoted["line"]["linked_purchase_order_line_id"] is None
     assert service.get_order(conn, first_order_id)["project_id"] is None
 
     ordered = service.update_rfq_line(
         conn,
         line_id,
         {
-            "linked_order_id": first_order_id,
+            "linked_purchase_order_line_id": first_order_id,
             "status": "ORDERED",
         },
     )
     assert ordered["line"]["status"] == "ORDERED"
-    assert int(ordered["line"]["linked_order_id"]) == first_order_id
+    assert int(ordered["line"]["linked_purchase_order_line_id"]) == first_order_id
     assert int(service.get_order(conn, first_order_id)["project_id"]) == project["project_id"]
 
     replaced = service.update_rfq_line(
         conn,
         line_id,
         {
-            "linked_order_id": second_order_id,
+            "linked_purchase_order_line_id": second_order_id,
             "status": "ORDERED",
         },
     )
-    assert int(replaced["line"]["linked_order_id"]) == second_order_id
+    assert int(replaced["line"]["linked_purchase_order_line_id"]) == second_order_id
     assert service.get_order(conn, first_order_id)["project_id"] is None
     assert int(service.get_order(conn, second_order_id)["project_id"]) == project["project_id"]
 
@@ -1780,12 +1867,12 @@ def test_update_rfq_line_only_dedicates_ordered_links_and_clears_replaced_orders
         conn,
         line_id,
         {
-            "linked_order_id": second_order_id,
+            "linked_purchase_order_line_id": second_order_id,
             "status": "QUOTED",
         },
     )
     assert cleared["line"]["status"] == "QUOTED"
-    assert cleared["line"]["linked_order_id"] is None
+    assert cleared["line"]["linked_purchase_order_line_id"] is None
     assert service.get_order(conn, second_order_id)["project_id"] is None
 
 
@@ -1856,7 +1943,7 @@ def test_split_order_leaves_rfq_managed_project_assignment_on_original_order_onl
         conn,
         line_id,
         {
-            "linked_order_id": order_id,
+            "linked_purchase_order_line_id": order_id,
             "status": "ORDERED",
         },
     )
@@ -2132,14 +2219,14 @@ def test_manual_project_id_preserved_when_rfq_link_removed(conn):
     assert int(service.get_order(conn, order_id)["project_id"]) == project["project_id"]
 
     # Link the order to the RFQ (same project — allowed)
-    service.update_rfq_line(conn, line_id, {"linked_order_id": order_id, "status": "ORDERED"})
+    service.update_rfq_line(conn, line_id, {"linked_purchase_order_line_id": order_id, "status": "ORDERED"})
     assert int(service.get_order(conn, order_id)["project_id"]) == project["project_id"]
 
     # Remove the RFQ link — manual project_id must survive
     service.update_rfq_line(
         conn,
         line_id,
-        {"linked_order_id": order_id, "status": "QUOTED", "expected_arrival": FUTURE_TARGET_DATE},
+        {"linked_purchase_order_line_id": order_id, "status": "QUOTED", "expected_arrival": FUTURE_TARGET_DATE},
     )
     assert int(service.get_order(conn, order_id)["project_id"]) == project["project_id"], (
         "Manually-assigned project_id must not be cleared when the RFQ link is removed"

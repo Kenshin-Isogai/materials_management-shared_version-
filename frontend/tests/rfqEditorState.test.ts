@@ -8,7 +8,7 @@ import {
   orderVisibleRfqLines,
   paginateRfqLines,
 } from "../src/lib/rfqEditorState";
-import type { Order, RfqLine } from "../src/lib/types";
+import type { PurchaseOrderLine, RfqLine } from "../src/lib/types";
 
 const baseLines: RfqLine[] = [
   {
@@ -21,13 +21,13 @@ const baseLines: RfqLine[] = [
     supplier_name: "Supplier A",
     lead_time_days: 7,
     expected_arrival: "2026-03-10",
-    linked_order_id: 7,
+    linked_purchase_order_line_id: 7,
     status: "QUOTED",
     note: "existing note",
-    linked_order_project_id: null,
-    linked_order_expected_arrival: "2026-03-12",
+    linked_purchase_order_line_project_id: null,
+    linked_purchase_order_line_expected_arrival: "2026-03-12",
     linked_quotation_number: "Q-7",
-    linked_order_supplier_name: "Supplier A",
+    linked_purchase_order_line_supplier_name: "Supplier A",
   },
   {
     line_id: 102,
@@ -39,17 +39,17 @@ const baseLines: RfqLine[] = [
     supplier_name: null,
     lead_time_days: null,
     expected_arrival: null,
-    linked_order_id: null,
+    linked_purchase_order_line_id: null,
     status: "DRAFT",
     note: null,
-    linked_order_project_id: null,
-    linked_order_expected_arrival: null,
+    linked_purchase_order_line_project_id: null,
+    linked_purchase_order_line_expected_arrival: null,
     linked_quotation_number: null,
-    linked_order_supplier_name: null,
+    linked_purchase_order_line_supplier_name: null,
   },
 ];
 
-const matchingOrders: Order[] = [
+const matchingOrders: PurchaseOrderLine[] = [
   {
     order_id: 7,
     item_id: 200,
@@ -99,10 +99,10 @@ describe("rfqEditorState", () => {
     const refreshedServerDrafts = buildLineDraftMap([
       {
         ...baseLines[0],
-        linked_order_id: null,
-        linked_order_expected_arrival: null,
+        linked_purchase_order_line_id: null,
+        linked_purchase_order_line_expected_arrival: null,
         linked_quotation_number: null,
-        linked_order_supplier_name: null,
+        linked_purchase_order_line_supplier_name: null,
       },
       baseLines[1],
     ]);
@@ -114,8 +114,8 @@ describe("rfqEditorState", () => {
       [101],
     );
 
-    expect(rehydrated.drafts[101]?.linked_order_id).toBe("");
-    expect(rehydrated.baseline[101]?.linked_order_id).toBe("");
+    expect(rehydrated.drafts[101]?.linked_purchase_order_line_id).toBe("");
+    expect(rehydrated.baseline[101]?.linked_purchase_order_line_id).toBe("");
     expect(rehydrated.drafts[102]).toEqual(createRfqLineDraft(baseLines[1]));
   });
 

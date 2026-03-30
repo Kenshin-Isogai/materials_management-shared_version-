@@ -1,3 +1,21 @@
+## 2026-03-30
+
+### Changed
+
+- Fixed purchase-order header integrity gaps in the purchasing refactor.
+  - manual order import now reuses supplier-scoped purchase-order headers when `purchase_order_document_url` is blank instead of creating duplicate header rows
+  - purchase-order-line merge now rejects lines from different purchase orders instead of allowing an invalid cross-header merge
+- Refactored purchasing document modeling to split purchase-order headers from line data.
+  - added `purchase_orders` as an independent header entity and backfilled `orders.purchase_order_id`
+  - removed `orders.purchase_order_document_url` from persisted line storage and now resolve PO document URLs through the header entity
+  - order import now creates or reuses quotation headers and purchase-order headers independently before inserting line rows
+  - quotation deletion now also prunes orphaned purchase-order headers, and purchase-order deletion prunes orphaned quotations when its lines were the last references
+  - added `/api/purchase-orders` management endpoints and `/api/purchase-order-lines/*` aliases for the line-centric API surface
+  - Orders UI now points its import and mutation calls at the new purchase-order-line endpoints and uses purchase-order-line wording in the main views
+  - Orders UI browsing was reorganized around `Quotations` / `Purchase Orders` / `Purchase Order Lines` instead of the older expandable `Imported Quotations` + `Order List` workflow
+  - line browsing now uses denser cards plus a side detail pane to reduce vertical scrolling when each line exposes many fields
+  - quotation and purchase-order headers now have dedicated searchable panes with linked-line counts and header-level edit/delete actions
+
 ## 2026-03-29
 
 ### Changed

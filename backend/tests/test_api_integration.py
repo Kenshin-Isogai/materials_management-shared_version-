@@ -482,7 +482,7 @@ def test_project_confirm_allocation_endpoint_previews_and_executes(client):
     ).json()["data"]
 
     imported = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={
             "file": (
                 "confirm-allocation.csv",
@@ -519,12 +519,12 @@ def test_project_confirm_allocation_endpoint_previews_and_executes(client):
     executed_payload = executed.json()["data"]
     new_order_id = int(executed_payload["orders_split"][0]["new_order_id"])
 
-    original_order = client.get(f"/api/orders/{original_order_id}")
+    original_order = client.get(f"/api/purchase-order-lines/{original_order_id}")
     assert original_order.status_code == 200
     assert original_order.json()["data"]["project_id"] is None
     assert int(original_order.json()["data"]["order_amount"]) == 2
 
-    dedicated_order = client.get(f"/api/orders/{new_order_id}")
+    dedicated_order = client.get(f"/api/purchase-order-lines/{new_order_id}")
     assert dedicated_order.status_code == 200
     assert int(dedicated_order.json()["data"]["project_id"]) == project["project_id"]
     assert int(dedicated_order.json()["data"]["order_amount"]) == 4
@@ -1520,7 +1520,7 @@ def test_order_import_returns_missing_item_details(client, database_url):
         }
     )
     response = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
         data={"supplier_name": "SupplierMissing", "default_order_date": "2026-02-22"},
     )
@@ -1555,7 +1555,7 @@ def test_order_import_returns_missing_item_details(client, database_url):
 
 
 def test_orders_import_template_includes_supplier_column(client):
-    response = client.get("/api/orders/import-template")
+    response = client.get("/api/purchase-order-lines/import-template")
     assert response.status_code == 200
 
     fieldnames, _rows = read_csv_response(response)
@@ -1603,7 +1603,7 @@ def test_order_import_preview_and_import_accept_supplier_from_csv_rows(client):
     payload_bytes = output.getvalue().encode("utf-8")
 
     preview = client.post(
-        "/api/orders/import-preview",
+        "/api/purchase-order-lines/import-preview",
         files={"file": ("orders.csv", payload_bytes, "text/csv")},
     )
     assert preview.status_code == 200
@@ -1612,13 +1612,13 @@ def test_order_import_preview_and_import_accept_supplier_from_csv_rows(client):
     assert preview_data["supplier"]["mode"] in {"single", "per_row"}
 
     imported = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={"file": ("orders.csv", payload_bytes, "text/csv")},
     )
     assert imported.status_code == 200
     imported_data = imported.json()["data"]
     assert imported_data["status"] == "ok"
-    orders = client.get("/api/orders").json()["data"]
+    orders = client.get("/api/purchase-order-lines").json()["data"]
     assert any(row["supplier_name"] == "SupplierRowOnly" for row in orders)
 
 def test_order_import_requires_quotation_document_url(client):
@@ -1656,7 +1656,7 @@ def test_order_import_requires_quotation_document_url(client):
         }
     )
     response = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
         data={"supplier_name": "SupplierManual"},
     )
@@ -1703,7 +1703,7 @@ def test_order_import_rejects_non_url_quotation_document_url(client):
         }
     )
     response = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
         data={"supplier_name": "SupplierManual"},
     )
@@ -1751,7 +1751,7 @@ def test_order_import_rejects_duplicate_quotation_for_same_supplier(client):
     )
 
     first = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
         data={"supplier_name": "SupplierDup"},
     )
@@ -1759,7 +1759,7 @@ def test_order_import_rejects_duplicate_quotation_for_same_supplier(client):
     assert first.json()["data"]["status"] == "ok"
 
     second = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
         data={"supplier_name": "SupplierDup"},
     )
@@ -1817,7 +1817,7 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
         }
     )
     imported = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={"file": ("existing.csv", existing_csv.getvalue().encode("utf-8"), "text/csv")},
         data={"supplier_name": "SupplierPreview"},
     )
@@ -1872,7 +1872,7 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
     )
 
     response = client.post(
-        "/api/orders/import-preview",
+        "/api/purchase-order-lines/import-preview",
         files={"file": ("preview.csv", preview_csv.getvalue().encode("utf-8"), "text/csv")},
         data={"supplier_name": "SupplierPreview"},
     )
@@ -1940,7 +1940,7 @@ def test_orders_import_accepts_preview_overrides_and_alias_saves(client):
     )
 
     response = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={"file": ("apply.csv", upload.getvalue().encode("utf-8"), "text/csv")},
         data={
             "supplier_name": "SupplierPreviewApply",
@@ -1969,7 +1969,7 @@ def test_orders_import_accepts_preview_overrides_and_alias_saves(client):
     assert payload["imported_count"] == 1
     assert payload["saved_alias_count"] == 1
 
-    orders = client.get("/api/orders?supplier=SupplierPreviewApply&per_page=50")
+    orders = client.get("/api/purchase-order-lines?supplier=SupplierPreviewApply&per_page=50")
     assert orders.status_code == 200
     assert orders.json()["data"][0]["canonical_item_number"] == "KM100"
     assert orders.json()["data"][0]["ordered_item_number"] == "ThorLabs KM100"
@@ -2001,14 +2001,14 @@ def test_orders_import_accepts_preview_overrides_and_alias_saves(client):
         }
     )
     second_response = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={"file": ("apply-second.csv", second_upload.getvalue().encode("utf-8"), "text/csv")},
         data={"supplier_name": "SupplierPreviewApply"},
     )
     assert second_response.status_code == 200
     assert second_response.json()["data"]["status"] == "ok"
 
-    refreshed_orders = client.get("/api/orders?supplier=SupplierPreviewApply&per_page=50")
+    refreshed_orders = client.get("/api/purchase-order-lines?supplier=SupplierPreviewApply&per_page=50")
     assert refreshed_orders.status_code == 200
     order_amounts = {
         row["quotation_number"]: row["order_amount"]
@@ -2043,7 +2043,7 @@ def test_orders_import_rejects_malformed_preview_override_json(client):
     )
 
     response = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={"file": ("orders-malformed.json.csv", csv_content, "text/csv")},
         data={
             "supplier_name": "SupplierMalformedJson",
@@ -2090,7 +2090,7 @@ def test_orders_import_rejects_non_array_alias_saves(client):
     )
 
     response = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={"file": ("orders-alias-shape.csv", csv_content, "text/csv")},
         data={
             "supplier_name": "SupplierAliasShape",
@@ -2159,13 +2159,13 @@ def test_orders_endpoint_filters_by_item_id(client):
         }
     )
     imported = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={"file": ("order-filter.csv", output.getvalue().encode("utf-8"), "text/csv")},
         data={"supplier_name": "ApiOrderFilterSupplier"},
     )
     assert imported.status_code == 200
 
-    response = client.get("/api/orders", params={"item_id": item_a["item_id"], "per_page": 50})
+    response = client.get("/api/purchase-order-lines", params={"item_id": item_a["item_id"], "per_page": 50})
     assert response.status_code == 200
     rows = response.json()["data"]
     assert len(rows) == 1
@@ -2209,7 +2209,7 @@ def test_order_import_accepts_slash_date_format(client):
         }
     )
     response = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
         data={"supplier_name": "SupplierSlashDate"},
     )
@@ -3113,14 +3113,14 @@ def test_delete_order_endpoint(client):
     )
 
     imported = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
         data={"supplier_name": "SupplierDeleteOrder"},
     )
     assert imported.status_code == 200
     order_id = imported.json()["data"]["order_ids"][0]
 
-    deleted = client.delete(f"/api/orders/{order_id}")
+    deleted = client.delete(f"/api/purchase-order-lines/{order_id}")
     assert deleted.status_code == 200
     assert deleted.json()["data"]["deleted"] is True
 
@@ -3173,19 +3173,19 @@ def test_merge_orders_endpoint_merges_and_returns_lineage(client):
     )
 
     imported = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
         data={"supplier_name": "SupplierMergeApi"},
     )
     assert imported.status_code == 200
-    source_order_id = imported.json()["data"]["order_ids"][0]
-    target_order_id = imported.json()["data"]["order_ids"][1]
+    source_purchase_order_line_id = imported.json()["data"]["order_ids"][0]
+    target_purchase_order_line_id = imported.json()["data"]["order_ids"][1]
 
     merged = client.post(
-        "/api/orders/merge",
+        "/api/purchase-order-lines/merge",
         json={
-            "source_order_id": source_order_id,
-            "target_order_id": target_order_id,
+            "source_purchase_order_line_id": source_purchase_order_line_id,
+            "target_purchase_order_line_id": target_purchase_order_line_id,
             "expected_arrival": "2026-03-20",
         },
     )
@@ -3193,10 +3193,10 @@ def test_merge_orders_endpoint_merges_and_returns_lineage(client):
     assert merged.json()["data"]["target_order"]["order_amount"] == 50
     assert merged.json()["data"]["target_order"]["expected_arrival"] == "2026-03-20"
 
-    lineage = client.get(f"/api/orders/{target_order_id}/lineage")
+    lineage = client.get(f"/api/purchase-order-lines/{target_purchase_order_line_id}/lineage")
     assert lineage.status_code == 200
     assert any(
-        row["event_type"] == "ETA_MERGE" and row["source_order_id"] == source_order_id
+        row["event_type"] == "ETA_MERGE" and row["source_purchase_order_line_id"] == source_purchase_order_line_id
         for row in lineage.json()["data"]
     )
 
@@ -3239,7 +3239,7 @@ def test_delete_quotation_endpoint_removes_related_orders(client):
     )
 
     imported = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
         data={"supplier_name": "SupplierDeleteQuotation"},
     )
@@ -3253,7 +3253,7 @@ def test_delete_quotation_endpoint_removes_related_orders(client):
     assert deleted.status_code == 200
     assert deleted.json()["data"]["deleted"] is True
 
-    remaining_orders = client.get("/api/orders?supplier=SupplierDeleteQuotation&per_page=50")
+    remaining_orders = client.get("/api/purchase-order-lines?supplier=SupplierDeleteQuotation&per_page=50")
     assert remaining_orders.status_code == 200
     assert remaining_orders.json()["data"] == []
 
@@ -3280,7 +3280,7 @@ def test_import_template_endpoints_return_header_only_bom_csv(client):
             "location",
             "note",
         ],
-        "/api/orders/import-template": [
+        "/api/purchase-order-lines/import-template": [
             "supplier",
             "item_number",
             "quantity",
@@ -3417,7 +3417,7 @@ def test_orders_import_reference_endpoint_filters_aliases_by_supplier(client):
     assert alias_a.status_code == 200
     assert alias_b.status_code == 200
 
-    response = client.get("/api/orders/import-reference?supplier_name=SupplierOrdersReferenceA")
+    response = client.get("/api/purchase-order-lines/import-reference?supplier_name=SupplierOrdersReferenceA")
     assert response.status_code == 200
 
     _, rows = read_csv_response(response)
@@ -3960,7 +3960,7 @@ def test_bom_analyze_endpoint_supports_target_date_projection(client):
         }
     )
     imported = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
         data={"supplier_name": "SupplierBomDate"},
     )
@@ -4214,7 +4214,7 @@ def test_project_gap_analysis_endpoint_supports_target_date(client):
         }
     )
     imported = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
         data={"supplier_name": "SupplierProjectGapDate"},
     )
@@ -4721,7 +4721,7 @@ def test_item_planning_context_endpoint_and_workspace_export(client):
         }
     )
     imported = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
         data={"supplier_name": "ApiWorkspaceContextSupplier"},
     )
@@ -4846,7 +4846,7 @@ def test_project_rfq_batch_endpoint_uses_requested_target_date(client):
         }
     )
     imported = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
         data={"supplier_name": "ApiRfqTargetDateSupplier"},
     )
@@ -4926,7 +4926,7 @@ def test_update_order_endpoint_rejects_manual_project_override_for_rfq_owned_ord
         }
     )
     imported = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
         data={"supplier_name": "ApiRfqOrderGuardSupplier"},
     )
@@ -4935,18 +4935,18 @@ def test_update_order_endpoint_rejects_manual_project_override_for_rfq_owned_ord
 
     linked = client.put(
         f"/api/rfq-lines/{line_id}",
-        json={"linked_order_id": order_id, "status": "ORDERED"},
+        json={"linked_purchase_order_line_id": order_id, "status": "ORDERED"},
     )
     assert linked.status_code == 200
 
     blocked = client.put(
-        f"/api/orders/{order_id}",
+        f"/api/purchase-order-lines/{order_id}",
         json={"project_id": other_project["project_id"]},
     )
     assert blocked.status_code == 409
     assert blocked.json()["error"]["code"] == "ORDER_PROJECT_MANAGED_BY_RFQ"
 
-    refreshed_order = client.get(f"/api/orders/{order_id}")
+    refreshed_order = client.get(f"/api/purchase-order-lines/{order_id}")
     assert refreshed_order.status_code == 200
     assert refreshed_order.json()["data"]["project_id"] == owner_project["project_id"]
 
@@ -5002,7 +5002,7 @@ def test_procurement_line_revert_preserves_rfq_owned_order_project(client):
         }
     )
     imported = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={"file": ("orders.csv", order_csv.getvalue().encode("utf-8"), "text/csv")},
         data={"supplier_name": "ApiProcRfqFallbackSupplier"},
     )
@@ -5011,7 +5011,7 @@ def test_procurement_line_revert_preserves_rfq_owned_order_project(client):
 
     linked_rfq = client.put(
         f"/api/rfq-lines/{rfq_line_id}",
-        json={"linked_order_id": order_id, "status": "ORDERED"},
+        json={"linked_purchase_order_line_id": order_id, "status": "ORDERED"},
     )
     assert linked_rfq.status_code == 200
 
@@ -5040,17 +5040,17 @@ def test_procurement_line_revert_preserves_rfq_owned_order_project(client):
 
     ordered = client.put(
         f"/api/procurement-lines/{line_id}",
-        json={"linked_order_id": order_id, "status": "ORDERED"},
+        json={"linked_purchase_order_line_id": order_id, "status": "ORDERED"},
     )
     assert ordered.status_code == 200
 
     quoted = client.put(
         f"/api/procurement-lines/{line_id}",
-        json={"linked_order_id": order_id, "status": "QUOTED", "expected_arrival": FUTURE_TARGET_DATE},
+        json={"linked_purchase_order_line_id": order_id, "status": "QUOTED", "expected_arrival": FUTURE_TARGET_DATE},
     )
     assert quoted.status_code == 200
 
-    refreshed_order = client.get(f"/api/orders/{order_id}")
+    refreshed_order = client.get(f"/api/purchase-order-lines/{order_id}")
     assert refreshed_order.status_code == 200
     assert refreshed_order.json()["data"]["project_id"] == project["project_id"]
 
@@ -5106,7 +5106,7 @@ def test_rfq_line_endpoint_clears_stale_link_when_reverted_to_quoted(client):
         }
     )
     imported = client.post(
-        "/api/orders/import",
+        "/api/purchase-order-lines/import",
         files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
         data={"supplier_name": "ApiRfqStaleLinkSupplier"},
     )
@@ -5115,7 +5115,7 @@ def test_rfq_line_endpoint_clears_stale_link_when_reverted_to_quoted(client):
 
     ordered = client.put(
         f"/api/rfq-lines/{line_id}",
-        json={"linked_order_id": order_id, "status": "ORDERED"},
+        json={"linked_purchase_order_line_id": order_id, "status": "ORDERED"},
     )
     assert ordered.status_code == 200
 
@@ -5123,16 +5123,16 @@ def test_rfq_line_endpoint_clears_stale_link_when_reverted_to_quoted(client):
         f"/api/rfq-lines/{line_id}",
         json={
             "expected_arrival": FUTURE_TARGET_DATE,
-            "linked_order_id": order_id,
+            "linked_purchase_order_line_id": order_id,
             "status": "QUOTED",
         },
     )
     assert quoted.status_code == 200
     line = quoted.json()["data"]["line"]
     assert line["status"] == "QUOTED"
-    assert line["linked_order_id"] is None
+    assert line["linked_purchase_order_line_id"] is None
 
-    refreshed_order = client.get(f"/api/orders/{order_id}")
+    refreshed_order = client.get(f"/api/purchase-order-lines/{order_id}")
     assert refreshed_order.status_code == 200
     assert refreshed_order.json()["data"]["project_id"] is None
 
