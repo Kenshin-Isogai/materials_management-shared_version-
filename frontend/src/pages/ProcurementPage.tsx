@@ -2,7 +2,13 @@ import { useMemo, useState } from "react";
 import useSWR from "swr";
 import { apiDownload, apiGet, apiGetWithPagination, apiSend } from "../lib/api";
 import { buildLinkedOrderSelectOptions } from "../lib/rfqEditorState";
-import type { Order, ProcurementBatchDetail, ProcurementBatchSummary, ProcurementLine, ProcurementLineStatus } from "../lib/types";
+import type {
+  ProcurementBatchDetail,
+  ProcurementBatchSummary,
+  ProcurementLine,
+  ProcurementLineStatus,
+  PurchaseOrderLine,
+} from "../lib/types";
 
 type ShortageInboxRow = {
   item_id: number;
@@ -32,7 +38,7 @@ export function ProcurementPage() {
     finalized_quantity: string;
     supplier_name: string;
     expected_arrival: string;
-    linked_order_id: string;
+    linked_purchase_order_line_id: string;
     note: string;
   } | null>(null);
 
@@ -60,14 +66,14 @@ export function ProcurementPage() {
   );
   const matchingOrdersPath = useMemo(() => {
     if (!editingLine) return null;
-    return `/orders?item_id=${editingLine.item_id}&include_arrived=false&per_page=200`;
+    return `/purchase-order-lines?item_id=${editingLine.item_id}&include_arrived=false&per_page=200`;
   }, [editingLine]);
   const {
     data: matchingOrdersResp,
     error: matchingOrdersError,
     isLoading: matchingOrdersLoading,
   } = useSWR(matchingOrdersPath, () =>
-    apiGetWithPagination<Order[]>(matchingOrdersPath ?? ""),
+    apiGetWithPagination<PurchaseOrderLine[]>(matchingOrdersPath ?? ""),
   );
   const matchingOrders = matchingOrdersResp?.data ?? [];
 
@@ -78,7 +84,8 @@ export function ProcurementPage() {
       finalized_quantity: String(line.finalized_quantity),
       supplier_name: line.supplier_name ?? "",
       expected_arrival: line.expected_arrival ?? "",
-      linked_order_id: line.linked_order_id == null ? "" : String(line.linked_order_id),
+      linked_purchase_order_line_id:
+        line.linked_purchase_order_line_id == null ? "" : String(line.linked_purchase_order_line_id),
       note: line.note ?? "",
     });
     setMessage("");
@@ -101,9 +108,9 @@ export function ProcurementPage() {
           finalized_quantity: Number(lineDraft.finalized_quantity),
           supplier_name: lineDraft.supplier_name.trim() || null,
           expected_arrival: lineDraft.expected_arrival.trim() || null,
-          linked_order_id:
-            lineDraft.status === "ORDERED" && lineDraft.linked_order_id.trim()
-              ? Number(lineDraft.linked_order_id)
+          linked_purchase_order_line_id:
+            lineDraft.status === "ORDERED" && lineDraft.linked_purchase_order_line_id.trim()
+              ? Number(lineDraft.linked_purchase_order_line_id)
               : null,
           note: lineDraft.note.trim() || null,
         }),
@@ -267,7 +274,9 @@ export function ProcurementPage() {
                           <p className="text-xs text-slate-500">
                             {line.source_type}
                             {line.source_project_name ? ` | ${line.source_project_name}` : ""}
-                            {line.linked_order_supplier_name ? ` | ${line.linked_order_supplier_name}` : ""}
+                            {line.linked_purchase_order_line_supplier_name
+                              ? ` | ${line.linked_purchase_order_line_supplier_name}`
+                              : ""}
                           </p>
                         </div>
                         {editingLineId === line.line_id ? (
@@ -341,16 +350,16 @@ export function ProcurementPage() {
                           />
                           <select
                             className="input"
-                            value={lineDraft.linked_order_id}
+                            value={lineDraft.linked_purchase_order_line_id}
                             onChange={(event) =>
                               setLineDraft((current) =>
-                                current ? { ...current, linked_order_id: event.target.value } : current,
+                                current ? { ...current, linked_purchase_order_line_id: event.target.value } : current,
                               )
                             }
                           >
                             {buildLinkedOrderSelectOptions({
                               line,
-                              draftLinkedOrderId: lineDraft.linked_order_id,
+                              draftLinkedOrderId: lineDraft.linked_purchase_order_line_id,
                               matchingOrders,
                               isActive: true,
                               isLoading: matchingOrdersLoading,
@@ -375,7 +384,10 @@ export function ProcurementPage() {
                           <p>Status: {line.status}</p>
                           <p>Supplier: {line.supplier_name ?? "-"}</p>
                           <p>ETA: {line.expected_arrival ?? "-"}</p>
-                          <p>Linked order: {line.linked_order_id ? `#${line.linked_order_id}` : "-"}</p>
+                          <p>
+                            Linked purchase order line:{" "}
+                            {line.linked_purchase_order_line_id ? `#${line.linked_purchase_order_line_id}` : "-"}
+                          </p>
                           <p>Note: {line.note ?? "-"}</p>
                         </div>
                       )}

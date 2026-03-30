@@ -89,7 +89,7 @@ Last updated: 2026-03-29 (JST)
 ### 3.2 Data Model
 
 - PostgreSQL with normalized core entities:
-  - items, inventory ledger, orders/quotations, reservations
+  - items, inventory ledger, quotation headers, purchase-order headers, purchase-order lines, reservations
   - projects with item-based requirements
   - sequential planning pipeline summaries derived from project status + planned_start
   - primary procurement persistence via `procurement_batches` / `procurement_lines`
@@ -131,11 +131,11 @@ Last updated: 2026-03-29 (JST)
   - `purchase_order_document_url` is optional on orders
   - imported quotation/order document values are rendered as openable links in the Orders UI
 - Manual Orders CSV import is now DB-tracked through the shared import-job tables.
-  - `POST /api/orders/import` returns `import_job_id`
-  - `GET /api/orders/import-jobs` lists `import_type='orders'` jobs
-  - `GET /api/orders/import-jobs/{import_job_id}` returns row-level effects such as `order_created`, `order_missing_item`, and `order_duplicate_quotation`
-  - `POST /api/orders/import-jobs/{import_job_id}/undo` safely removes imported orders and restores/deletes related quotations and supplier aliases when current state still matches the recorded snapshots
-  - `POST /api/orders/import-jobs/{import_job_id}/redo` replays the original CSV plus stored request metadata such as `supplier_id`, `supplier_name`, `default_order_date`, `row_overrides`, and `alias_saves`
+  - `POST /api/purchase-order-lines/import` returns `import_job_id`
+  - `GET /api/purchase-order-lines/import-jobs` lists `import_type='orders'` jobs
+  - `GET /api/purchase-order-lines/import-jobs/{import_job_id}` returns row-level effects such as `order_created`, `order_missing_item`, and `order_duplicate_quotation`
+  - `POST /api/purchase-order-lines/import-jobs/{import_job_id}/undo` safely removes imported orders and restores/deletes related quotations and supplier aliases when current state still matches the recorded snapshots
+  - `POST /api/purchase-order-lines/import-jobs/{import_job_id}/redo` replays the original CSV plus stored request metadata such as `supplier_id`, `supplier_name`, `default_order_date`, `row_overrides`, and `alias_saves`
   - order import jobs now persist `request_metadata` in `import_jobs`, so preview-confirm decisions remain replayable and operator-auditable
   - job status uses `ok` / `partial` / `error`, while the immediate import response can still return `status="missing_items"`
 - Generated missing-item register CSVs are now browser-downloadable managed artifacts.
@@ -167,7 +167,7 @@ Last updated: 2026-03-29 (JST)
   - board date state now mirrors the effective planning `target_date` after same-project refreshes when there is no pending local preview edit
   - drawer close, breadcrumb back, route-leave, and stack-truncation flows now protect unsaved project/RFQ drafts
   - item-scoped RFQ drawers keep the whole batch available and move the focused item rows to the top
-  - RFQ save refreshes now rehydrate saved rows from server detail so normalized values such as cleared stale `linked_order_id` fields appear immediately
+  - RFQ save refreshes now rehydrate saved rows from server detail so normalized values such as cleared stale `linked_purchase_order_line_id` fields appear immediately
   - nested picker Escape now dismisses only the picker instead of bubbling up to close the whole drawer
   - workspace summary refresh now repairs stale selected project ids before requesting `/projects/{id}/planning-analysis`
   - inactive drawer panels suspend their SWR fetches and preload queries while hidden in the breadcrumb stack
@@ -222,7 +222,7 @@ Last updated: 2026-03-29 (JST)
   - `/api/shortage-inbox` exposes current shortage rows.
   - `/api/shortage-inbox/to-procurement` creates or extends procurement batches from shortage selections and can optionally confirm a draft project with the active planning date for workspace-driven procurement creation.
   - `/api/procurement-batches/{id}/export.csv` produces supplier-facing CSV output.
-  - Batch detail now supports inline line editing for `status`, `finalized_quantity`, `supplier_name`, `expected_arrival`, `linked_order_id`, and `note`.
+  - Batch detail now supports inline line editing for `status`, `finalized_quantity`, `supplier_name`, `expected_arrival`, `linked_purchase_order_line_id`, and `note`.
   - Linked-order selectors lazy-load matching open orders for the active line only.
 - Legacy location assembly assignment remains available through `PUT /api/locations/{location}/assemblies` for the Location page workflow.
 - BOM page now supports optional analysis date input and sends `target_date` to `POST /api/bom/analyze` for future-arrival-aware gap checks.
@@ -232,17 +232,17 @@ Last updated: 2026-03-29 (JST)
 - Purchase Candidates page provides persistent shortage tracking with status transitions (`OPEN`, `ORDERING`, `ORDERED`, `CANCELLED`) and project-gap candidate creation.
 - Orders page `Order List` supports client-side sorting by order id, supplier, item, quantity, expected arrival, and status.
 - Expanded `Order List` now also includes a primary search (`order #`, item, or quotation number) plus a secondary text filter for supplier/project/expected-date/status fields.
-- Orders page `Order List` now supports inline editing of `expected_arrival` (ETA) plus manual project assignment for open orders, backed by `PUT /api/orders/{order_id}`.
+- Orders page `Order List` now supports inline editing of `expected_arrival` (ETA) plus manual project assignment for open orders, backed by `PUT /api/purchase-order-lines/{order_id}`.
 - ETA edit flow supports partial postponement using split quantity (e.g., postpone 30 of 50), which creates a second open-order row with the new ETA while preserving traceability-safe quantities.
 - The same edit flow now lets users assign or clear `project_id` unless the order is controlled by an ORDERED RFQ/procurement link.
 - When split ETA editing is combined with project selection from the Orders page, the UI now performs the split first and then assigns only the created consumed child order.
 - Orders page `Order Details` now includes `Create Provisional Reservation…`, which opens Reservations with prefilled draft fields (`item_id`, `quantity`, optional `project_id`, and source-order context note/purpose) to reduce context switching for provisional stock-link workflows.
-- Backend now persists split/merge/partial-arrival order lineage in `order_lineage_events`; API exposes `POST /api/orders/merge` and `GET /api/orders/{order_id}/lineage` for durable traceability and future scale-out reporting.
+- Backend now persists split/merge/partial-arrival order lineage in `order_lineage_events`; API exposes `POST /api/purchase-order-lines/merge` and `GET /api/purchase-order-lines/{order_id}/lineage` for durable traceability and future scale-out reporting.
 - Orders manual CSV import is now preview-first:
-  - `POST /api/orders/import-preview` classifies each row as `exact`, `high_confidence`, `needs_review`, or `unresolved`
+  - `POST /api/purchase-order-lines/import-preview` classifies each row as `exact`, `high_confidence`, `needs_review`, or `unresolved`
   - supplier context is now row-driven from the CSV instead of a selected supplier outside the file
   - preview surfaces duplicate quotation conflicts before commit and returns ranked candidate matches
-  - preview confirmation can send per-row canonical overrides plus optional supplier-alias saves back through `POST /api/orders/import`
+  - preview confirmation can send per-row canonical overrides plus optional supplier-alias saves back through `POST /api/purchase-order-lines/import`
   - the Orders page can preview/import multiple CSV files in one UI pass by processing the selected files sequentially
 - Reservations CSV import is now preview-first:
   - `POST /api/reservations/import-preview` validates item/assembly targets, previews assembly expansion, and flags inventory shortages before commit
@@ -279,7 +279,7 @@ Last updated: 2026-03-29 (JST)
   - single-project export includes committed pipeline rows, selected-project summary, selected-project item rows, and RFQ counts
   - multi-project export includes one summary row plus item rows for every project in pipeline order, optionally including the currently previewed project/date from the planning board
   - multi-project CSV `target_date` now represents the shared selected board analysis date only; committed-only exports leave it blank rather than repeating each row's `planned_start`
-- `GET /api/orders` now supports `item_id` and `project_id` filters in addition to status/supplier filters.
+- `GET /api/purchase-order-lines` now supports `item_id` and `project_id` filters in addition to status/supplier filters.
 - Splitting an RFQ-owned open order now keeps the dedicated `project_id` only on the original RFQ-linked order; the new sibling order remains generic until an RFQ line explicitly links it.
 - Purchase candidate endpoints are now available:
   - `GET /api/purchase-candidates`
@@ -287,16 +287,14 @@ Last updated: 2026-03-29 (JST)
   - `POST /api/purchase-candidates/from-bom`
   - `POST /api/purchase-candidates/from-project/{project_id}`
   - `PUT /api/purchase-candidates/{id}`
-- Orders page now also shows an `Imported Quotations` table sourced from `GET /api/quotations` (ID, supplier, quotation number, issue date, quotation document URL) with client-side sorting and filtering controls.
-- Imported Quotations includes dedicated quotation-number search plus a secondary text filter for supplier/issue-date/PDF-link fields.
-- Imported Quotations now includes an `Orders` count column so each quotation row shows how many order rows currently reference that quotation.
-- Imported Quotations now starts collapsed and can be expanded/collapsed inline like `Order List`, reducing long-scroll pressure when quotation history grows.
-- Orders page now loads all pages of the orders/quotations APIs for this screen, so older quotations still show correct order counts and `View Orders` can always open `Quotation Details` even when the linked rows would have fallen outside the first `/orders?per_page=200` page.
-- Orders page mutation flows (manual import, unregistered batch steps, arrival processing) revalidate both orders and quotations datasets to avoid stale `Imported Quotations` content after successful operations.
-- Order List panel now starts collapsed and can be expanded/collapsed inline, reducing scroll distance to the `Imported Quotations` section when reviewing quotations.
-- Orders page includes a dedicated `Order Details` panel for the `Order List` row action, focused on the selected order, its item metadata, and same-item purchasing history.
-- `Order List` row-level `Order Details` auto-collapses the list and smooth-scrolls to `Order Details` to reduce manual navigation.
-- `Imported Quotations` now includes a row-level `View Orders` action plus a dedicated `Quotation Details` panel that shows quotation metadata and every order linked to the selected quotation without reusing the order drill-down panel.
+- Orders page now uses a document-first browse layout around three entities:
+  - `Purchase Order Lines` remains the operational pane for ETA, arrival, split, delete, and manual project assignment
+  - `Quotations` lists quotation headers with linked-line counts and header-level edit/delete actions
+  - `Purchase Orders` lists purchase-order headers with linked-line counts and header-level edit/delete actions
+- Orders page loads all pages of the purchase-order-lines, quotations, and purchase-orders APIs for this screen so header counts remain correct even when older linked rows fall outside the first API page.
+- Orders page mutation flows (manual import, arrival processing, line edits, quotation edits, purchase-order edits) revalidate purchase-order-lines, quotations, and purchase-orders datasets together to avoid stale header/line counts.
+- The line pane now uses dense card rows plus a side detail panel instead of a long single-column field stack, reducing vertical scroll cost when each line carries many attributes.
+- Quotation and purchase-order browsing now use searchable card lists plus dedicated detail panes rather than the older `Imported Quotations` expandable table / `View Orders` workflow.
 - Item List now includes a row-level `Flow` action that opens an item-specific increase/decrease timeline (when/how many/why) combining transaction logs, expected order arrivals, and active reservation deadlines.
 - Items page `Item List` now supports expand/collapse and auto-collapses when `Flow` is opened, reducing scroll overhead to reach the timeline panel.
 - Items page `Item List` supports client-side sorting by ID, item number, manufacturer, category, and URL.
@@ -356,9 +354,10 @@ Last updated: 2026-03-29 (JST)
 ## Orders/Quotations maintenance UI (latest)
 
 - Orders page now supports:
-  - deleting non-arrived orders from `Order List`
+  - deleting non-arrived purchase-order lines from `Purchase Order Lines`
   - inline editing of quotation `issue_date` and `quotation_document_url`
-  - deleting quotations directly from `Imported Quotations` (blocked if any linked order is already `Arrived`)
+  - inline editing of purchase-order `purchase_order_document_url`
+  - deleting quotations and purchase-order headers directly from their detail panes
 - Backend now keeps CSV and DB aligned for these maintenance operations by rewriting/deleting matching rows in discovered quotation CSV files under registered/unregistered CSV roots.
 - For duplicate item rows under the same quotation, order-level CSV sync now matches a single row by per-order occurrence identity so update/delete touches only the targeted order row.
 
@@ -367,9 +366,9 @@ Last updated: 2026-03-29 (JST)
 - Added CSV template/reference download endpoints for current import-capable flows:
   - `/api/items/import-template`, `/api/items/import-reference`
   - `/api/inventory/import-template`, `/api/inventory/import-reference`
-  - `/api/orders/import-template`, `/api/orders/import-reference`
+  - `/api/purchase-order-lines/import-template`, `/api/purchase-order-lines/import-reference`
   - `/api/reservations/import-template`, `/api/reservations/import-reference`
-- Added Orders manual import preview endpoint `/api/orders/import-preview` and confirmation-side `row_overrides` / `alias_saves` support on `/api/orders/import`.
+- Added Orders manual import preview endpoint `/api/purchase-order-lines/import-preview` and confirmation-side `row_overrides` / `alias_saves` support on `/api/purchase-order-lines/import`.
 - Added preview endpoints for the remaining manual CSV flows:
   - `/api/items/import-preview`
   - `/api/inventory/import-preview`

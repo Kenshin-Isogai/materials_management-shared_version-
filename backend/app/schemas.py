@@ -101,14 +101,18 @@ class OrderUpdateRequest(BaseModel):
 
 
 class OrderMergeRequest(BaseModel):
-    source_order_id: int
-    target_order_id: int
+    source_purchase_order_line_id: int
+    target_purchase_order_line_id: int
     expected_arrival: str | None = None
 
 
 class QuotationUpdateRequest(BaseModel):
     issue_date: str | None = None
     quotation_document_url: str | None = None
+
+
+class PurchaseOrderUpdateRequest(BaseModel):
+    purchase_order_document_url: str | None = None
 
 
 class ArrivalRequest(BaseModel):
@@ -240,7 +244,7 @@ class ProcurementLineCreate(BaseModel):
     finalized_quantity: int | None = Field(default=None, gt=0)
     supplier_name: str | None = None
     expected_arrival: str | None = None
-    linked_order_id: int | None = None
+    linked_purchase_order_line_id: int | None = None
     linked_quotation_id: int | None = None
     status: Literal["DRAFT", "SENT", "QUOTED", "ORDERED", "CANCELLED"] = "DRAFT"
     note: str | None = None
@@ -255,7 +259,7 @@ class ProcurementLineUpdate(BaseModel):
     finalized_quantity: int | None = Field(default=None, gt=0)
     supplier_name: str | None = None
     expected_arrival: str | None = None
-    linked_order_id: int | None = None
+    linked_purchase_order_line_id: int | None = None
     linked_quotation_id: int | None = None
     status: Literal["DRAFT", "SENT", "QUOTED", "ORDERED", "CANCELLED"] | None = None
     note: str | None = None
@@ -268,7 +272,7 @@ class ProcurementLineUpdate(BaseModel):
                 "finalized_quantity",
                 "supplier_name",
                 "expected_arrival",
-                "linked_order_id",
+                "linked_purchase_order_line_id",
                 "linked_quotation_id",
                 "status",
                 "note",
@@ -299,7 +303,7 @@ class ShortageInboxToProcurementRequest(BaseModel):
 
 
 class ProcurementLinkConfirmation(BaseModel):
-    order_id: int
+    purchase_order_line_id: int
     line_id: int
     confirmed: bool = True
 

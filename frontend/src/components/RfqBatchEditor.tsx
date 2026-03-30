@@ -264,14 +264,16 @@ export function RfqBatchEditor({
         orderMap.set(order.order_id, order);
       }
 
-      const matchingOrders = await apiGetAllPages<Order>(`/orders?item_id=${itemId}&include_arrived=false&per_page=200`);
+      const matchingOrders = await apiGetAllPages<Order>(
+        `/purchase-order-lines?item_id=${itemId}&include_arrived=false&per_page=200`,
+      );
       for (const order of matchingOrders) {
         orderMap.set(order.order_id, order);
       }
 
       if (requiredOrderId != null && !orderMap.has(requiredOrderId)) {
         try {
-          const requiredOrder = await apiGet<Order>(`/orders/${requiredOrderId}`);
+          const requiredOrder = await apiGet<Order>(`/purchase-order-lines/${requiredOrderId}`);
           orderMap.set(requiredOrder.order_id, requiredOrder);
         } catch {
           // Keep the current linked-order selection visible via fallback option metadata.
@@ -323,7 +325,7 @@ export function RfqBatchEditor({
   async function saveLine(line: RfqLine) {
     const draft = lineDrafts[line.line_id];
     if (!draft) return;
-    const selectedLinkedOrderId = parseLinkedOrderId(draft.linked_order_id);
+    const selectedLinkedOrderId = parseLinkedOrderId(draft.linked_purchase_order_line_id);
     setWorking(true);
     setMessage("");
     try {
@@ -335,7 +337,8 @@ export function RfqBatchEditor({
           supplier_name: draft.supplier_name.trim() || null,
           lead_time_days: draft.lead_time_days.trim() ? Number(draft.lead_time_days) : null,
           expected_arrival: draft.expected_arrival.trim() || null,
-          linked_order_id: draft.linked_order_id.trim() ? Number(draft.linked_order_id) : null,
+          linked_purchase_order_line_id:
+            draft.linked_purchase_order_line_id.trim() ? Number(draft.linked_purchase_order_line_id) : null,
           status: draft.status,
           note: draft.note.trim() || null,
         }),
@@ -549,7 +552,7 @@ export function RfqBatchEditor({
                             <th className="px-2 py-2">Lead Days</th>
                             <th className="px-2 py-2">Expected Arrival</th>
                             <th className="px-2 py-2">Status</th>
-                            <th className="px-2 py-2">Linked Order</th>
+                            <th className="px-2 py-2">Linked Purchase Order Line</th>
                             <th className="px-2 py-2">Note</th>
                             <th className="px-2 py-2">Action</th>
                           </tr>
@@ -564,7 +567,7 @@ export function RfqBatchEditor({
                             const orderLoadError = orderLoadErrorsByItemId[line.item_id] ?? null;
                             const orderOptions = buildLinkedOrderSelectOptions({
                               line,
-                              draftLinkedOrderId: draft?.linked_order_id ?? "",
+                              draftLinkedOrderId: draft?.linked_purchase_order_line_id ?? "",
                               matchingOrders,
                               isActive: isLinkedOrderSelectActive,
                               isLoading: Boolean(loadingOrdersByItemId[line.item_id]),
@@ -648,9 +651,9 @@ export function RfqBatchEditor({
                                         updateLineDraft(line.line_id, { expected_arrival: event.target.value })
                                       }
                                     />
-                                    {line.linked_order_expected_arrival && (
+                                    {line.linked_purchase_order_line_expected_arrival && (
                                       <p className="text-xs text-slate-500">
-                                        Linked order ETA: {line.linked_order_expected_arrival}
+                                        Linked purchase order line ETA: {line.linked_purchase_order_line_expected_arrival}
                                       </p>
                                     )}
                                   </div>
@@ -676,20 +679,20 @@ export function RfqBatchEditor({
                                   <select
                                     className="input"
                                     title="Focus to load matching open orders for this item."
-                                    value={draft?.linked_order_id ?? ""}
+                                    value={draft?.linked_purchase_order_line_id ?? ""}
                                     onBlur={() =>
                                       setActiveLinkedOrderLineId((current) =>
                                         current === line.line_id ? null : current,
                                       )
                                     }
                                     onChange={(event) =>
-                                      updateLineDraft(line.line_id, { linked_order_id: event.target.value })
+                                      updateLineDraft(line.line_id, { linked_purchase_order_line_id: event.target.value })
                                     }
                                     onFocus={() => {
                                       setActiveLinkedOrderLineId(line.line_id);
                                       void loadOrdersForItem(
                                         line.item_id,
-                                        parseLinkedOrderId(draft?.linked_order_id ?? ""),
+                                        parseLinkedOrderId(draft?.linked_purchase_order_line_id ?? ""),
                                       );
                                     }}
                                   >
@@ -702,9 +705,9 @@ export function RfqBatchEditor({
                                   {isLinkedOrderSelectActive && orderLoadError && (
                                     <p className="mt-2 text-xs text-red-600">{orderLoadError}</p>
                                   )}
-                                  {(line.linked_quotation_number || line.linked_order_supplier_name) && (
+                                  {(line.linked_quotation_number || line.linked_purchase_order_line_supplier_name) && (
                                     <p className="mt-2 text-xs text-slate-500">
-                                      {line.linked_order_supplier_name ?? "-"} / {line.linked_quotation_number ?? "-"}
+                                      {line.linked_purchase_order_line_supplier_name ?? "-"} / {line.linked_quotation_number ?? "-"}
                                     </p>
                                   )}
                                 </td>

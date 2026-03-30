@@ -834,7 +834,7 @@ def test_update_order_rejects_manual_project_reassignment_for_ordered_rfq_link(c
         conn,
         line_id,
         {
-            "linked_order_id": order_id,
+            "linked_purchase_order_line_id": order_id,
             "status": "ORDERED",
         },
     )
@@ -918,8 +918,8 @@ def test_merge_open_orders_records_lineage_without_archive_sync(conn, tmp_path: 
     )
     merged = service.merge_open_orders(
         conn,
-        source_order_id=first_order_id,
-        target_order_id=second_order_id,
+        source_purchase_order_line_id=first_order_id,
+        target_purchase_order_line_id=second_order_id,
         expected_arrival="2026-05-30",
     )
     assert merged["merged"] is True
@@ -929,8 +929,8 @@ def test_merge_open_orders_records_lineage_without_archive_sync(conn, tmp_path: 
     lineage = service.list_order_lineage_events(conn, order_id=second_order_id)
     assert any(
         event["event_type"] == "ETA_MERGE"
-        and int(event["source_order_id"]) == first_order_id
-        and int(event["target_order_id"]) == second_order_id
+        and int(event["source_purchase_order_line_id"]) == first_order_id
+        and int(event["target_purchase_order_line_id"]) == second_order_id
         for event in lineage
     )
 
@@ -983,8 +983,8 @@ def test_merge_open_orders_nonfirst_sibling_keeps_archived_csv_unchanged(conn, t
     )
     merged = service.merge_open_orders(
         conn,
-        source_order_id=second_order_id,
-        target_order_id=third_order_id,
+        source_purchase_order_line_id=second_order_id,
+        target_purchase_order_line_id=third_order_id,
         expected_arrival="2026-07-05",
     )
     assert merged["merged"] is True
@@ -1745,34 +1745,34 @@ def test_update_rfq_line_only_dedicates_ordered_links_and_clears_replaced_orders
         {
             "expected_arrival": FUTURE_TARGET_DATE,
             "status": "QUOTED",
-            "linked_order_id": first_order_id,
+            "linked_purchase_order_line_id": first_order_id,
         },
     )
     assert quoted["line"]["status"] == "QUOTED"
-    assert quoted["line"]["linked_order_id"] is None
+    assert quoted["line"]["linked_purchase_order_line_id"] is None
     assert service.get_order(conn, first_order_id)["project_id"] is None
 
     ordered = service.update_rfq_line(
         conn,
         line_id,
         {
-            "linked_order_id": first_order_id,
+            "linked_purchase_order_line_id": first_order_id,
             "status": "ORDERED",
         },
     )
     assert ordered["line"]["status"] == "ORDERED"
-    assert int(ordered["line"]["linked_order_id"]) == first_order_id
+    assert int(ordered["line"]["linked_purchase_order_line_id"]) == first_order_id
     assert int(service.get_order(conn, first_order_id)["project_id"]) == project["project_id"]
 
     replaced = service.update_rfq_line(
         conn,
         line_id,
         {
-            "linked_order_id": second_order_id,
+            "linked_purchase_order_line_id": second_order_id,
             "status": "ORDERED",
         },
     )
-    assert int(replaced["line"]["linked_order_id"]) == second_order_id
+    assert int(replaced["line"]["linked_purchase_order_line_id"]) == second_order_id
     assert service.get_order(conn, first_order_id)["project_id"] is None
     assert int(service.get_order(conn, second_order_id)["project_id"]) == project["project_id"]
 
@@ -1780,12 +1780,12 @@ def test_update_rfq_line_only_dedicates_ordered_links_and_clears_replaced_orders
         conn,
         line_id,
         {
-            "linked_order_id": second_order_id,
+            "linked_purchase_order_line_id": second_order_id,
             "status": "QUOTED",
         },
     )
     assert cleared["line"]["status"] == "QUOTED"
-    assert cleared["line"]["linked_order_id"] is None
+    assert cleared["line"]["linked_purchase_order_line_id"] is None
     assert service.get_order(conn, second_order_id)["project_id"] is None
 
 
@@ -1856,7 +1856,7 @@ def test_split_order_leaves_rfq_managed_project_assignment_on_original_order_onl
         conn,
         line_id,
         {
-            "linked_order_id": order_id,
+            "linked_purchase_order_line_id": order_id,
             "status": "ORDERED",
         },
     )
@@ -2132,14 +2132,14 @@ def test_manual_project_id_preserved_when_rfq_link_removed(conn):
     assert int(service.get_order(conn, order_id)["project_id"]) == project["project_id"]
 
     # Link the order to the RFQ (same project — allowed)
-    service.update_rfq_line(conn, line_id, {"linked_order_id": order_id, "status": "ORDERED"})
+    service.update_rfq_line(conn, line_id, {"linked_purchase_order_line_id": order_id, "status": "ORDERED"})
     assert int(service.get_order(conn, order_id)["project_id"]) == project["project_id"]
 
     # Remove the RFQ link — manual project_id must survive
     service.update_rfq_line(
         conn,
         line_id,
-        {"linked_order_id": order_id, "status": "QUOTED", "expected_arrival": FUTURE_TARGET_DATE},
+        {"linked_purchase_order_line_id": order_id, "status": "QUOTED", "expected_arrival": FUTURE_TARGET_DATE},
     )
     assert int(service.get_order(conn, order_id)["project_id"]) == project["project_id"], (
         "Manually-assigned project_id must not be cleared when the RFQ link is removed"

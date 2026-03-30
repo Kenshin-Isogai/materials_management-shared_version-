@@ -494,7 +494,7 @@ function ItemDrawerContent(_props: {
   const { data: reservationsResp } = useSWR(active ? `/workspace-item-reservations-${itemId}` : null, () =>
     apiGetWithPagination<ReservationRow[]>(`/reservations?item_id=${itemId}&status=ACTIVE&per_page=200`),
   );
-  const ordersPath = `/orders?item_id=${itemId}&include_arrived=false&per_page=200`;
+  const ordersPath = `/purchase-order-lines?item_id=${itemId}&include_arrived=false&per_page=200`;
   const { data: ordersResp } = useSWR(active ? ordersPath : null, () => apiGetWithPagination<Order[]>(ordersPath));
   const planningPath = useMemo(() => {
     const params = new URLSearchParams();
@@ -524,8 +524,8 @@ function ItemDrawerContent(_props: {
               <Link className="button-subtle" to="/items">
                 Open Items Page
               </Link>
-              <Link className="button-subtle" to="/orders">
-                Open Orders Page
+              <Link className="button-subtle" to="/purchase-order-lines">
+                Open Purchase Orders Page
               </Link>
             </div>
           </section>
@@ -533,7 +533,7 @@ function ItemDrawerContent(_props: {
           <section className="grid gap-3 md:grid-cols-4">
             <SummaryMetric label="Current Stock" value={flowData?.current_stock ?? 0} tone="emerald" />
             <SummaryMetric label="Locations" value={inventoryRows.length} />
-            <SummaryMetric label="Open Orders" value={orders.length} tone="sky" />
+            <SummaryMetric label="Open PO Lines" value={orders.length} tone="sky" />
             <SummaryMetric label="Active Reservations" value={reservations.length} tone="amber" />
           </section>
 
@@ -647,14 +647,14 @@ function ItemDrawerContent(_props: {
           </section>
 
           <section className="space-y-3">
-            <h3 className="font-display text-lg font-semibold">Incoming Orders</h3>
+            <h3 className="font-display text-lg font-semibold">Incoming Purchase Order Lines</h3>
             <div className="space-y-2">
               {orders.map((order) => (
                 <div key={order.order_id} className="rounded-2xl border border-slate-200 px-4 py-3">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="font-semibold">
-                        Order #{order.order_id} | Qty {order.order_amount}
+                        PO Line #{order.order_id} | Qty {order.order_amount}
                       </p>
                       <p className="text-sm text-slate-600">
                         {order.supplier_name} | ETA {formatDate(order.expected_arrival)} | {order.status}
@@ -669,7 +669,7 @@ function ItemDrawerContent(_props: {
               ))}
               {!orders.length && (
                 <p className="rounded-2xl border border-dashed border-slate-300 px-4 py-5 text-sm text-slate-500">
-                  No open orders for this item.
+                  No open purchase order lines for this item.
                 </p>
               )}
             </div>
@@ -797,8 +797,8 @@ function RfqDrawerContent(_props: {
           <Link className="button-subtle" to="/procurement">
             Open Procurement Page
           </Link>
-          <Link className="button-subtle" to="/orders">
-            Open Orders Page
+          <Link className="button-subtle" to="/purchase-order-lines">
+            Open Purchase Orders Page
           </Link>
         </div>
         {itemId != null && (

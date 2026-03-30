@@ -65,10 +65,11 @@ describe("OrdersPage", () => {
     apiGetMock.mockResolvedValue([]);
 
     apiGetAllPagesMock.mockImplementation(async (path: string) => {
-      if (path === "/orders?per_page=200") {
+      if (path === "/purchase-order-lines?per_page=200") {
         return [
           {
             order_id: 304,
+            purchase_order_id: 41,
             item_id: 1,
             quotation_id: 12,
             project_id: null,
@@ -83,9 +84,12 @@ describe("OrdersPage", () => {
             status: "Ordered",
             supplier_name: "オーテックス",
             quotation_number: "0000001809",
+            quotation_document_url: "https://example.sharepoint.com/sites/procurement/0000001809",
+            purchase_order_document_url: "https://example.sharepoint.com/sites/procurement/po-41",
           },
           {
             order_id: 305,
+            purchase_order_id: 41,
             item_id: 2,
             quotation_id: 12,
             project_id: 9,
@@ -100,6 +104,8 @@ describe("OrdersPage", () => {
             status: "Ordered",
             supplier_name: "オーテックス",
             quotation_number: "0000001809",
+            quotation_document_url: "https://example.sharepoint.com/sites/procurement/0000001809",
+            purchase_order_document_url: "https://example.sharepoint.com/sites/procurement/po-41",
           },
         ];
       }
@@ -112,6 +118,19 @@ describe("OrdersPage", () => {
             quotation_number: "0000001809",
             issue_date: "2025-10-20",
             quotation_document_url: "https://example.sharepoint.com/sites/procurement/0000001809",
+          },
+        ];
+      }
+      if (path === "/purchase-orders?per_page=200") {
+        return [
+          {
+            purchase_order_id: 41,
+            supplier_id: 3,
+            supplier_name: "オーテックス",
+            purchase_order_document_url: "https://example.sharepoint.com/sites/procurement/po-41",
+            line_count: 2,
+            first_order_date: "2025-10-21",
+            last_order_date: "2025-10-21",
           },
         ];
       }
@@ -173,48 +192,42 @@ describe("OrdersPage", () => {
   });
 
   it("shows quotation order counts using all fetched order pages", async () => {
-    const user = userEvent.setup();
     renderPage();
 
     await waitFor(() => {
-      expect(apiGetAllPagesMock).toHaveBeenCalledWith("/orders?per_page=200");
+      expect(apiGetAllPagesMock).toHaveBeenCalledWith("/purchase-order-lines?per_page=200");
       expect(apiGetAllPagesMock).toHaveBeenCalledWith("/quotations?per_page=200");
+      expect(apiGetAllPagesMock).toHaveBeenCalledWith("/purchase-orders?per_page=200");
     });
 
-    const quotationsSection = sectionByHeading("Imported Quotations");
+    const quotationsSection = sectionByHeading("Quotations");
     expect(quotationsSection).toBeTruthy();
-    await user.click(within(quotationsSection as HTMLElement).getByRole("button", { name: "Expand" }));
-
-    const quotationRow = await screen.findByText("0000001809");
-    const tableRow = quotationRow.closest("tr");
-    expect(tableRow).toBeTruthy();
-    expect(within(tableRow as HTMLElement).getByText("2")).toBeTruthy();
+    await waitFor(() => {
+      expect(within(quotationsSection as HTMLElement).getByText("Showing 1 / 1 quotations")).toBeTruthy();
+      const quotationButton = within(quotationsSection as HTMLElement).getByRole("button", { name: /0000001809/ });
+      expect(quotationButton).toBeTruthy();
+      expect(quotationButton.textContent).toContain("2 lines");
+    });
   });
 
-  it("opens quotation details with every linked order", async () => {
+  it("opens quotation details with linked-line counts and document metadata", async () => {
     const user = userEvent.setup();
     renderPage();
 
-    const quotationsSection = sectionByHeading("Imported Quotations");
+    const quotationsSection = sectionByHeading("Quotations");
     expect(quotationsSection).toBeTruthy();
-    await user.click(within(quotationsSection as HTMLElement).getByRole("button", { name: "Expand" }));
-
-    const quotationCell = await screen.findByText("0000001809");
-    const tableRow = quotationCell.closest("tr");
-    expect(tableRow).toBeTruthy();
-
-    await user.click(within(tableRow as HTMLElement).getByRole("button", { name: "View Orders" }));
+    await user.click(await within(quotationsSection as HTMLElement).findByRole("button", { name: /0000001809/ }));
 
     const quotationDetailsSection = screen.getByRole("heading", { name: "Quotation Details" }).closest("section");
     expect(quotationDetailsSection).toBeTruthy();
 
     await waitFor(() => {
       expect(within(quotationDetailsSection as HTMLElement).getByRole("button", { name: "Clear" })).toBeTruthy();
-      expect(within(quotationDetailsSection as HTMLElement).getByText("Linked orders:", { exact: false })).toBeTruthy();
-      expect(within(quotationDetailsSection as HTMLElement).getByText("#304")).toBeTruthy();
-      expect(within(quotationDetailsSection as HTMLElement).getByText("#305")).toBeTruthy();
-      expect(within(quotationDetailsSection as HTMLElement).getByText("AOMO3080-125")).toBeTruthy();
-      expect(within(quotationDetailsSection as HTMLElement).getByText("BETA-200")).toBeTruthy();
+      expect(within(quotationDetailsSection as HTMLElement).getByText("#12")).toBeTruthy();
+      expect(within(quotationDetailsSection as HTMLElement).getByText("Linked lines")).toBeTruthy();
+      expect((quotationDetailsSection as HTMLElement).textContent).toContain("0000001809");
+      expect((quotationDetailsSection as HTMLElement).textContent).toContain("2025-10-20");
+      expect(within(quotationDetailsSection as HTMLElement).getByRole("link", { name: "Open document" })).toBeTruthy();
     });
   });
 
@@ -222,64 +235,69 @@ describe("OrdersPage", () => {
     const user = userEvent.setup();
     renderPage();
 
-    const orderListSection = sectionByHeading("Order List");
+    const orderListSection = sectionByHeading("Purchase Order Lines");
     expect(orderListSection).toBeTruthy();
-    await user.click(within(orderListSection as HTMLElement).getByRole("button", { name: "Expand" }));
-
-    const orderRow = (await screen.findByText("BETA-200")).closest("tr");
+    const orderRow = (await screen.findByText(/Line #305 .* BETA-200/)).closest(".rounded-2xl");
     expect(orderRow).toBeTruthy();
 
-    await user.click(within(orderRow as HTMLElement).getByRole("button", { name: "Order Details" }));
+    await user.click(within(orderRow as HTMLElement).getByRole("button", { name: "Line Details" }));
 
-    const orderDetailsSection = screen.getByRole("heading", { name: "Order Details" }).closest("section");
+    const orderDetailsSection = screen.getAllByRole("heading", { name: "Purchase Order Line Details" })[1]?.closest("section");
     const quotationDetailsSection = screen.getByRole("heading", { name: "Quotation Details" }).closest("section");
     expect(orderDetailsSection).toBeTruthy();
     expect(quotationDetailsSection).toBeTruthy();
 
     await waitFor(() => {
-      expect(within(orderDetailsSection as HTMLElement).getByText("Beta support part", { exact: false })).toBeTruthy();
+      expect(within(orderDetailsSection as HTMLElement).getByText(/Beta support part/)).toBeTruthy();
     });
     expect((orderDetailsSection as HTMLElement).textContent).toContain("#305");
-    expect((quotationDetailsSection as HTMLElement).textContent).toContain("Select");
+    expect((quotationDetailsSection as HTMLElement).textContent).toContain("Select a quotation");
   });
 
   it("filters the expanded order list with search inputs", async () => {
     const user = userEvent.setup();
     renderPage();
 
-    const orderListSection = sectionByHeading("Order List");
+    const orderListSection = sectionByHeading("Purchase Order Lines");
     expect(orderListSection).toBeTruthy();
-    await user.click(within(orderListSection as HTMLElement).getByRole("button", { name: "Expand" }));
 
     await user.type(screen.getByPlaceholderText("Search by order #, item, or quotation number"), "BETA");
 
     await waitFor(() => {
       expect(within(orderListSection as HTMLElement).getByText("Showing 1 / 2 orders")).toBeTruthy();
-      expect(within(orderListSection as HTMLElement).getByText("BETA-200")).toBeTruthy();
+      expect(within(orderListSection as HTMLElement).getByText(/Line #305 .* BETA-200/)).toBeTruthy();
     });
-    expect(within(orderListSection as HTMLElement).queryByText("AOMO3080-125")).toBeNull();
+    expect(within(orderListSection as HTMLElement).queryByText(/Line #304 .* AOMO3080-125/)).toBeNull();
   });
 
-  it("supports collapsing imported quotations", async () => {
+  it("shows purchase-order headers separately from quotation headers", async () => {
     const user = userEvent.setup();
     renderPage();
 
-    const quotationsSection = sectionByHeading("Imported Quotations");
-    expect(quotationsSection).toBeTruthy();
+    const purchaseOrdersSection = sectionByHeading("Purchase Orders");
+    expect(purchaseOrdersSection).toBeTruthy();
 
-    expect(within(quotationsSection as HTMLElement).queryByPlaceholderText("Search by quotation number")).toBeNull();
+    await waitFor(() => {
+      expect(within(purchaseOrdersSection as HTMLElement).getByText("Showing 1 / 1 purchase orders")).toBeTruthy();
+    });
 
-    await user.click(within(quotationsSection as HTMLElement).getByRole("button", { name: "Expand" }));
-    expect(within(quotationsSection as HTMLElement).getByPlaceholderText("Search by quotation number")).toBeTruthy();
+    await user.click(within(purchaseOrdersSection as HTMLElement).getByRole("button", { name: /PO #41/ }));
 
-    await user.click(within(quotationsSection as HTMLElement).getByRole("button", { name: "Collapse" }));
-    expect(within(quotationsSection as HTMLElement).queryByPlaceholderText("Search by quotation number")).toBeNull();
+    const purchaseOrderDetailsSection = screen.getByRole("heading", { name: "Purchase Order Details" }).closest("section");
+    expect(purchaseOrderDetailsSection).toBeTruthy();
+
+    await waitFor(() => {
+      expect(within(purchaseOrderDetailsSection as HTMLElement).getByText("#41")).toBeTruthy();
+      expect(within(purchaseOrderDetailsSection as HTMLElement).getByText("Linked quotations")).toBeTruthy();
+      expect(within(purchaseOrderDetailsSection as HTMLElement).getByText("Line #304 · AOMO3080-125")).toBeTruthy();
+      expect(within(purchaseOrderDetailsSection as HTMLElement).getByText("Line #305 · BETA-200")).toBeTruthy();
+    });
   });
 
   it("splits first and assigns only the created child order when a project is selected", async () => {
     const user = userEvent.setup();
     apiSendMock.mockImplementation(async (path: string, init?: RequestInit) => {
-      if (path === "/orders/304") {
+      if (path === "/purchase-order-lines/304") {
         expect(init?.method).toBe("PUT");
         expect(init?.body).toBe(
           JSON.stringify({
@@ -292,6 +310,7 @@ describe("OrdersPage", () => {
           split_order_id: 401,
           updated_order: {
             order_id: 304,
+            purchase_order_id: 41,
             item_id: 1,
             quotation_id: 12,
             project_id: null,
@@ -306,9 +325,12 @@ describe("OrdersPage", () => {
             status: "Ordered",
             supplier_name: "オーテックス",
             quotation_number: "0000001809",
+            quotation_document_url: "https://example.sharepoint.com/sites/procurement/0000001809",
+            purchase_order_document_url: "https://example.sharepoint.com/sites/procurement/po-41",
           },
           created_order: {
             order_id: 401,
+            purchase_order_id: 41,
             item_id: 1,
             quotation_id: 12,
             project_id: null,
@@ -323,10 +345,12 @@ describe("OrdersPage", () => {
             status: "Ordered",
             supplier_name: "オーテックス",
             quotation_number: "0000001809",
+            quotation_document_url: "https://example.sharepoint.com/sites/procurement/0000001809",
+            purchase_order_document_url: "https://example.sharepoint.com/sites/procurement/po-41",
           },
         };
       }
-      if (path === "/orders/401") {
+      if (path === "/purchase-order-lines/401") {
         expect(init?.method).toBe("PUT");
         expect(init?.body).toBe(JSON.stringify({ project_id: 12 }));
         return {};
@@ -336,11 +360,9 @@ describe("OrdersPage", () => {
 
     renderPage();
 
-    const orderListSection = sectionByHeading("Order List");
+    const orderListSection = sectionByHeading("Purchase Order Lines");
     expect(orderListSection).toBeTruthy();
-    await user.click(within(orderListSection as HTMLElement).getByRole("button", { name: "Expand" }));
-
-    const orderRow = (await screen.findByText("AOMO3080-125")).closest("tr");
+    const orderRow = (await screen.findByText(/Line #304 .* AOMO3080-125/)).closest(".rounded-2xl");
     expect(orderRow).toBeTruthy();
     await user.click(within(orderRow as HTMLElement).getByRole("button", { name: "Edit Order" }));
 
@@ -357,7 +379,7 @@ describe("OrdersPage", () => {
     });
     expect(apiSendMock).toHaveBeenNthCalledWith(
       1,
-      "/orders/304",
+      "/purchase-order-lines/304",
       expect.objectContaining({
         method: "PUT",
         body: JSON.stringify({
@@ -368,7 +390,7 @@ describe("OrdersPage", () => {
     );
     expect(apiSendMock).toHaveBeenNthCalledWith(
       2,
-      "/orders/401",
+      "/purchase-order-lines/401",
       expect.objectContaining({
         method: "PUT",
         body: JSON.stringify({ project_id: 12 }),
@@ -379,7 +401,7 @@ describe("OrdersPage", () => {
   it("preserves explicit project clearing when splitting an assigned order", async () => {
     const user = userEvent.setup();
     apiSendMock.mockImplementation(async (path: string, init?: RequestInit) => {
-      if (path === "/orders/305") {
+      if (path === "/purchase-order-lines/305") {
         expect(init?.method).toBe("PUT");
         expect(init?.body).toBe(
           JSON.stringify({
@@ -393,6 +415,7 @@ describe("OrdersPage", () => {
           split_order_id: 402,
           updated_order: {
             order_id: 305,
+            purchase_order_id: 41,
             item_id: 2,
             quotation_id: 12,
             project_id: null,
@@ -407,9 +430,12 @@ describe("OrdersPage", () => {
             status: "Ordered",
             supplier_name: "オーテックス",
             quotation_number: "0000001809",
+            quotation_document_url: "https://example.sharepoint.com/sites/procurement/0000001809",
+            purchase_order_document_url: "https://example.sharepoint.com/sites/procurement/po-41",
           },
           created_order: {
             order_id: 402,
+            purchase_order_id: 41,
             item_id: 2,
             quotation_id: 12,
             project_id: null,
@@ -424,6 +450,8 @@ describe("OrdersPage", () => {
             status: "Ordered",
             supplier_name: "オーテックス",
             quotation_number: "0000001809",
+            quotation_document_url: "https://example.sharepoint.com/sites/procurement/0000001809",
+            purchase_order_document_url: "https://example.sharepoint.com/sites/procurement/po-41",
           },
         };
       }
@@ -432,11 +460,9 @@ describe("OrdersPage", () => {
 
     renderPage();
 
-    const orderListSection = sectionByHeading("Order List");
+    const orderListSection = sectionByHeading("Purchase Order Lines");
     expect(orderListSection).toBeTruthy();
-    await user.click(within(orderListSection as HTMLElement).getByRole("button", { name: "Expand" }));
-
-    const orderRow = (await screen.findByText("BETA-200")).closest("tr");
+    const orderRow = (await screen.findByText(/Line #305 .* BETA-200/)).closest(".rounded-2xl");
     expect(orderRow).toBeTruthy();
     await user.click(within(orderRow as HTMLElement).getByRole("button", { name: "Edit Order" }));
 
@@ -452,7 +478,7 @@ describe("OrdersPage", () => {
       expect(apiSendMock).toHaveBeenCalledTimes(1);
     });
     expect(apiSendMock).toHaveBeenCalledWith(
-      "/orders/305",
+      "/purchase-order-lines/305",
       expect.objectContaining({
         method: "PUT",
         body: JSON.stringify({
@@ -485,7 +511,7 @@ describe("OrdersPage", () => {
 
     fireEvent.submit(screen.getByRole("button", { name: "Preview Import" }).closest("form") as HTMLFormElement);
     await waitFor(() => {
-      expect(apiSendFormMock).toHaveBeenCalledWith("/orders/import-preview", expect.any(FormData));
+      expect(apiSendFormMock).toHaveBeenCalledWith("/purchase-order-lines/import-preview", expect.any(FormData));
     });
 
     expect(

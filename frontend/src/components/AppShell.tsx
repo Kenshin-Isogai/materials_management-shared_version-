@@ -18,7 +18,7 @@ const nav = [
   { to: "/location", label: "Location" },
   { to: "/projects", label: "Projects" },
   { to: "/procurement", label: "Procurement" },
-  { to: "/orders", label: "Orders" },
+  { to: "/purchase-order-lines", label: "Purchase Orders" },
   { to: "/arrival", label: "Arrival" },
   { to: "/movements", label: "Movements" },
   { to: "/reserve", label: "Reserve" },
