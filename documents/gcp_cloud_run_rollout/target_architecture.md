@@ -170,7 +170,7 @@ For the current repository state, the trust boundary is split into "implemented 
 
 - reads may remain broadly available according to the current application contract
 - browser/API requests use Bearer JWT identity with app-user mapping from OIDC claims
-- the frontend still uses manual token entry today; a real Google Identity sign-in flow remains follow-up work
+- the frontend still keeps manual token entry as a fallback today; the primary cloud target is Identity Platform sign-in
 - deployed environments still need JWKS/OIDC-backed verification and live cloud validation before this should be treated as stable production posture
 
 ## Initial operational guardrails

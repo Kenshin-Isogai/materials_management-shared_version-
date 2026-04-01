@@ -1,3 +1,13 @@
+## 2026-04-01
+
+### Changed
+
+- Replaced the transitional browser Google-sign-in path with Identity Platform email/password sign-in for the Cloud Run rollout.
+  - frontend header login now accepts email/password against Identity Platform when `VITE_IDENTITY_PLATFORM_API_KEY` is configured
+  - frontend auth storage now keeps refresh tokens and refreshes bearer sessions before expiry
+  - Cloud Run deployment assets now include backend/frontend env templates, PowerShell deploy scripts, a migration-job script, a Secret Manager helper, and a GitHub Actions deployment workflow
+  - rollout docs now describe Identity Platform configuration instead of Google Identity client setup
+
 ## 2026-03-30
 
 ### Changed

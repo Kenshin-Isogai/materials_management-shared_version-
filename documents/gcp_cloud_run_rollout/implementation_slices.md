@@ -14,12 +14,12 @@ Goal:
 
 Current status:
 
-- repo-side implementation is now in place for Google Identity login UI, JWKS-backed verification, domain audit logging, and diagnostics exposure policy
+- repo-side implementation is now in place for Identity Platform login UI, JWKS-backed verification, domain audit logging, and diagnostics exposure policy
 - remaining follow-up is live cloud-side configuration and validation, not additional repository scaffolding
 
 Main work:
 
-- add Google Identity frontend login UI/state flow
+- add Identity Platform frontend login UI/state flow
 - add deployed-environment JWKS/OIDC verification
 - add domain audit logging for high-impact mutations
 - review public diagnostics posture for cloud deployments

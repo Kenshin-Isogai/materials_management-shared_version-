@@ -25,7 +25,7 @@ Goal:
 
 Needed outcome:
 
-- a real Google Identity sign-in flow exists for browser mutations
+- a real Identity Platform sign-in flow exists for browser mutations
 - deployed environments use the `jwks` verifier path with real issuer/audience/JWKS settings
 - admin/operator/viewer boundaries are explicit and enforced
 - production does not rely on manual token pasting as its long-term browser login model
@@ -102,7 +102,7 @@ Needed outcome:
 
 ## Suggested execution order
 
-1. complete repo-side follow-up for Google Identity/JWKS, audit logging, and diagnostics posture
+1. complete repo-side follow-up for Identity Platform/JWKS, audit logging, and diagnostics posture
 2. real GCP resource provisioning
 3. live validation in `dev`
 4. monitoring and backup baseline
@@ -116,4 +116,4 @@ Treat the rollout as operationally ready only when all of the following are true
 - backup and restore expectations are active, not just documented
 - rollback procedure is rehearsed
 - production monitoring exists
-- the current bearer-token posture is backed by real Google Identity/JWKS or is explicitly accepted with time-bounded risk ownership
+- the current bearer-token posture is backed by real Identity Platform/JWKS or is explicitly accepted with time-bounded risk ownership

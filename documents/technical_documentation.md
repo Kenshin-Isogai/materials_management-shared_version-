@@ -28,7 +28,7 @@ This document explains the implemented architecture of the Materials Management 
   - verified claims are normalized into `request.state.identity` (`subject`, `email`, `provider`, `claims`, optional `hosted_domain`)
   - app users are resolved into `request.state.user` through active `users` rows using `email` or `identity_provider` + `external_subject`, with optional hosted-domain matching
   - configured OIDC hosted-domain allow-lists only reject tokens that actually carry an `hd` claim; per-user hosted-domain mappings remain enforced when configured
-  - browser login now supports Google Identity Services when `VITE_GOOGLE_CLIENT_ID` is configured, while manual token entry remains as a local/test fallback
+  - browser login now supports Identity Platform email/password sign-in when `VITE_IDENTITY_PLATFORM_API_KEY` is configured, while manual token entry remains as a local/test fallback
   - database-side audit triggers continue to populate `created_by` / `updated_by` / `performed_by` where supported
   - application-level domain audit events are now emitted through structured logs for successful high-impact mutations and export/download flows
   - `AUTH_MODE` controls auth posture: `none`, `oidc_dry_run`, `oidc_enforced`

@@ -18,7 +18,7 @@ The repository already contains most of the code-level changes needed for:
 The main remaining work is now the live-production layer on top of an already-hardened repository:
 
 - real GCP resource wiring and live validation
-- cloud-side Google/OIDC client and issuer rollout
+- cloud-side Identity Platform and issuer rollout
 - backup/restore and rollback procedure ownership
 - production monitoring, alerting, and routine change management
 
@@ -31,7 +31,7 @@ The main remaining work is now the live-production layer on top of an already-ha
 - persistent application-managed files use GCS
 - Cloud SQL uses the connector / Unix socket model
 - the first rollout keeps nginx in the frontend container
-- repository auth now assumes Bearer JWT identity and already includes Google Identity UI, JWKS-backed verification, diagnostics gating, and structured domain audit logs
+- repository auth now assumes Bearer JWT identity and already includes Identity Platform email/password UI, JWKS-backed verification, diagnostics gating, and structured domain audit logs
 - order import no longer accepts legacy `pdf_link`; `quotation_document_url` is now the only supported contract
 
 ## Reading order

@@ -1,0 +1,128 @@
+name: Deploy GCP
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub Environment name
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+      image_tag:
+        description: Image tag to publish
+        required: true
+        default: manual
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ vars.GCP_REGION }}
+      GCP_ARTIFACT_REGISTRY: ${{ vars.GCP_ARTIFACT_REGISTRY }}
+      BACKEND_SERVICE_NAME: ${{ vars.BACKEND_SERVICE_NAME }}
+      FRONTEND_SERVICE_NAME: ${{ vars.FRONTEND_SERVICE_NAME }}
+      INSTANCE_CONNECTION_NAME: ${{ vars.INSTANCE_CONNECTION_NAME }}
+      GCS_BUCKET: ${{ vars.GCS_BUCKET }}
+      GCS_OBJECT_PREFIX: ${{ vars.GCS_OBJECT_PREFIX }}
+      BACKEND_URL: ${{ vars.BACKEND_URL }}
+      FRONTEND_URL: ${{ vars.FRONTEND_URL }}
+      DATABASE_URL_SECRET_NAME: ${{ vars.DATABASE_URL_SECRET_NAME }}
+      GOOGLE_WORKLOAD_IDENTITY_PROVIDER: ${{ secrets.GOOGLE_WORKLOAD_IDENTITY_PROVIDER }}
+      GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+      BACKEND_RUNTIME_SERVICE_ACCOUNT: ${{ secrets.BACKEND_RUNTIME_SERVICE_ACCOUNT }}
+      FRONTEND_RUNTIME_SERVICE_ACCOUNT: ${{ secrets.FRONTEND_RUNTIME_SERVICE_ACCOUNT }}
+      MIGRATE_RUNTIME_SERVICE_ACCOUNT: ${{ secrets.MIGRATE_RUNTIME_SERVICE_ACCOUNT }}
+      IDENTITY_PLATFORM_API_KEY: ${{ secrets.IDENTITY_PLATFORM_API_KEY }}
+      IMAGE_TAG: ${{ inputs.image_tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.GOOGLE_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ env.GOOGLE_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Artifact Registry auth
+        run: gcloud auth configure-docker "${GCP_REGION}-docker.pkg.dev" --quiet
+
+      - name: Build backend image
+        run: |
+          docker build \
+            -t "${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${GCP_ARTIFACT_REGISTRY}/materials-backend:${IMAGE_TAG}" \
+            ./backend
+
+      - name: Push backend image
+        run: docker push "${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${GCP_ARTIFACT_REGISTRY}/materials-backend:${IMAGE_TAG}"
+
+      - name: Run backend migration job
+        run: |
+          gcloud run jobs deploy materials-management-backend-migrate \
+            --project "${GCP_PROJECT_ID}" \
+            --region "${GCP_REGION}" \
+            --image "${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${GCP_ARTIFACT_REGISTRY}/materials-backend:${IMAGE_TAG}" \
+            --service-account "${MIGRATE_RUNTIME_SERVICE_ACCOUNT}" \
+            --set-cloudsql-instances "${INSTANCE_CONNECTION_NAME}" \
+            --set-secrets "DATABASE_URL=${DATABASE_URL_SECRET_NAME}:latest" \
+            --set-env-vars "APP_RUNTIME_TARGET=cloud_run,AUTO_MIGRATE_ON_STARTUP=0" \
+            --command uv \
+            --args run,alembic,upgrade,head
+          gcloud run jobs execute materials-management-backend-migrate \
+            --project "${GCP_PROJECT_ID}" \
+            --region "${GCP_REGION}" \
+            --wait
+
+      - name: Deploy backend service
+        run: |
+          gcloud run deploy "${BACKEND_SERVICE_NAME}" \
+            --project "${GCP_PROJECT_ID}" \
+            --region "${GCP_REGION}" \
+            --image "${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${GCP_ARTIFACT_REGISTRY}/materials-backend:${IMAGE_TAG}" \
+            --service-account "${BACKEND_RUNTIME_SERVICE_ACCOUNT}" \
+            --allow-unauthenticated \
+            --set-cloudsql-instances "${INSTANCE_CONNECTION_NAME}" \
+            --set-secrets "DATABASE_URL=${DATABASE_URL_SECRET_NAME}:latest" \
+            --set-env-vars "APP_RUNTIME_TARGET=cloud_run,AUTO_MIGRATE_ON_STARTUP=0,STRUCTURED_LOGGING=1,WEB_CONCURRENCY=2,DB_POOL_SIZE=5,DB_MAX_OVERFLOW=10,DB_POOL_TIMEOUT=30,DB_POOL_RECYCLE_SECONDS=1800,MAX_UPLOAD_BYTES=33554432,HEAVY_REQUEST_TARGET_SECONDS=60,CLOUD_RUN_CONCURRENCY_TARGET=10,STORAGE_BACKEND=gcs,GCS_BUCKET=${GCS_BUCKET},GCS_OBJECT_PREFIX=${GCS_OBJECT_PREFIX},INSTANCE_CONNECTION_NAME=${INSTANCE_CONNECTION_NAME},CORS_ALLOWED_ORIGINS=${FRONTEND_URL},BACKEND_PUBLIC_BASE_URL=${BACKEND_URL},FRONTEND_PUBLIC_BASE_URL=${FRONTEND_URL},AUTH_MODE=oidc_enforced,RBAC_MODE=rbac_enforced,JWT_VERIFIER=jwks,OIDC_PROVIDER=identity_platform,OIDC_EXPECTED_ISSUER=https://securetoken.google.com/${GCP_PROJECT_ID},OIDC_EXPECTED_AUDIENCE=${GCP_PROJECT_ID},OIDC_JWKS_URL=https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com,OIDC_REQUIRE_EMAIL_VERIFIED=1,DIAGNOSTICS_AUTH_ROLE=admin" \
+            --concurrency 10 \
+            --cpu 1 \
+            --memory 1Gi \
+            --timeout 300 \
+            --min-instances 0 \
+            --max-instances 10
+
+      - name: Build frontend image
+        run: |
+          docker build \
+            -t "${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${GCP_ARTIFACT_REGISTRY}/materials-frontend:${IMAGE_TAG}" \
+            --build-arg "VITE_API_BASE=${BACKEND_URL}/api" \
+            --build-arg "VITE_IDENTITY_PLATFORM_API_KEY=${IDENTITY_PLATFORM_API_KEY}" \
+            ./frontend
+
+      - name: Push frontend image
+        run: docker push "${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${GCP_ARTIFACT_REGISTRY}/materials-frontend:${IMAGE_TAG}"
+
+      - name: Deploy frontend service
+        run: |
+          gcloud run deploy "${FRONTEND_SERVICE_NAME}" \
+            --project "${GCP_PROJECT_ID}" \
+            --region "${GCP_REGION}" \
+            --image "${GCP_REGION}-docker.pkg.dev/${GCP_PROJECT_ID}/${GCP_ARTIFACT_REGISTRY}/materials-frontend:${IMAGE_TAG}" \
+            --service-account "${FRONTEND_RUNTIME_SERVICE_ACCOUNT}" \
+            --allow-unauthenticated \
+            --concurrency 50 \
+            --cpu 1 \
+            --memory 512Mi \
+            --timeout 60 \
+            --min-instances 0 \
+            --max-instances 10

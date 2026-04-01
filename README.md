@@ -122,7 +122,7 @@ This wrapper sets `NGINX_HOST_PORT=8088` for the E2E stack, so Playwright does n
 - Set `DATABASE_URL` from Secret Manager / Cloud SQL connection config
 - Set `INSTANCE_CONNECTION_NAME` for the target Cloud SQL instance and keep `DATABASE_URL` on the Cloud SQL Unix-socket form
 - Set `VITE_API_BASE` to the backend Cloud Run public `/api` URL for split-service deployment
-- Set `VITE_GOOGLE_CLIENT_ID` to the browser OAuth client used for Google Identity sign-in
+- Set `VITE_IDENTITY_PLATFORM_API_KEY` to the Identity Platform web API key used by the frontend login form
 - The built frontend image no longer proxies `/api` to an internal backend container by default; browser API traffic should come from `VITE_API_BASE`
 - Set `BACKEND_PUBLIC_BASE_URL` and `FRONTEND_PUBLIC_BASE_URL` if you want the runtime health surface to report the intended public URLs explicitly
 - Set `CORS_ALLOWED_ORIGINS` to the frontend Cloud Run origin explicitly
@@ -139,6 +139,8 @@ This wrapper sets `NGINX_HOST_PORT=8088` for the E2E stack, so Playwright does n
 - manual order-import missing-item outputs are now exposed through artifact metadata/download endpoints rather than raw path fields
 - Legacy ZIP/PDF compatibility import remains a local/shared-server workflow, not the target Cloud Run path
 - Concrete first-rollout deploy steps are documented in [documents/gcp_cloud_run_rollout/cloud_run_deployment_runbook.md](documents/gcp_cloud_run_rollout/cloud_run_deployment_runbook.md)
+- Repo-side deployment assets live under `deployment/gcp/`, including backend/frontend env templates, PowerShell deploy scripts, and a Secret Manager helper
+- A manual GitHub Actions deploy workflow now lives at `.github/workflows/deploy-gcp.yml`
 
 ## API
 
@@ -148,7 +150,7 @@ This wrapper sets `NGINX_HOST_PORT=8088` for the E2E stack, so Playwright does n
 - Runtime auth is controlled by `AUTH_MODE` (`none`, `oidc_dry_run`, `oidc_enforced`) and `RBAC_MODE` (`none`, `rbac_dry_run`, `rbac_enforced`).
 - `JWT_VERIFIER` supports `shared_secret` for local fixtures and `jwks` for deployed OIDC verification.
 - App users are mapped from verified OIDC claims (`email`, `sub`, `hd`) onto active rows in `users`.
-- The frontend header bar now supports Google Identity sign-in when `VITE_GOOGLE_CLIENT_ID` is configured and keeps manual Bearer token entry as a fallback.
+- The frontend header bar now supports Identity Platform email/password sign-in when `VITE_IDENTITY_PLATFORM_API_KEY` is configured and keeps manual Bearer token entry as a fallback.
 
 ## Database and File Layout
 

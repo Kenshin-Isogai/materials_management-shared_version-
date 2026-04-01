@@ -1,3 +1,8 @@
+import {
+  getStoredAccessTokenOrNull as getStoredAccessTokenOrNullFromAuth,
+  getValidAccessTokenOrNull,
+  setStoredAccessToken as setStoredAccessTokenInAuth,
+} from "./auth";
 import type { ApiResponse } from "./types";
 
 function normalizeApiBase(value: unknown): string {
@@ -7,7 +12,6 @@ function normalizeApiBase(value: unknown): string {
 }
 
 const API_BASE = normalizeApiBase(import.meta.env.VITE_API_BASE);
-const ACCESS_TOKEN_STORAGE_KEY = "materials.access-token";
 const USERS_CHANGED_EVENT = "materials:users-changed";
 
 function toAbsolutePath(path: string): string {
@@ -19,23 +23,12 @@ function buildApiUrl(path: string): string {
   return `${API_BASE}${toAbsolutePath(path)}`;
 }
 
-function getStoredAccessToken(): string | null {
-  if (typeof window === "undefined") return null;
-  const value = window.localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY);
-  return value && value.trim() ? value.trim() : null;
-}
-
 export function setStoredAccessToken(token: string | null): void {
-  if (typeof window === "undefined") return;
-  if (token && token.trim()) {
-    window.localStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, token.trim());
-    return;
-  }
-  window.localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
+  setStoredAccessTokenInAuth(token);
 }
 
 export function getStoredAccessTokenOrNull(): string | null {
-  return getStoredAccessToken();
+  return getStoredAccessTokenOrNullFromAuth();
 }
 
 export function notifyUsersChanged(): void {
@@ -61,9 +54,9 @@ type BuildHeadersOptions = {
   allowAnonymousMutation?: boolean;
 };
 
-function buildHeaders(init?: RequestInit, options?: BuildHeadersOptions): Headers {
+async function buildHeaders(init?: RequestInit, options?: BuildHeadersOptions): Promise<Headers> {
   const headers = new Headers(init?.headers ?? {});
-  const accessToken = getStoredAccessToken();
+  const accessToken = await getValidAccessTokenOrNull();
   if (accessToken) {
     headers.set("Authorization", `Bearer ${accessToken}`);
   }
@@ -78,7 +71,7 @@ function buildHeaders(init?: RequestInit, options?: BuildHeadersOptions): Header
 async function fetchApi(path: string, init?: RequestInit): Promise<Response> {
   return fetch(buildApiUrl(path), {
     ...init,
-    headers: buildHeaders(init),
+    headers: await buildHeaders(init),
   });
 }
 
@@ -168,7 +161,7 @@ export async function apiSend<T>(
   init?: RequestInit,
   options?: BuildHeadersOptions
 ): Promise<T> {
-  const headers = buildHeaders({ ...init, method: init?.method ?? "POST" }, options);
+  const headers = await buildHeaders({ ...init, method: init?.method ?? "POST" }, options);
   headers.set("Content-Type", "application/json");
   const res = await fetch(buildApiUrl(path), {
     ...init,

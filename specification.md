@@ -37,7 +37,7 @@ The Optical Component Inventory Management System provides comprehensive lifecyc
 | Package Manager (Frontend) | npm |
 | Frontend Builder | Vite |
 | User Model | Shared-server operation on trusted internal network, with forward compatibility for fuller RBAC deployment |
-| Authentication/Authorization | Browser/API auth uses `Authorization: Bearer <JWT>`. Verified OIDC claims (`email`, `sub`, optional `hd`) resolve to a pre-registered active app user. `AUTH_MODE` controls bearer-token enforcement (`none`, `oidc_dry_run`, `oidc_enforced`) and `RBAC_MODE` controls role enforcement (`none`, `rbac_dry_run`, `rbac_enforced`). Bootstrap exception: `POST /api/users` may omit Bearer auth only when zero active users exist. |
+| Authentication/Authorization | Browser/API auth uses `Authorization: Bearer <JWT>`. The browser-facing cloud target uses Identity Platform email/password sign-in to obtain the Bearer token, while manual token entry remains a local/test fallback. Verified OIDC claims (`email`, `sub`, optional `hd`) resolve to a pre-registered active app user. `AUTH_MODE` controls bearer-token enforcement (`none`, `oidc_dry_run`, `oidc_enforced`) and `RBAC_MODE` controls role enforcement (`none`, `rbac_dry_run`, `rbac_enforced`). Bootstrap exception: `POST /api/users` may omit Bearer auth only when zero active users exist. |
 | Timezone | Fixed JST for all date/time fields |
 | CSV Encoding | UTF-8 (no BOM) |
 | Expected Scale | Items: 10,000 / Orders: 5,000 / Transactions: ~100,000 |
