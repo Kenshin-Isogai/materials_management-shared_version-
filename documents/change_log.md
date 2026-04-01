@@ -4,6 +4,7 @@
 
 - Tightened cloud-auth UX and error handling after the first GCP rollout validation.
   - frontend API failures now distinguish auth-required, backend-unavailable, and generic request failures instead of surfacing a generic fetch error
+  - frontend mutation requests now preserve auth-classified header-preparation failures (including expired-session refresh failures) instead of masking them as backend-unavailable errors
   - dashboard and shell login status now show operator-meaningful messages when a token is missing, invalid, or not mapped to an active app user
   - dashboard/workspace views and the global shell now show dedicated sign-in guidance and environment-unavailable callouts instead of raw error strings
   - projects, inventory, reservations, orders, items, history, and shared editor surfaces now reuse the same API error presentation instead of rendering raw `String(error)` output
