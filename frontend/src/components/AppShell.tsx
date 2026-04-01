@@ -1,20 +1,15 @@
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { RouteErrorBoundary } from "./RouteErrorBoundary";
-import { StatusCallout } from "./StatusCallout";
 import {
   clearStoredAuthSession,
   getStoredAuthSessionSnapshot,
   getStoredAccessTokenOrNull,
   isIdentityPlatformConfigured,
-  sendIdentityPlatformVerificationEmail,
-  signInWithIdentityPlatformEmailPassword,
-  signUpWithIdentityPlatformEmailPassword,
   subscribeAuthSessionChanged,
 } from "../lib/auth";
 import {
   apiGet,
-  setStoredAccessToken,
   subscribeUsersChanged,
 } from "../lib/api";
 import { isAuthError, isEmailVerificationRequiredError, presentApiError } from "../lib/errorUtils";
@@ -42,15 +37,7 @@ const nav = [
 export function AppShell() {
   const location = useLocation();
   const navigate = useNavigate();
-  const [accessTokenDraft, setAccessTokenDraft] = useState<string>("");
   const [isSignedIn, setIsSignedIn] = useState<boolean>(Boolean(getStoredAccessTokenOrNull()));
-  const [loginEmail, setLoginEmail] = useState("");
-  const [loginPassword, setLoginPassword] = useState("");
-  const [loginBusy, setLoginBusy] = useState(false);
-  const [signupBusy, setSignupBusy] = useState(false);
-  const [loginError, setLoginError] = useState<string | null>(null);
-  const [signupError, setSignupError] = useState<string | null>(null);
-  const [signupMessage, setSignupMessage] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [registrationStatus, setRegistrationStatus] = useState<RegistrationStatus | null>(null);
   const [verificationRequired, setVerificationRequired] = useState(false);
@@ -60,16 +47,6 @@ export function AppShell() {
   const [authResolutionBusy, setAuthResolutionBusy] = useState(false);
   const onRegistrationPage = location.pathname === "/registration";
   const onVerifyEmailPage = location.pathname === "/verify-email";
-  const [authFormMode, setAuthFormMode] = useState<"signin" | "signup">("signin");
-  const allowManualTokenEntry =
-    !isIdentityPlatformConfigured() ||
-    ["localhost", "127.0.0.1"].includes(window.location.hostname);
-
-  const clearAuthFeedback = () => {
-    setLoginError(null);
-    setSignupError(null);
-    setSignupMessage(null);
-  };
 
   useEffect(() => {
     if (!isSignedIn) {
@@ -164,7 +141,6 @@ export function AppShell() {
       subscribeAuthSessionChanged(() => {
         setIsSignedIn(Boolean(getStoredAccessTokenOrNull()));
         setAuthVersion((value) => value + 1);
-        clearAuthFeedback();
         setAuthStatusMessage(null);
         setRegistrationStatus(null);
         setVerificationRequired(false);
@@ -172,75 +148,28 @@ export function AppShell() {
     [],
   );
 
-  const handleTokenChange = (nextToken: string) => {
-    setStoredAccessToken(nextToken || null);
-    setAccessTokenDraft(nextToken);
-    setIsSignedIn(Boolean(nextToken.trim()));
-    clearAuthFeedback();
-    setAuthStatusMessage(null);
-  };
-
   const clearToken = () => {
     clearStoredAuthSession();
-    setAccessTokenDraft("");
-    setLoginEmail("");
-    setLoginPassword("");
     setCurrentUser(null);
     setRegistrationStatus(null);
     setVerificationRequired(false);
     setIsSignedIn(false);
-    clearAuthFeedback();
-    setAuthStatusMessage("Signed out.");
+    setAuthStatusMessage(null);
   };
 
-  const submitIdentityPlatformLogin = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setLoginBusy(true);
-    clearAuthFeedback();
-    try {
-      await signInWithIdentityPlatformEmailPassword(loginEmail, loginPassword);
-      setLoginPassword("");
-      setAccessTokenDraft("");
-      setIsSignedIn(true);
-      setAuthStatusMessage("Signed in. Loading your user profile...");
-    } catch (error) {
-      setLoginError(presentApiError(error));
-    } finally {
-      setLoginBusy(false);
+  /* ── Redirect unauthenticated users to /login ── */
+  /* Exclude /verify-email (handles oobCode action links from fresh browser sessions)
+     and /registration (shows guidance for anonymous users). */
+  useEffect(() => {
+    if (
+      !isSignedIn &&
+      isIdentityPlatformConfigured() &&
+      !onVerifyEmailPage &&
+      !onRegistrationPage
+    ) {
+      navigate("/login", { replace: true });
     }
-  };
-
-  const submitIdentityPlatformSignup = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    setSignupBusy(true);
-    clearAuthFeedback();
-    try {
-      await signUpWithIdentityPlatformEmailPassword(loginEmail, loginPassword);
-      await sendIdentityPlatformVerificationEmail();
-      setIsSignedIn(true);
-      setVerificationRequired(true);
-      setAuthStatusMessage("Account created. Verify your email address before continuing.");
-      setSignupMessage("Account created. A verification email has been sent.");
-      setLoginPassword("");
-    } catch (error) {
-      setSignupError(presentApiError(error));
-    } finally {
-      setSignupBusy(false);
-    }
-  };
-
-  const resendVerificationEmail = async () => {
-    setSignupBusy(true);
-    clearAuthFeedback();
-    try {
-      await sendIdentityPlatformVerificationEmail();
-      setSignupMessage("Verification email sent. Complete verification, then sign in again.");
-    } catch (error) {
-      setSignupError(presentApiError(error));
-    } finally {
-      setSignupBusy(false);
-    }
-  };
+  }, [isSignedIn, navigate, onVerifyEmailPage, onRegistrationPage]);
 
   useEffect(() => {
     if (!isSignedIn || authResolutionBusy) return;
@@ -265,14 +194,6 @@ export function AppShell() {
     registrationStatus,
     verificationRequired,
   ]);
-
-  const helperMessage = !isSignedIn
-    ? isIdentityPlatformConfigured()
-      ? "Create an account or sign in first. After email verification, unapproved users are guided to registration automatically."
-      : "Paste a valid Bearer token to access protected pages."
-    : currentUser === null && !authStatusMessage
-      ? "Signed-in tokens still need an active app-user mapping before protected pages can load."
-      : null;
 
   const visibleNav = useMemo(() => {
     if (!isSignedIn) return nav;
@@ -305,152 +226,51 @@ export function AppShell() {
               {item.label}
             </NavLink>
           ))}
-          <div className="ml-auto flex min-w-[22rem] flex-col gap-2 rounded-lg bg-white px-3 py-2 text-sm shadow-sm">
-            <div className="flex items-center gap-2">
-              <span className="font-semibold text-slate-600">Login</span>
-              <span className="text-xs text-slate-500">
-                {currentUser ? `${currentUser.display_name} (${currentUser.role})` : isSignedIn ? "signed in" : "anonymous"}
-              </span>
-              {isSignedIn ? (
+
+          {/* ── Compact Auth Status ── */}
+          <div className="ml-auto flex items-center gap-3">
+            {isSignedIn ? (
+              <>
+                <div className="flex items-center gap-2 rounded-lg bg-white px-3 py-2 text-sm shadow-sm">
+                  <span className="inline-block h-2 w-2 rounded-full bg-emerald-500" />
+                  <span className="font-semibold text-slate-700">
+                    {currentUser
+                      ? currentUser.display_name
+                      : authSession?.email
+                        ? authSession.email
+                        : "Signed in"}
+                  </span>
+                  {currentUser && (
+                    <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-xs font-medium text-slate-500">
+                      {currentUser.role}
+                    </span>
+                  )}
+                  {authSession?.emailVerified === false && (
+                    <span className="rounded-md bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700">
+                      unverified
+                    </span>
+                  )}
+                </div>
                 <button
-                  className="ml-auto rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50"
+                  className="rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600 shadow-sm transition hover:bg-slate-50"
                   onClick={clearToken}
                   type="button"
                 >
                   Sign out
                 </button>
-              ) : null}
-            </div>
-            {!isSignedIn && isIdentityPlatformConfigured() ? (
-              <div className="grid gap-2">
-                <div className="flex gap-2">
-                  <button
-                    className={authFormMode === "signin" ? "button-subtle" : "rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600"}
-                    onClick={() => {
-                      clearAuthFeedback();
-                      setAuthFormMode("signin");
-                    }}
-                    type="button"
-                  >
-                    Sign in
-                  </button>
-                  <button
-                    className={authFormMode === "signup" ? "button-subtle" : "rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600"}
-                    onClick={() => {
-                      clearAuthFeedback();
-                      setAuthFormMode("signup");
-                    }}
-                    type="button"
-                  >
-                    Create account
-                  </button>
-                </div>
-                <form className="grid gap-2" onSubmit={authFormMode === "signin" ? submitIdentityPlatformLogin : submitIdentityPlatformSignup}>
-                <label className="flex items-center gap-2">
-                  <span className="w-24 font-semibold text-slate-600">Email</span>
-                  <input
-                    className="min-w-0 flex-1 rounded-md border border-slate-200 px-2 py-1 text-slate-900 outline-none"
-                    autoComplete="email"
-                    onChange={(event) => setLoginEmail(event.target.value)}
-                    placeholder="user@example.com"
-                    required
-                    type="email"
-                    value={loginEmail}
-                  />
-                </label>
-                <label className="flex items-center gap-2">
-                  <span className="w-24 font-semibold text-slate-600">Password</span>
-                  <input
-                    className="min-w-0 flex-1 rounded-md border border-slate-200 px-2 py-1 text-slate-900 outline-none"
-                    autoComplete="current-password"
-                    onChange={(event) => setLoginPassword(event.target.value)}
-                    placeholder="Identity Platform password"
-                    required
-                    type="password"
-                    value={loginPassword}
-                  />
-                </label>
-                <div className="flex items-center gap-2">
-                  <button
-                    className="button-subtle"
-                    disabled={(authFormMode === "signin" ? loginBusy : signupBusy) || !loginEmail.trim() || !loginPassword}
-                    type="submit"
-                  >
-                    {authFormMode === "signin"
-                      ? loginBusy
-                        ? "Signing in..."
-                        : "Sign in"
-                      : signupBusy
-                        ? "Creating..."
-                        : "Create account"}
-                  </button>
-                  <span className="text-xs text-slate-500">
-                    {authFormMode === "signin"
-                      ? "Identity Platform email/password"
-                      : "Email/password + verification mail"}
-                  </span>
-                </div>
-                </form>
-              </div>
-            ) : null}
-            {!isSignedIn && allowManualTokenEntry ? (
-              <label className="flex items-center gap-2">
-                <span className="font-semibold text-slate-600">
-                  {isIdentityPlatformConfigured() ? "Fallback token" : "Bearer token"}
-                </span>
-                <input
-                  className="min-w-0 flex-1 bg-transparent text-slate-900 outline-none"
-                  onChange={(event) => handleTokenChange(event.target.value)}
-                  placeholder="Paste local fixture or OIDC bearer token"
-                  value={accessTokenDraft}
-                />
-              </label>
-            ) : null}
-            {isSignedIn ? (
-              <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                {currentUser
-                  ? `Signed in as ${currentUser.display_name} (${currentUser.role})`
-                  : authSession?.email
-                    ? `Signed in as ${authSession.email}${authSession.emailVerified ? "" : " (unverified)"}`
-                    : "Signed in"}
-              </div>
-            ) : null}
-            {!isSignedIn && isIdentityPlatformConfigured() ? (
-              <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
-                New users: create an account, verify the email, then sign in. Registration opens automatically after verification.
-                <div className="mt-2">
-                  <NavLink className="font-semibold text-signal hover:underline" to="/registration">
-                    Open registration guidance
-                  </NavLink>
-                </div>
-              </div>
-            ) : null}
-            {loginError ? <p className="text-xs text-red-600">{loginError}</p> : null}
-            {signupError ? <p className="text-xs text-red-600">{signupError}</p> : null}
-            {signupMessage ? <p className="text-xs text-emerald-700">{signupMessage}</p> : null}
-            {isSignedIn && verificationRequired ? (
-              <button className="button-subtle" disabled={signupBusy} onClick={() => void resendVerificationEmail()} type="button">
-                {signupBusy ? "Sending..." : "Resend verification email"}
-              </button>
-            ) : null}
-            {authStatusMessage ? <p className="text-xs text-slate-500">{authStatusMessage}</p> : null}
-            {!loginError && helperMessage ? <p className="text-xs text-slate-500">{helperMessage}</p> : null}
+              </>
+            ) : (
+              <NavLink
+                to="/login"
+                className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50"
+              >
+                Sign in
+              </NavLink>
+            )}
           </div>
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-4 py-8">
-        {!isSignedIn && (
-          <div className="mb-6">
-            <StatusCallout
-              title="Sign in before opening protected pages"
-              message={
-                isIdentityPlatformConfigured()
-                  ? "Create an account or sign in above. After verification, accounts without app access are sent to registration for admin approval."
-                  : "Set a Bearer token above before opening protected pages."
-              }
-            />
-          </div>
-        )}
         <RouteErrorBoundary location={location}>
           <Outlet />
         </RouteErrorBoundary>

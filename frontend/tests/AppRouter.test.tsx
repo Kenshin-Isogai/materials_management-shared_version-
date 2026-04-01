@@ -154,6 +154,7 @@ describe("app router", () => {
   });
 
   it("renders the workspace route through a data router without crashing", async () => {
+    window.sessionStorage.setItem("materials.auth-session", JSON.stringify({ accessToken: "token" }));
     renderRouter("/workspace");
 
     expect(screen.getByRole("heading", { name: "Workspace" })).toBeTruthy();
@@ -166,6 +167,7 @@ describe("app router", () => {
   });
 
   it("redirects the removed /rfq route back to the dashboard", async () => {
+    window.sessionStorage.setItem("materials.auth-session", JSON.stringify({ accessToken: "token" }));
     const router = renderRouter("/rfq");
 
     await waitFor(() => {
@@ -202,18 +204,12 @@ describe("app router", () => {
     ).toBeTruthy();
   });
 
-  it("shows sign-in guidance on the dashboard before anonymous users load protected data", async () => {
-    renderRouter("/");
+  it("redirects anonymous users to /login", async () => {
+    const router = renderRouter("/");
 
     await waitFor(() => {
-      expect(screen.getByText("Sign in to load dashboard data")).toBeTruthy();
+      expect(router.state.location.pathname).toBe("/login");
     });
-    expect(
-      screen.getByText(
-        "Create an account or sign in from the header first. After email verification, unapproved users are guided to registration automatically.",
-      ),
-    ).toBeTruthy();
-    expect(apiGetMock).not.toHaveBeenCalledWith("/dashboard/summary");
   });
 
   it("shows an environment-unavailable message when signed-in dashboard requests cannot reach the backend", async () => {
@@ -330,7 +326,7 @@ describe("app router", () => {
       }),
     );
 
-    renderRouter("/");
+    renderRouter("/login");
 
     fireEvent.click(screen.getByRole("button", { name: "Create account" }));
     fireEvent.change(screen.getByLabelText("Email"), {
