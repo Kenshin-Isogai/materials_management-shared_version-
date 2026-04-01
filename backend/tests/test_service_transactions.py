@@ -163,6 +163,140 @@ def test_update_user_rejects_invalid_role(conn):
 
     assert exc_info.value.code == "INVALID_ROLE"
 
+
+def test_create_registration_request_rejects_pending_email_and_username(conn):
+    request = service.create_registration_request(
+        conn,
+        data={
+            "username": "pending-user",
+            "display_name": "Pending User",
+            "requested_role": "viewer",
+        },
+        email="pending@example.test",
+        external_subject="sub-pending",
+        identity_provider="identity_platform",
+    )
+
+    with pytest.raises(AppError) as email_exc:
+        service.create_registration_request(
+            conn,
+            data={
+                "username": "other-user",
+                "display_name": "Other User",
+                "requested_role": "viewer",
+            },
+            email="pending@example.test",
+            external_subject="sub-other",
+            identity_provider="identity_platform",
+        )
+    assert email_exc.value.code == "REGISTRATION_REQUEST_PENDING"
+    assert request["status"] == "pending"
+
+    with pytest.raises(AppError) as username_exc:
+        service.create_registration_request(
+            conn,
+            data={
+                "username": "pending-user",
+                "display_name": "Other User",
+                "requested_role": "viewer",
+            },
+            email="other@example.test",
+            external_subject="sub-other-2",
+            identity_provider="identity_platform",
+        )
+    assert username_exc.value.code == "USERNAME_ALREADY_PENDING"
+
+
+def test_approve_registration_request_creates_user_and_marks_request(conn):
+    reviewer = service.create_user(
+        conn,
+        {
+            "username": "review-admin",
+            "display_name": "Review Admin",
+            "email": "review-admin@example.test",
+            "external_subject": "sub-review-admin",
+            "identity_provider": "test-oidc",
+            "hosted_domain": "example.test",
+            "role": "admin",
+            "is_active": True,
+        },
+    )
+    request = service.create_registration_request(
+        conn,
+        data={
+            "username": "applicant",
+            "display_name": "Applicant",
+            "requested_role": "operator",
+            "memo": "Please approve",
+        },
+        email="applicant@example.test",
+        external_subject="sub-applicant",
+        identity_provider="identity_platform",
+    )
+
+    approved = service.approve_registration_request(
+        conn,
+        request["request_id"],
+        reviewer_user_id=reviewer["user_id"],
+        data={"role": "operator"},
+    )
+
+    assert approved["status"] == "approved"
+    assert approved["reviewed_by_user_id"] == reviewer["user_id"]
+    assert approved["approved_user_id"] is not None
+    created_user = service.get_user(conn, int(approved["approved_user_id"]))
+    assert created_user["email"] == "applicant@example.test"
+    assert created_user["identity_provider"] == "identity_platform"
+    assert created_user["external_subject"] == "sub-applicant"
+    assert created_user["role"] == "operator"
+
+
+def test_reject_registration_request_requires_reason_and_records_review_metadata(conn):
+    reviewer = service.create_user(
+        conn,
+        {
+            "username": "reject-admin",
+            "display_name": "Reject Admin",
+            "email": "reject-admin@example.test",
+            "external_subject": "sub-reject-admin",
+            "identity_provider": "test-oidc",
+            "hosted_domain": "example.test",
+            "role": "admin",
+            "is_active": True,
+        },
+    )
+    request = service.create_registration_request(
+        conn,
+        data={
+            "username": "reject-me",
+            "display_name": "Reject Me",
+            "requested_role": "viewer",
+        },
+        email="reject-me@example.test",
+        external_subject="sub-reject-me",
+        identity_provider="identity_platform",
+    )
+
+    with pytest.raises(AppError) as exc_info:
+        service.reject_registration_request(
+            conn,
+            request["request_id"],
+            reviewer_user_id=reviewer["user_id"],
+            rejection_reason="",
+        )
+    assert exc_info.value.code == "VALIDATION_ERROR"
+
+    rejected = service.reject_registration_request(
+        conn,
+        request["request_id"],
+        reviewer_user_id=reviewer["user_id"],
+        rejection_reason="Need more context",
+    )
+    assert rejected["status"] == "rejected"
+    assert rejected["rejection_reason"] == "Need more context"
+    assert rejected["reviewed_by_user_id"] == reviewer["user_id"]
+    assert rejected["reviewed_at"] is not None
+
 def test_reservation_release_roundtrip(conn):
     item = _create_basic_item(conn, item_number="ITEM-RES-001")
     service.adjust_inventory(

@@ -31,15 +31,12 @@ function makeApprovalDraft(request: RegistrationRequest): ApprovalDraft {
 
 export function UsersPage() {
   const [showResolvedRequests, setShowResolvedRequests] = useState(false);
+  const registrationRequestsPath = `/registration-requests?include_resolved=${showResolvedRequests ? "true" : "false"}`;
   const usersQuery = useSWR("/users?include_inactive=true", () =>
     apiGet<User[]>("/users?include_inactive=true"),
   );
-  const registrationRequestsQuery = useSWR(
-    `/registration-requests?include_resolved=${showResolvedRequests ? "1" : "0"}`,
-    () =>
-      apiGet<RegistrationRequest[]>(
-        `/registration-requests?include_resolved=${showResolvedRequests ? "true" : "false"}`,
-      ),
+  const registrationRequestsQuery = useSWR(registrationRequestsPath, () =>
+    apiGet<RegistrationRequest[]>(registrationRequestsPath),
   );
   const [createForm, setCreateForm] = useState({
     username: "",
@@ -100,10 +97,14 @@ export function UsersPage() {
   }
 
   async function reloadAll(successMessage?: string) {
-    await Promise.all([usersQuery.mutate(), registrationRequestsQuery.mutate()]);
+    const results = await Promise.allSettled([usersQuery.mutate(), registrationRequestsQuery.mutate()]);
     notifyUsersChanged();
     if (successMessage) {
       setMessage(successMessage);
+    }
+    const refreshFailure = results.find((result) => result.status === "rejected");
+    if (refreshFailure?.status === "rejected") {
+      setError("The change was saved, but one of the follow-up refreshes failed. Refresh the page and verify the latest state.");
     }
   }
 

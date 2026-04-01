@@ -764,7 +764,7 @@ def approve_registration_request(
     *,
     reviewer_user_id: int,
     data: dict[str, Any],
-) -> dict[str, Any]:
+    ) -> dict[str, Any]:
     request_row = get_registration_request(conn, request_id)
     if request_row["status"] != "pending":
         raise AppError(
@@ -778,6 +778,52 @@ def approve_registration_request(
         "display_name",
     )
     role = _require_valid_role(str(data.get("role") or "viewer"))
+    existing_username = conn.execute(
+        """
+        SELECT user_id
+        FROM users
+        WHERE lower(username) = lower(?)
+        LIMIT 1
+        """,
+        (username,),
+    ).fetchone()
+    if existing_username is not None:
+        raise AppError(
+            code="USERNAME_ALREADY_EXISTS",
+            message="Username is already in use",
+            status_code=409,
+        )
+    existing_email = conn.execute(
+        """
+        SELECT user_id
+        FROM users
+        WHERE lower(email) = lower(?)
+        LIMIT 1
+        """,
+        (str(request_row["email"]),),
+    ).fetchone()
+    if existing_email is not None:
+        raise AppError(
+            code="EMAIL_ALREADY_EXISTS",
+            message="Email is already mapped to another user",
+            status_code=409,
+        )
+    if request_row["identity_provider"] and request_row["external_subject"]:
+        existing_identity = conn.execute(
+            """
+            SELECT user_id
+            FROM users
+            WHERE identity_provider = ? AND external_subject = ?
+            LIMIT 1
+            """,
+            (request_row["identity_provider"], request_row["external_subject"]),
+        ).fetchone()
+        if existing_identity is not None:
+            raise AppError(
+                code="IDENTITY_ALREADY_EXISTS",
+                message="Identity subject is already mapped to another user",
+                status_code=409,
+            )
     created_user = create_user(
         conn,
         {

@@ -62,9 +62,10 @@ export function AppShell() {
     }
 
     let active = true;
-    setAuthResolutionBusy(true);
-    apiGet<User>("/users/me")
-      .then((user) => {
+    async function resolveSignedInState() {
+      setAuthResolutionBusy(true);
+      try {
+        const user = await apiGet<User>("/users/me");
         if (!active) return;
         setCurrentUser(user);
         setRegistrationStatus({
@@ -76,8 +77,7 @@ export function AppShell() {
           request: null,
         });
         setAuthStatusMessage(`Signed in as ${user.display_name} (${user.role}).`);
-      })
-      .catch((error) => {
+      } catch (error) {
         if (!active) return;
         setCurrentUser(null);
         if (!isAuthError(error)) {
@@ -85,41 +85,41 @@ export function AppShell() {
           setAuthStatusMessage(presentApiError(error));
           return;
         }
-        apiGet<RegistrationStatus>("/auth/registration-status")
-          .then((status) => {
-            if (!active) return;
-            setRegistrationStatus(status);
-            if (status.current_user) {
-              setCurrentUser(status.current_user);
-              setAuthStatusMessage(
-                `Signed in as ${status.current_user.display_name} (${status.current_user.role}).`,
-              );
-              return;
-            }
-            switch (status.state) {
-              case "pending":
-                setAuthStatusMessage("Registration is pending admin approval.");
-                break;
-              case "rejected":
-                setAuthStatusMessage("Registration was rejected. Review the reason and resubmit.");
-                break;
-              default:
-                setAuthStatusMessage("Sign-in succeeded. Complete a registration request to access the app.");
-                break;
-            }
-          })
-          .catch((statusError) => {
-            if (!active) return;
-            setRegistrationStatus(null);
-            setAuthStatusMessage(presentApiError(statusError));
-          })
-          .finally(() => {
-            if (active) setAuthResolutionBusy(false);
-          });
-      })
-      .finally(() => {
+        try {
+          const status = await apiGet<RegistrationStatus>("/auth/registration-status");
+          if (!active) return;
+          setRegistrationStatus(status);
+          if (status.current_user) {
+            setCurrentUser(status.current_user);
+            setAuthStatusMessage(
+              `Signed in as ${status.current_user.display_name} (${status.current_user.role}).`,
+            );
+            return;
+          }
+          switch (status.state) {
+            case "pending":
+              setAuthStatusMessage("Registration is pending admin approval.");
+              break;
+            case "rejected":
+              setAuthStatusMessage("Registration was rejected. Review the reason and resubmit.");
+              break;
+            case "approved":
+              setAuthStatusMessage("This account was approved before, but the mapped app user is inactive.");
+              break;
+            default:
+              setAuthStatusMessage("Sign-in succeeded. Complete a registration request to access the app.");
+              break;
+          }
+        } catch (statusError) {
+          if (!active) return;
+          setRegistrationStatus(null);
+          setAuthStatusMessage(presentApiError(statusError));
+        }
+      } finally {
         if (active) setAuthResolutionBusy(false);
-      });
+      }
+    }
+    void resolveSignedInState();
     return () => {
       active = false;
     };

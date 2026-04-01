@@ -862,6 +862,92 @@ def test_users_me_endpoint_resolves_request_user_from_bearer_token(client):
     assert payload["data"]["display_name"] == "Pytest User"
 
 
+def test_registration_status_and_create_request_allow_unmapped_identity(database_url: str, workspace_roots: dict[str, Path]):
+    _reset_database(database_url)
+    init_db(database_url)
+    app = create_app(database_url=database_url)
+    headers = auth_headers_for_user(sub="sub-new-user", email="new-user@example.test")
+
+    with TestClient(app) as test_client:
+        status_response = test_client.get("/api/auth/registration-status", headers=headers)
+        assert status_response.status_code == 200
+        assert status_response.json()["data"]["state"] == "not_requested"
+
+        create_response = test_client.post(
+            "/api/auth/register-request",
+            headers=headers,
+            json={
+                "username": "new-user",
+                "display_name": "New User",
+                "requested_role": "viewer",
+                "memo": "Please approve me",
+            },
+        )
+        assert create_response.status_code == 200
+        payload = create_response.json()["data"]
+        assert payload["status"] == "pending"
+        assert payload["email"] == "new-user@example.test"
+        assert payload["identity_provider"] == "test-oidc"
+        assert payload["external_subject"] == "sub-new-user"
+
+        pending_status = test_client.get("/api/auth/registration-status", headers=headers)
+        assert pending_status.status_code == 200
+        assert pending_status.json()["data"]["state"] == "pending"
+
+
+def test_admin_can_approve_and_reject_registration_requests(client, conn):
+    request = service.create_registration_request(
+        conn,
+        data={
+            "username": "approve-target",
+            "display_name": "Approve Target",
+            "requested_role": "viewer",
+        },
+        email="approve-target@example.test",
+        external_subject="sub-approve-target",
+        identity_provider="test-oidc",
+    )
+    second_request = service.create_registration_request(
+        conn,
+        data={
+            "username": "reject-target",
+            "display_name": "Reject Target",
+            "requested_role": "operator",
+        },
+        email="reject-target@example.test",
+        external_subject="sub-reject-target",
+        identity_provider="test-oidc",
+    )
+    conn.commit()
+
+    listing = client.get("/api/registration-requests")
+    assert listing.status_code == 200
+    assert len(listing.json()["data"]) == 2
+
+    approve_response = client.post(
+        f"/api/registration-requests/{request['request_id']}/approve",
+        json={"role": "operator", "username": "approved-user", "display_name": "Approved User"},
+    )
+    assert approve_response.status_code == 200
+    approved_payload = approve_response.json()["data"]
+    assert approved_payload["status"] == "approved"
+    assert approved_payload["approved_user_id"] is not None
+
+    reject_response = client.post(
+        f"/api/registration-requests/{second_request['request_id']}/reject",
+        json={"rejection_reason": "Need manager confirmation"},
+    )
+    assert reject_response.status_code == 200
+    rejected_payload = reject_response.json()["data"]
+    assert rejected_payload["status"] == "rejected"
+    assert rejected_payload["rejection_reason"] == "Need manager confirmation"
+    assert rejected_payload["reviewed_by_user_id"] is not None
+
+    created_user = service.get_user(conn, int(approved_payload["approved_user_id"]))
+    assert created_user["username"] == "approved-user"
+    assert created_user["role"] == "operator"
+
+
 def test_user_update_allows_partial_identity_update_when_existing_pair_remains_valid(client):
     current_user = client.get("/api/users/me").json()["data"]
 

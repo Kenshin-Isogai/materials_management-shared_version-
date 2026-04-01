@@ -2,7 +2,9 @@ import { FormEvent, useMemo, useState } from "react";
 import useSWR from "swr";
 import { Link } from "react-router-dom";
 import { apiGet, apiSend } from "../lib/api";
+import { ApiErrorNotice } from "../components/ApiErrorNotice";
 import { StatusCallout } from "../components/StatusCallout";
+import { presentApiError } from "../lib/errorUtils";
 import type { RegistrationRequest, RegistrationStatus, UserRole } from "../lib/types";
 
 const REQUESTABLE_ROLES: UserRole[] = ["viewer", "operator", "admin"];
@@ -22,7 +24,9 @@ export function RegistrationPage() {
 
   const status = statusQuery.data ?? null;
   const latestRequest = status?.request ?? null;
-  const canSubmit = status?.state === "not_requested" || status?.state === "rejected";
+  const canSubmit =
+    !status?.current_user &&
+    (status?.state === "not_requested" || status?.state === "rejected" || status?.state === "approved");
 
   const title = useMemo(() => {
     switch (status?.state) {
@@ -54,9 +58,10 @@ export function RegistrationPage() {
         }),
       });
       setMessage("Registration request submitted. An admin must approve it before you can use protected pages.");
+      setError(null);
       await statusQuery.mutate();
     } catch (submitError) {
-      setError(submitError instanceof Error ? submitError.message : "Failed to submit registration request.");
+      setError(presentApiError(submitError));
     } finally {
       setBusy(false);
     }
@@ -72,13 +77,7 @@ export function RegistrationPage() {
       </section>
 
       {statusQuery.isLoading && <p className="text-sm text-slate-500">Loading registration status...</p>}
-      {statusQuery.error && (
-        <StatusCallout
-          title="Could not load registration status"
-          message={statusQuery.error instanceof Error ? statusQuery.error.message : "Request failed."}
-          tone="error"
-        />
-      )}
+      {statusQuery.error ? <ApiErrorNotice area="registration status" error={statusQuery.error} /> : null}
 
       {status?.current_user ? (
         <StatusCallout
@@ -98,6 +97,14 @@ export function RegistrationPage() {
         <StatusCallout
           title="Registration was rejected"
           message={`Reason: ${latestRequest.rejection_reason || "No reason recorded."} You can correct the details below and submit a new request.`}
+          tone="warning"
+        />
+      ) : null}
+
+      {!status?.current_user && status?.state === "approved" && latestRequest ? (
+        <StatusCallout
+          title="Access is currently inactive"
+          message="This identity had been approved before, but the mapped app user is not active right now. Submit a new request so an admin can restore access."
           tone="warning"
         />
       ) : null}
