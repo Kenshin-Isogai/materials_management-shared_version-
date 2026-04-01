@@ -2,6 +2,24 @@
 
 ### Changed
 
+- Simplified the hosted auth and user-admin UX after the verified-email rollout.
+  - the main header now hides the manual bearer-token fallback in hosted Identity Platform environments and keeps it only for localhost-style local/test use
+  - anonymous dashboard visits now stop at explicit sign-in guidance instead of surfacing a confusing backend/database unavailable message
+  - the header now exposes a first-time-user registration guidance link before sign-in, clarifying that registration starts after verified sign-in
+  - the Users page now removes `identity_provider` / `hosted_domain` from the primary operator UI and tucks raw external-subject mapping behind an advanced recovery toggle
+
+- Extended the browser auth flow for `OIDC_REQUIRE_EMAIL_VERIFIED=1` launch readiness.
+  - shared header login now supports Identity Platform email/password sign-up in addition to sign-in
+  - newly created accounts now trigger verification-email delivery and signed-in-but-unverified users are redirected to a dedicated `/verify-email` holding page with resend support
+  - app routing now distinguishes `unverified identity` from `verified but unmapped identity`, sending the latter to `/registration` only after email verification succeeds
+
+- Added self-service onboarding with admin approval for Identity Platform sign-ins.
+  - signed-in identities that are not yet mapped to an active app user are now redirected into `/registration`
+  - applicants submit `username`, required `display_name`, requested role, and optional memo; email remains token-derived
+  - backend now stores `registration_requests` separately from active users, preserving rejection history and reviewer audit metadata
+  - admins can review pending requests from the Users page, approve with a final role/username/display name override, or reject with a required reason
+  - dashboard summary now exposes pending-registration counts, and the shell no longer keeps the email/password inputs visible after sign-in
+
 - Tightened cloud-auth UX and error handling after the first GCP rollout validation.
   - frontend API failures now distinguish auth-required, backend-unavailable, and generic request failures instead of surfacing a generic fetch error
   - frontend mutation requests now preserve auth-classified header-preparation failures (including expired-session refresh failures) instead of masking them as backend-unavailable errors

@@ -4,18 +4,21 @@ import { apiGet } from "../lib/api";
 import { StatCard } from "../components/StatCard";
 import { StatusCallout } from "../components/StatusCallout";
 import { isAuthError, isBackendUnavailableError, presentApiError } from "../lib/errorUtils";
+import { getStoredAccessTokenOrNull, isIdentityPlatformConfigured } from "../lib/auth";
 
 type Summary = {
   overdue_orders: Array<Record<string, unknown>>;
   expiring_reservations: Array<Record<string, unknown>>;
   low_stock_alerts: Array<Record<string, unknown>>;
   recent_activity: Array<Record<string, unknown>>;
+  pending_registration_requests: number;
 };
 
 export function DashboardPage() {
   const [overdueQuery, setOverdueQuery] = useState("");
+  const requiresSignInFirst = isIdentityPlatformConfigured() && !getStoredAccessTokenOrNull();
   const { data, error, isLoading } = useSWR<Summary>(
-    "/dashboard",
+    requiresSignInFirst ? null : "/dashboard",
     () => apiGet<Summary>("/dashboard/summary"),
     { refreshInterval: 20_000 }
   );
@@ -46,8 +49,14 @@ export function DashboardPage() {
         </p>
       </section>
 
-      {isLoading && <div className="panel p-6 text-sm text-slate-500">Loading...</div>}
-      {error && (
+      {requiresSignInFirst ? (
+        <StatusCallout
+          title="Sign in to load dashboard data"
+          message="Create an account or sign in from the header first. After email verification, unapproved users are guided to registration automatically."
+        />
+      ) : null}
+      {isLoading && !requiresSignInFirst && <div className="panel p-6 text-sm text-slate-500">Loading...</div>}
+      {error && !requiresSignInFirst && (
         <StatusCallout
           title={
             isAuthError(error)
@@ -69,11 +78,12 @@ export function DashboardPage() {
 
       {data && (
         <>
-          <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
             <StatCard label="Overdue Orders" value={data.overdue_orders.length} tone="brass" />
             <StatCard label="Expiring Reservations" value={data.expiring_reservations.length} tone="signal" />
             <StatCard label="Low Stock Alerts" value={data.low_stock_alerts.length} />
             <StatCard label="Recent Logs" value={data.recent_activity.length} />
+            <StatCard label="Pending Registrations" value={data.pending_registration_requests} tone="brass" />
           </section>
 
           <section className="grid gap-5 lg:grid-cols-2">

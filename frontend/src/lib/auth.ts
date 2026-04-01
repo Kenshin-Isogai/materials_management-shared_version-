@@ -9,12 +9,22 @@ type StoredAuthSession = {
   refreshToken?: string | null;
   expiresAt?: number | null;
   email?: string | null;
+  emailVerified?: boolean | null;
 };
 
 type IdentityPlatformSignInResponse = {
   idToken?: string;
   refreshToken?: string;
   expiresIn?: string;
+  email?: string;
+  error?: {
+    message?: string;
+  };
+};
+
+type IdentityPlatformSignUpResponse = IdentityPlatformSignInResponse;
+
+type IdentityPlatformOobCodeResponse = {
   email?: string;
   error?: {
     message?: string;
@@ -50,12 +60,36 @@ function normalizeSession(value: unknown): StoredAuthSession | null {
       ? candidate.expiresAt
       : null;
   const email = candidate.email ? String(candidate.email).trim() : null;
+  const emailVerified =
+    typeof candidate.emailVerified === "boolean" ? candidate.emailVerified : null;
   return {
     accessToken,
     refreshToken,
     expiresAt,
     email,
+    emailVerified,
   };
+}
+
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  const segments = token.split(".");
+  if (segments.length < 2) return null;
+  try {
+    const base64 = segments[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = `${base64}${"=".repeat((4 - (base64.length % 4)) % 4)}`;
+    const decoded = atob(padded);
+    return JSON.parse(decoded) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function deriveSessionMetadata(accessToken: string): Pick<StoredAuthSession, "email" | "emailVerified"> {
+  const claims = decodeJwtPayload(accessToken);
+  const email = claims && typeof claims.email === "string" ? claims.email.trim() : null;
+  const emailVerified =
+    claims && typeof claims.email_verified === "boolean" ? claims.email_verified : null;
+  return { email, emailVerified };
 }
 
 function emitAuthSessionChanged(): void {
@@ -180,6 +214,7 @@ async function refreshIdentityPlatformSession(refreshToken: string): Promise<Sto
     accessToken: payload.id_token,
     refreshToken: payload.refresh_token?.trim() || refreshToken,
     expiresAt: toExpiryTimestamp(payload.expires_in),
+    ...deriveSessionMetadata(payload.id_token),
   };
 }
 
@@ -189,6 +224,10 @@ export function isIdentityPlatformConfigured(): boolean {
 
 export function getStoredAccessTokenOrNull(): string | null {
   return (readStoredAuthSession() ?? migrateLegacyStoredTokenIfNeeded())?.accessToken ?? null;
+}
+
+export function getStoredAuthSessionSnapshot(): StoredAuthSession | null {
+  return readStoredAuthSession() ?? migrateLegacyStoredTokenIfNeeded();
 }
 
 export function setStoredAccessToken(token: string | null): void {
@@ -233,7 +272,8 @@ export async function getValidAccessTokenOrNull(): Promise<string | null> {
         const mergedSession: StoredAuthSession = {
           ...currentSession,
           ...nextSession,
-          email: currentSession.email ?? nextSession.email ?? null,
+          email: nextSession.email ?? currentSession.email ?? null,
+          emailVerified: nextSession.emailVerified ?? currentSession.emailVerified ?? null,
         };
         writeStoredAuthSession(mergedSession);
         return mergedSession;
@@ -272,10 +312,54 @@ export async function signInWithIdentityPlatformEmailPassword(
   if (!payload.idToken) {
     throw new Error("Identity Platform did not return an ID token.");
   }
+  const sessionMeta = deriveSessionMetadata(payload.idToken);
   writeStoredAuthSession({
     accessToken: payload.idToken,
     refreshToken: payload.refreshToken?.trim() || null,
     expiresAt: toExpiryTimestamp(payload.expiresIn),
-    email: payload.email?.trim() || email.trim(),
+    email: payload.email?.trim() || sessionMeta.email || email.trim(),
+    emailVerified: sessionMeta.emailVerified,
+  });
+}
+
+export async function signUpWithIdentityPlatformEmailPassword(
+  email: string,
+  password: string,
+): Promise<void> {
+  if (!isIdentityPlatformConfigured()) {
+    throw new Error("Identity Platform API key is not configured.");
+  }
+  const payload = await postIdentityPlatformJson<IdentityPlatformSignUpResponse>(
+    "accounts:signUp",
+    {
+      email: email.trim(),
+      password,
+      returnSecureToken: true,
+    },
+  );
+  if (!payload.idToken) {
+    throw new Error("Identity Platform did not return an ID token.");
+  }
+  const derived = deriveSessionMetadata(payload.idToken);
+  writeStoredAuthSession({
+    accessToken: payload.idToken,
+    refreshToken: payload.refreshToken?.trim() || null,
+    expiresAt: toExpiryTimestamp(payload.expiresIn),
+    email: payload.email?.trim() || derived.email || email.trim(),
+    emailVerified: derived.emailVerified,
+  });
+}
+
+export async function sendIdentityPlatformVerificationEmail(idToken?: string | null): Promise<void> {
+  if (!isIdentityPlatformConfigured()) {
+    throw new Error("Identity Platform API key is not configured.");
+  }
+  const effectiveIdToken = String(idToken ?? readStoredAuthSession()?.accessToken ?? "").trim();
+  if (!effectiveIdToken) {
+    throw new Error("Sign in before requesting a verification email.");
+  }
+  await postIdentityPlatformJson<IdentityPlatformOobCodeResponse>("accounts:sendOobCode", {
+    requestType: "VERIFY_EMAIL",
+    idToken: effectiveIdToken,
   });
 }

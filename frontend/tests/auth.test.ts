@@ -91,4 +91,44 @@ describe("auth session handling", () => {
     expect(fetchMock).not.toHaveBeenCalled();
     expect(window.sessionStorage.getItem("materials.auth-session")).toContain("manual-token");
   });
+
+  it("stores sign-up session metadata and can send a verification email", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("accounts:signUp")) {
+        return {
+          ok: true,
+          json: async () => ({
+            idToken:
+              "eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6InNpZ251cEBleGFtcGxlLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjpmYWxzZX0.signature",
+            refreshToken: "refresh-signup",
+            expiresIn: "3600",
+            email: "signup@example.com",
+          }),
+        };
+      }
+      if (url.includes("accounts:sendOobCode")) {
+        return {
+          ok: true,
+          json: async () => ({
+            email: "signup@example.com",
+          }),
+        };
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const auth = await loadAuthModule();
+      await auth.signUpWithIdentityPlatformEmailPassword("signup@example.com", "password");
+      await auth.sendIdentityPlatformVerificationEmail();
+
+      const stored = JSON.parse(window.sessionStorage.getItem("materials.auth-session") ?? "{}");
+      expect(stored.email).toBe("signup@example.com");
+      expect(stored.emailVerified).toBe(false);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

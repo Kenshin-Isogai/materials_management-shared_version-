@@ -58,6 +58,36 @@ export type User = {
   updated_at: string;
 };
 
+export type RegistrationRequestState = "not_requested" | "pending" | "approved" | "rejected";
+
+export type RegistrationRequest = {
+  request_id: number;
+  email: string;
+  username: string;
+  display_name: string;
+  memo?: string | null;
+  requested_role: UserRole;
+  identity_provider?: string | null;
+  external_subject?: string | null;
+  status: "pending" | "approved" | "rejected";
+  rejection_reason?: string | null;
+  reviewed_by_user_id?: number | null;
+  reviewed_by_username?: string | null;
+  approved_user_id?: number | null;
+  reviewed_at?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RegistrationStatus = {
+  state: RegistrationRequestState;
+  email?: string | null;
+  identity_provider?: string | null;
+  external_subject?: string | null;
+  request?: RegistrationRequest | null;
+  current_user?: User | null;
+};
+
 export type Item = {
   item_id: number;
   item_number: string;

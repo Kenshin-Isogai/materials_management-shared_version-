@@ -17,8 +17,10 @@ import { OrdersPage } from "./pages/OrdersPage";
 import { ProcurementPage } from "./pages/ProcurementPage";
 import { ProjectsPage } from "./pages/ProjectsPage";
 import { ReservationsPage } from "./pages/ReservationsPage";
+import { RegistrationPage } from "./pages/RegistrationPage";
 import { SnapshotPage } from "./pages/SnapshotPage";
 import { UsersPage } from "./pages/UsersPage";
+import { VerifyEmailPage } from "./pages/VerifyEmailPage";
 import { WorkspacePage } from "./pages/WorkspacePage";
 
 export const appRoutes = createRoutesFromElements(
@@ -43,6 +45,8 @@ export const appRoutes = createRoutesFromElements(
     <Route path="/history" element={<HistoryPage />} />
     <Route path="/master" element={<MasterPage />} />
     <Route path="/users" element={<UsersPage />} />
+    <Route path="/registration" element={<RegistrationPage />} />
+    <Route path="/verify-email" element={<VerifyEmailPage />} />
     <Route path="*" element={<Navigate to="/" replace />} />
   </Route>,
 );

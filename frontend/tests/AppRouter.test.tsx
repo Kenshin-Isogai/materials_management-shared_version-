@@ -29,6 +29,16 @@ const defaultApiGet = async (path: string) => {
       hosted_domain: null,
     };
   }
+  if (path === "/auth/registration-status") {
+    return {
+      state: "not_requested",
+      email: "admin@example.com",
+      identity_provider: "identity_platform",
+      external_subject: "sub-admin",
+      current_user: null,
+      request: null,
+    };
+  }
   if (path === "/workspace/summary") {
     return {
       generated_at: "2026-03-08T00:00:00+09:00",
@@ -72,6 +82,14 @@ vi.mock("../src/lib/api", async (importOriginal) => {
   };
 });
 
+vi.mock("../src/lib/auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/auth")>();
+  return {
+    ...actual,
+    isIdentityPlatformConfigured: () => true,
+  };
+});
+
 vi.mock("../src/components/ProjectEditor", () => ({
   ProjectEditor: ({ onDirtyChange }: { onDirtyChange?: (isDirty: boolean) => void }) => {
     useEffect(() => {
@@ -102,6 +120,7 @@ function renderRouter(initialEntry: string) {
 
 describe("app router", () => {
   beforeEach(() => {
+    window.sessionStorage.clear();
     apiGetMock.mockReset();
     apiGetMock.mockImplementation(defaultApiGet);
     apiGetAllPagesMock.mockReset();
@@ -142,7 +161,7 @@ describe("app router", () => {
     expect(router.state.location.pathname).toBe("/");
   });
 
-  it("shows a sign-in prompt when dashboard requests return auth errors", async () => {
+  it("routes signed-in unmapped identities into registration when protected requests return auth errors", async () => {
     apiGetMock.mockImplementation(async (path: string) => {
       if (path === "/dashboard/summary" || path === "/users/me") {
         throw new ApiClientError({
@@ -161,12 +180,28 @@ describe("app router", () => {
     renderRouter("/");
 
     await waitFor(() => {
-      expect(screen.getByText("Sign-in required")).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "Register for access" })).toBeTruthy();
     });
-    expect(screen.getByText("Sign in with an allowed account to load dashboard data.")).toBeTruthy();
+    expect(
+      screen.getByText("Signed-in identities need admin approval before this application can grant access."),
+    ).toBeTruthy();
   });
 
-  it("shows an environment-unavailable message when dashboard requests cannot reach the backend", async () => {
+  it("shows sign-in guidance on the dashboard before anonymous users load protected data", async () => {
+    renderRouter("/");
+
+    await waitFor(() => {
+      expect(screen.getByText("Sign in to load dashboard data")).toBeTruthy();
+    });
+    expect(
+      screen.getByText(
+        "Create an account or sign in from the header first. After email verification, unapproved users are guided to registration automatically.",
+      ),
+    ).toBeTruthy();
+    expect(apiGetMock).not.toHaveBeenCalledWith("/dashboard/summary");
+  });
+
+  it("shows an environment-unavailable message when signed-in dashboard requests cannot reach the backend", async () => {
     apiGetMock.mockImplementation(async (path: string) => {
       if (path === "/dashboard/summary") {
         throw new ApiClientError({
@@ -175,6 +210,10 @@ describe("app router", () => {
         });
       }
       return defaultApiGet(path);
+    });
+
+    act(() => {
+      window.sessionStorage.setItem("materials.auth-session", JSON.stringify({ accessToken: "token" }));
     });
 
     renderRouter("/");
@@ -187,6 +226,84 @@ describe("app router", () => {
         "Dashboard is unavailable because the backend or database is not ready. If this is dev or staging, start Cloud SQL and try again.",
       ),
     ).toBeTruthy();
+  });
+
+  it("redirects signed-in identities without an active app user to /registration", async () => {
+    apiGetMock.mockImplementation(async (path: string) => {
+      if (path === "/users/me") {
+        throw new ApiClientError({
+          message: "User not found",
+          statusCode: 403,
+          code: "USER_NOT_FOUND",
+        });
+      }
+      if (path === "/auth/registration-status") {
+        return {
+          state: "not_requested",
+          email: "pending@example.com",
+          identity_provider: "identity_platform",
+          external_subject: "sub-pending",
+          current_user: null,
+          request: null,
+        };
+      }
+      return defaultApiGet(path);
+    });
+
+    act(() => {
+      window.sessionStorage.setItem("materials.auth-session", JSON.stringify({ accessToken: "token" }));
+    });
+
+    const router = renderRouter("/");
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/registration");
+    });
+    expect(screen.getByRole("heading", { name: "Register for access" })).toBeTruthy();
+  });
+
+  it("redirects signed-in but unverified identities to /verify-email", async () => {
+    apiGetMock.mockImplementation(async (path: string) => {
+      if (path === "/users/me") {
+        throw new ApiClientError({
+          message: "Verified email claim is required when email is present",
+          statusCode: 401,
+          code: "INVALID_TOKEN",
+        });
+      }
+      return defaultApiGet(path);
+    });
+
+    act(() => {
+      window.sessionStorage.setItem(
+        "materials.auth-session",
+        JSON.stringify({
+          accessToken: "token",
+          email: "verify@example.com",
+          emailVerified: false,
+        }),
+      );
+    });
+
+    const router = renderRouter("/");
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/verify-email");
+    });
+    expect(screen.getByRole("heading", { name: "Verify your email" })).toBeTruthy();
+  });
+
+  it("redirects approved users away from /registration", async () => {
+    act(() => {
+      window.sessionStorage.setItem("materials.auth-session", JSON.stringify({ accessToken: "token" }));
+    });
+
+    const router = renderRouter("/registration");
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/");
+    });
+    expect(screen.getByRole("heading", { name: "Dashboard" })).toBeTruthy();
   });
 
 });

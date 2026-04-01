@@ -1,12 +1,15 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { RouteErrorBoundary } from "./RouteErrorBoundary";
 import { StatusCallout } from "./StatusCallout";
 import {
   clearStoredAuthSession,
+  getStoredAuthSessionSnapshot,
   getStoredAccessTokenOrNull,
   isIdentityPlatformConfigured,
+  sendIdentityPlatformVerificationEmail,
   signInWithIdentityPlatformEmailPassword,
+  signUpWithIdentityPlatformEmailPassword,
   subscribeAuthSessionChanged,
 } from "../lib/auth";
 import {
@@ -14,8 +17,8 @@ import {
   setStoredAccessToken,
   subscribeUsersChanged,
 } from "../lib/api";
-import { isAuthError, presentApiError } from "../lib/errorUtils";
-import type { User } from "../lib/types";
+import { isAuthError, isEmailVerificationRequiredError, presentApiError } from "../lib/errorUtils";
+import type { RegistrationStatus, User } from "../lib/types";
 
 const nav = [
   { to: "/", label: "Dashboard" },
@@ -38,35 +41,112 @@ const nav = [
 
 export function AppShell() {
   const location = useLocation();
+  const navigate = useNavigate();
   const [accessTokenDraft, setAccessTokenDraft] = useState<string>("");
   const [isSignedIn, setIsSignedIn] = useState<boolean>(Boolean(getStoredAccessTokenOrNull()));
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
+  const [signupBusy, setSignupBusy] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [signupError, setSignupError] = useState<string | null>(null);
+  const [signupMessage, setSignupMessage] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [registrationStatus, setRegistrationStatus] = useState<RegistrationStatus | null>(null);
+  const [verificationRequired, setVerificationRequired] = useState(false);
   const [authStatusMessage, setAuthStatusMessage] = useState<string | null>(null);
   const [authVersion, setAuthVersion] = useState(0);
   const [usersVersion, setUsersVersion] = useState(0);
+  const [authResolutionBusy, setAuthResolutionBusy] = useState(false);
+  const onRegistrationPage = location.pathname === "/registration";
+  const onVerifyEmailPage = location.pathname === "/verify-email";
+  const [authFormMode, setAuthFormMode] = useState<"signin" | "signup">("signin");
+  const allowManualTokenEntry =
+    !isIdentityPlatformConfigured() ||
+    ["localhost", "127.0.0.1"].includes(window.location.hostname);
 
   useEffect(() => {
-    let active = true;
     if (!isSignedIn) {
       setCurrentUser(null);
-      return () => {
-        active = false;
-      };
+      setRegistrationStatus(null);
+      setVerificationRequired(false);
+      setAuthResolutionBusy(false);
+      return;
     }
-    apiGet<User>("/users/me")
-      .then((user) => {
+
+    let active = true;
+    async function resolveSignedInState() {
+      setAuthResolutionBusy(true);
+      try {
+        const user = await apiGet<User>("/users/me");
         if (!active) return;
         setCurrentUser(user);
-      })
-      .catch(() => {
-        if (active) {
-          setCurrentUser(null);
+        setVerificationRequired(false);
+        setRegistrationStatus({
+          state: "approved",
+          email: user.email ?? null,
+          identity_provider: user.identity_provider ?? null,
+          external_subject: user.external_subject ?? null,
+          current_user: user,
+          request: null,
+        });
+        setAuthStatusMessage(`Signed in as ${user.display_name} (${user.role}).`);
+      } catch (error) {
+        if (!active) return;
+        setCurrentUser(null);
+        if (isEmailVerificationRequiredError(error)) {
+          setVerificationRequired(true);
+          setRegistrationStatus(null);
+          setAuthStatusMessage("Verify your email address before accessing this environment.");
+          return;
         }
-      });
+        if (!isAuthError(error)) {
+          setRegistrationStatus(null);
+          setAuthStatusMessage(presentApiError(error));
+          return;
+        }
+        try {
+          const status = await apiGet<RegistrationStatus>("/auth/registration-status");
+          if (!active) return;
+          setRegistrationStatus(status);
+          setVerificationRequired(false);
+          if (status.current_user) {
+            setCurrentUser(status.current_user);
+            setAuthStatusMessage(
+              `Signed in as ${status.current_user.display_name} (${status.current_user.role}).`,
+            );
+            return;
+          }
+          switch (status.state) {
+            case "pending":
+              setAuthStatusMessage("Registration is pending admin approval.");
+              break;
+            case "rejected":
+              setAuthStatusMessage("Registration was rejected. Review the reason and resubmit.");
+              break;
+            case "approved":
+              setAuthStatusMessage("This account was approved before, but the mapped app user is inactive.");
+              break;
+            default:
+              setAuthStatusMessage("Sign-in succeeded. Complete a registration request to access the app.");
+              break;
+          }
+        } catch (statusError) {
+          if (!active) return;
+          if (isEmailVerificationRequiredError(statusError)) {
+            setVerificationRequired(true);
+            setRegistrationStatus(null);
+            setAuthStatusMessage("Verify your email address before accessing this environment.");
+            return;
+          }
+          setRegistrationStatus(null);
+          setAuthStatusMessage(presentApiError(statusError));
+        }
+      } finally {
+        if (active) setAuthResolutionBusy(false);
+      }
+    }
+    void resolveSignedInState();
     return () => {
       active = false;
     };
@@ -79,6 +159,8 @@ export function AppShell() {
         setIsSignedIn(Boolean(getStoredAccessTokenOrNull()));
         setAuthVersion((value) => value + 1);
         setAuthStatusMessage(null);
+        setRegistrationStatus(null);
+        setVerificationRequired(false);
       }),
     [],
   );
@@ -97,8 +179,12 @@ export function AppShell() {
     setLoginEmail("");
     setLoginPassword("");
     setCurrentUser(null);
+    setRegistrationStatus(null);
+    setVerificationRequired(false);
     setIsSignedIn(false);
     setLoginError(null);
+    setSignupError(null);
+    setSignupMessage(null);
     setAuthStatusMessage("Signed out.");
   };
 
@@ -106,6 +192,7 @@ export function AppShell() {
     event.preventDefault();
     setLoginBusy(true);
     setLoginError(null);
+    setSignupMessage(null);
     try {
       await signInWithIdentityPlatformEmailPassword(loginEmail, loginPassword);
       setLoginPassword("");
@@ -119,36 +206,80 @@ export function AppShell() {
     }
   };
 
+  const submitIdentityPlatformSignup = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSignupBusy(true);
+    setSignupError(null);
+    setSignupMessage(null);
+    try {
+      await signUpWithIdentityPlatformEmailPassword(loginEmail, loginPassword);
+      await sendIdentityPlatformVerificationEmail();
+      setIsSignedIn(true);
+      setVerificationRequired(true);
+      setAuthStatusMessage("Account created. Verify your email address before continuing.");
+      setSignupMessage("Account created. A verification email has been sent.");
+      setLoginPassword("");
+    } catch (error) {
+      setSignupError(presentApiError(error));
+    } finally {
+      setSignupBusy(false);
+    }
+  };
+
+  const resendVerificationEmail = async () => {
+    setSignupBusy(true);
+    setSignupError(null);
+    setSignupMessage(null);
+    try {
+      await sendIdentityPlatformVerificationEmail();
+      setSignupMessage("Verification email sent. Complete verification, then sign in again.");
+    } catch (error) {
+      setSignupError(presentApiError(error));
+    } finally {
+      setSignupBusy(false);
+    }
+  };
+
   useEffect(() => {
-    if (!isSignedIn) return;
-    let cancelled = false;
-    apiGet<User>("/users/me")
-      .then((user) => {
-        if (cancelled) return;
-        setCurrentUser(user);
-        setAuthStatusMessage(`Signed in as ${user.display_name} (${user.role}).`);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        setCurrentUser(null);
-        if (isAuthError(error)) {
-          setAuthStatusMessage("Sign-in succeeded, but this account is not mapped to an active app user.");
-          return;
-        }
-        setAuthStatusMessage(presentApiError(error));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [isSignedIn, authVersion]);
+    if (!isSignedIn || authResolutionBusy) return;
+    if (currentUser && (onRegistrationPage || onVerifyEmailPage)) {
+      navigate("/", { replace: true });
+      return;
+    }
+    if (!currentUser && verificationRequired && !onVerifyEmailPage) {
+      navigate("/verify-email", { replace: true });
+      return;
+    }
+    if (!currentUser && registrationStatus && !registrationStatus.current_user && !onRegistrationPage) {
+      navigate("/registration", { replace: true });
+    }
+  }, [
+    authResolutionBusy,
+    currentUser,
+    isSignedIn,
+    navigate,
+    onRegistrationPage,
+    onVerifyEmailPage,
+    registrationStatus,
+    verificationRequired,
+  ]);
 
   const helperMessage = !isSignedIn
     ? isIdentityPlatformConfigured()
-      ? "Protected pages require an Identity Platform account that is also mapped to an active app user."
+      ? "Create an account or sign in first. After email verification, unapproved users are guided to registration automatically."
       : "Paste a valid Bearer token to access protected pages."
     : currentUser === null && !authStatusMessage
       ? "Signed-in tokens still need an active app-user mapping before protected pages can load."
       : null;
+
+  const visibleNav = useMemo(() => {
+    if (!isSignedIn) return nav;
+    if (verificationRequired) return [{ to: "/verify-email", label: "Verify Email" }];
+    if (!currentUser) return [{ to: "/registration", label: "Registration" }];
+    return nav;
+  }, [currentUser, isSignedIn, verificationRequired]);
+
+  const authSession = getStoredAuthSessionSnapshot();
 
   return (
     <div className="min-h-screen text-ink">
@@ -157,7 +288,7 @@ export function AppShell() {
           <div className="mr-3 rounded-xl bg-slatebrand px-3 py-2 font-display text-sm font-bold tracking-wide text-white">
             Optical Inventory
           </div>
-          {nav.map((item) => (
+          {visibleNav.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -188,8 +319,25 @@ export function AppShell() {
                 </button>
               ) : null}
             </div>
-            {isIdentityPlatformConfigured() ? (
-              <form className="grid gap-2" onSubmit={submitIdentityPlatformLogin}>
+            {!isSignedIn && isIdentityPlatformConfigured() ? (
+              <div className="grid gap-2">
+                <div className="flex gap-2">
+                  <button
+                    className={authFormMode === "signin" ? "button-subtle" : "rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600"}
+                    onClick={() => setAuthFormMode("signin")}
+                    type="button"
+                  >
+                    Sign in
+                  </button>
+                  <button
+                    className={authFormMode === "signup" ? "button-subtle" : "rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600"}
+                    onClick={() => setAuthFormMode("signup")}
+                    type="button"
+                  >
+                    Create account
+                  </button>
+                </div>
+                <form className="grid gap-2" onSubmit={authFormMode === "signin" ? submitIdentityPlatformLogin : submitIdentityPlatformSignup}>
                 <label className="flex items-center gap-2">
                   <span className="w-24 font-semibold text-slate-600">Email</span>
                   <input
@@ -217,29 +365,66 @@ export function AppShell() {
                 <div className="flex items-center gap-2">
                   <button
                     className="button-subtle"
-                    disabled={loginBusy || !loginEmail.trim() || !loginPassword}
+                    disabled={(authFormMode === "signin" ? loginBusy : signupBusy) || !loginEmail.trim() || !loginPassword}
                     type="submit"
                   >
-                    {loginBusy ? "Signing in..." : "Sign in"}
+                    {authFormMode === "signin"
+                      ? loginBusy
+                        ? "Signing in..."
+                        : "Sign in"
+                      : signupBusy
+                        ? "Creating..."
+                        : "Create account"}
                   </button>
                   <span className="text-xs text-slate-500">
-                    Identity Platform email/password
+                    {authFormMode === "signin"
+                      ? "Identity Platform email/password"
+                      : "Email/password + verification mail"}
                   </span>
                 </div>
-              </form>
+                </form>
+              </div>
             ) : null}
-            <label className="flex items-center gap-2">
-              <span className="font-semibold text-slate-600">
-                {isIdentityPlatformConfigured() ? "Fallback token" : "Bearer token"}
-              </span>
-              <input
-                className="min-w-0 flex-1 bg-transparent text-slate-900 outline-none"
-                onChange={(event) => handleTokenChange(event.target.value)}
-                placeholder="Paste local fixture or OIDC bearer token"
-                value={accessTokenDraft}
-              />
-            </label>
+            {!isSignedIn && allowManualTokenEntry ? (
+              <label className="flex items-center gap-2">
+                <span className="font-semibold text-slate-600">
+                  {isIdentityPlatformConfigured() ? "Fallback token" : "Bearer token"}
+                </span>
+                <input
+                  className="min-w-0 flex-1 bg-transparent text-slate-900 outline-none"
+                  onChange={(event) => handleTokenChange(event.target.value)}
+                  placeholder="Paste local fixture or OIDC bearer token"
+                  value={accessTokenDraft}
+                />
+              </label>
+            ) : null}
+            {isSignedIn ? (
+              <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                {currentUser
+                  ? `Signed in as ${currentUser.display_name} (${currentUser.role})`
+                  : authSession?.email
+                    ? `Signed in as ${authSession.email}${authSession.emailVerified ? "" : " (unverified)"}`
+                    : "Signed in"}
+              </div>
+            ) : null}
+            {!isSignedIn && isIdentityPlatformConfigured() ? (
+              <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                New users: create an account, verify the email, then sign in. Registration opens automatically after verification.
+                <div className="mt-2">
+                  <NavLink className="font-semibold text-signal hover:underline" to="/registration">
+                    Open registration guidance
+                  </NavLink>
+                </div>
+              </div>
+            ) : null}
             {loginError ? <p className="text-xs text-red-600">{loginError}</p> : null}
+            {signupError ? <p className="text-xs text-red-600">{signupError}</p> : null}
+            {signupMessage ? <p className="text-xs text-emerald-700">{signupMessage}</p> : null}
+            {isSignedIn && verificationRequired ? (
+              <button className="button-subtle" disabled={signupBusy} onClick={() => void resendVerificationEmail()} type="button">
+                {signupBusy ? "Sending..." : "Resend verification email"}
+              </button>
+            ) : null}
             {authStatusMessage ? <p className="text-xs text-slate-500">{authStatusMessage}</p> : null}
             {!loginError && helperMessage ? <p className="text-xs text-slate-500">{helperMessage}</p> : null}
           </div>
@@ -249,10 +434,10 @@ export function AppShell() {
         {!isSignedIn && (
           <div className="mb-6">
             <StatusCallout
-              title="Sign in to use protected pages"
+              title="Sign in before opening protected pages"
               message={
                 isIdentityPlatformConfigured()
-                  ? "Use your provisioned email/password above. The account must also be registered as an active app user."
+                  ? "Create an account or sign in above. After verification, accounts without app access are sent to registration for admin approval."
                   : "Set a Bearer token above before opening protected pages."
               }
             />
