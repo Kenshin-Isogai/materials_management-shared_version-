@@ -37,7 +37,7 @@ describe("api client auth error handling", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("classifies expired auth refresh failures as auth errors instead of backend outages", async () => {
+  it("classifies expired token refresh as an auth error", async () => {
     const now = 1_700_000_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
@@ -67,7 +67,7 @@ describe("api client auth error handling", () => {
 
     await expect(api.apiSendForm("/items/import", new FormData())).rejects.toMatchObject({
       name: "ApiClientError",
-      message: "Sign in again to continue.",
+      message: "Session expired. Please sign in again.",
       statusCode: 401,
       code: "INVALID_TOKEN",
       isNetworkError: false,

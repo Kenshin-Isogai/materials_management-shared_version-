@@ -64,7 +64,7 @@ async function buildHeaders(init?: RequestInit, options?: BuildHeadersOptions): 
       throw error;
     }
     throw new ApiClientError({
-      message: "Sign in again to continue.",
+      message: "Session expired. Please sign in again.",
       statusCode: 401,
       code: "INVALID_TOKEN",
       details: error,
