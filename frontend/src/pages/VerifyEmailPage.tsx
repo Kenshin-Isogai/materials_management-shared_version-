@@ -1,6 +1,10 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { refreshStoredAuthSessionNow, sendIdentityPlatformVerificationEmail } from "../lib/auth";
+import { useEffect, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import {
+  applyIdentityPlatformEmailVerificationCode,
+  refreshStoredAuthSessionNow,
+  sendIdentityPlatformVerificationEmail,
+} from "../lib/auth";
 import { presentApiError } from "../lib/errorUtils";
 import { StatusCallout } from "../components/StatusCallout";
 
@@ -10,9 +14,46 @@ type VerifyEmailPageProps = {
 
 export function VerifyEmailPage({ email }: VerifyEmailPageProps) {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [verificationApplied, setVerificationApplied] = useState(false);
+
+  useEffect(() => {
+    const mode = searchParams.get("mode");
+    const oobCode = searchParams.get("oobCode");
+    if (mode !== "verifyEmail" || !oobCode || verificationApplied) {
+      return;
+    }
+    const verificationCode = oobCode;
+    let active = true;
+    async function applyVerificationCode() {
+      setBusy(true);
+      setMessage(null);
+      setError(null);
+      try {
+        await applyIdentityPlatformEmailVerificationCode(verificationCode);
+        if (!active) return;
+        setVerificationApplied(true);
+        setMessage("Email verification completed. Refreshing the sign-in session now.");
+        await refreshStoredAuthSessionNow();
+        if (!active) return;
+        navigate("/", { replace: true });
+      } catch (applyError) {
+        if (!active) return;
+        setError(presentApiError(applyError));
+      } finally {
+        if (active) {
+          setBusy(false);
+        }
+      }
+    }
+    void applyVerificationCode();
+    return () => {
+      active = false;
+    };
+  }, [navigate, searchParams, verificationApplied]);
 
   async function resendVerificationEmail() {
     setBusy(true);
@@ -64,7 +105,7 @@ export function VerifyEmailPage({ email }: VerifyEmailPageProps) {
 
       <div className="panel space-y-4 p-5">
         <p className="text-sm text-slate-600">
-          If you have not received the verification mail yet, resend it from here.
+          If you opened a verification link, this page now applies that code automatically. If you have not received the verification mail yet, resend it from here.
         </p>
         {message ? <p className="text-sm text-emerald-700">{message}</p> : null}
         {error ? <p className="text-sm text-red-600">{error}</p> : null}

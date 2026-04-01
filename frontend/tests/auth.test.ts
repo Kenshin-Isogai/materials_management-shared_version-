@@ -172,4 +172,28 @@ describe("auth session handling", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("can apply an email verification action code", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("accounts:update")) {
+        return {
+          ok: true,
+          json: async () => ({
+            email: "signup@example.com",
+          }),
+        };
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const auth = await loadAuthModule();
+      await auth.applyIdentityPlatformEmailVerificationCode("sample-oob-code");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(String(fetchMock.mock.calls[0]?.[0] ?? "")).toContain("accounts:update");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

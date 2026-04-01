@@ -31,6 +31,13 @@ type IdentityPlatformOobCodeResponse = {
   };
 };
 
+type IdentityPlatformApplyActionCodeResponse = {
+  email?: string;
+  error?: {
+    message?: string;
+  };
+};
+
 type IdentityPlatformRefreshResponse = {
   id_token?: string;
   refresh_token?: string;
@@ -378,5 +385,18 @@ export async function sendIdentityPlatformVerificationEmail(idToken?: string | n
   await postIdentityPlatformJson<IdentityPlatformOobCodeResponse>("accounts:sendOobCode", {
     requestType: "VERIFY_EMAIL",
     idToken: effectiveIdToken,
+  });
+}
+
+export async function applyIdentityPlatformEmailVerificationCode(oobCode: string): Promise<void> {
+  if (!isIdentityPlatformConfigured()) {
+    throw new Error("Identity Platform API key is not configured.");
+  }
+  const normalizedCode = String(oobCode).trim();
+  if (!normalizedCode) {
+    throw new Error("Verification code is required.");
+  }
+  await postIdentityPlatformJson<IdentityPlatformApplyActionCodeResponse>("accounts:update", {
+    oobCode: normalizedCode,
   });
 }
