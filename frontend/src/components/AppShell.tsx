@@ -158,11 +158,18 @@ export function AppShell() {
   };
 
   /* ── Redirect unauthenticated users to /login ── */
+  /* Exclude /verify-email (handles oobCode action links from fresh browser sessions)
+     and /registration (shows guidance for anonymous users). */
   useEffect(() => {
-    if (!isSignedIn && isIdentityPlatformConfigured()) {
+    if (
+      !isSignedIn &&
+      isIdentityPlatformConfigured() &&
+      !onVerifyEmailPage &&
+      !onRegistrationPage
+    ) {
       navigate("/login", { replace: true });
     }
-  }, [isSignedIn, navigate]);
+  }, [isSignedIn, navigate, onVerifyEmailPage, onRegistrationPage]);
 
   useEffect(() => {
     if (!isSignedIn || authResolutionBusy) return;

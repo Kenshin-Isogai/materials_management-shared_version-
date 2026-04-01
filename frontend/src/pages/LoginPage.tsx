@@ -1,14 +1,12 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import {
-  clearStoredAuthSession,
   getStoredAccessTokenOrNull,
   getStoredAuthSessionSnapshot,
   isIdentityPlatformConfigured,
   sendIdentityPlatformVerificationEmail,
   signInWithIdentityPlatformEmailPassword,
   signUpWithIdentityPlatformEmailPassword,
-  subscribeAuthSessionChanged,
 } from "../lib/auth";
 import { setStoredAccessToken } from "../lib/api";
 import { presentApiError } from "../lib/errorUtils";
@@ -26,6 +24,9 @@ export function LoginPage() {
   const [authStatusMessage, setAuthStatusMessage] = useState<string | null>(null);
   const [authFormMode, setAuthFormMode] = useState<"signin" | "signup">("signin");
 
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
+
   const allowManualTokenEntry =
     !isIdentityPlatformConfigured() ||
     ["localhost", "127.0.0.1"].includes(window.location.hostname);
@@ -36,24 +37,13 @@ export function LoginPage() {
     setSignupMessage(null);
   };
 
-  /* Redirect away once signed-in */
+  /* Redirect away if already signed-in on mount */
   useEffect(() => {
     const token = getStoredAccessTokenOrNull();
     if (token) {
       navigate("/", { replace: true });
     }
   }, [navigate]);
-
-  useEffect(
-    () =>
-      subscribeAuthSessionChanged(() => {
-        const token = getStoredAccessTokenOrNull();
-        if (token) {
-          navigate("/", { replace: true });
-        }
-      }),
-    [navigate],
-  );
 
   const handleTokenChange = (nextToken: string) => {
     setStoredAccessToken(nextToken || null);
@@ -71,13 +61,15 @@ export function LoginPage() {
     clearAuthFeedback();
     try {
       await signInWithIdentityPlatformEmailPassword(loginEmail, loginPassword);
+      if (!mountedRef.current) return;
       setLoginPassword("");
       setAuthStatusMessage("Signed in. Redirecting...");
-      /* auth-session-changed event will trigger redirect */
+      navigate("/", { replace: true });
     } catch (error) {
+      if (!mountedRef.current) return;
       setLoginError(presentApiError(error));
     } finally {
-      setLoginBusy(false);
+      if (mountedRef.current) setLoginBusy(false);
     }
   };
 
@@ -88,14 +80,16 @@ export function LoginPage() {
     try {
       await signUpWithIdentityPlatformEmailPassword(loginEmail, loginPassword);
       await sendIdentityPlatformVerificationEmail();
+      if (!mountedRef.current) return;
       setAuthStatusMessage("Account created. Verify your email address before continuing.");
       setSignupMessage("Account created. A verification email has been sent.");
       setLoginPassword("");
-      /* auth-session-changed event will trigger redirect */
+      navigate("/", { replace: true });
     } catch (error) {
+      if (!mountedRef.current) return;
       setSignupError(presentApiError(error));
     } finally {
-      setSignupBusy(false);
+      if (mountedRef.current) setSignupBusy(false);
     }
   };
 

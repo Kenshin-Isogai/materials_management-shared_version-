@@ -6,7 +6,8 @@
   - created a new standalone `LoginPage.tsx` that renders outside `AppShell` as a full-screen login experience with premium glassmorphic card styling and entrance animation
   - the login page shows Identity Platform email/password sign-in and sign-up when `VITE_IDENTITY_PLATFORM_API_KEY` is configured, and falls back to bearer-token input for localhost/non-IP environments
   - removed the bulky inline login form from the `AppShell` header (~130 lines of form markup); the header now shows a compact user badge (name + role + sign out) when signed in or a simple "Sign in" link when not
-  - `AppShell` now redirects unauthenticated users to `/login` when Identity Platform is configured
+  - `AppShell` now redirects unauthenticated users to `/login` when Identity Platform is configured. Excludes `/registration` and `/verify-email` from the redirect so anonymous users can reach those necessary flows.
+  - Fix: `LoginPage` explicit navigation and `mountedRef` guard added to prevent React state updates on an unmounted component after submit flows complete.
   - `App.tsx` routing restructured: `/login` renders outside the `AppShell` layout (no header/nav), all other routes remain inside `AppShell`
   - removed the redundant "Sign in to load dashboard data" callout from `DashboardPage` since unauthenticated users are redirected to `/login`
   - updated unit tests in `AppRouter.test.tsx` to reflect the new redirect-to-login behavior and form relocation
