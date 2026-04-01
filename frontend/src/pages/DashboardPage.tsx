@@ -2,6 +2,8 @@ import { useMemo, useState } from "react";
 import useSWR from "swr";
 import { apiGet } from "../lib/api";
 import { StatCard } from "../components/StatCard";
+import { StatusCallout } from "../components/StatusCallout";
+import { isAuthError, isBackendUnavailableError, presentApiError } from "../lib/errorUtils";
 
 type Summary = {
   overdue_orders: Array<Record<string, unknown>>;
@@ -46,9 +48,23 @@ export function DashboardPage() {
 
       {isLoading && <div className="panel p-6 text-sm text-slate-500">Loading...</div>}
       {error && (
-        <div className="panel border-red-200 bg-red-50 p-6 text-sm text-red-700">
-          {String(error)}
-        </div>
+        <StatusCallout
+          title={
+            isAuthError(error)
+              ? "Sign-in required"
+              : isBackendUnavailableError(error)
+                ? "Environment unavailable"
+                : "Dashboard request failed"
+          }
+          message={
+            isAuthError(error)
+              ? "Sign in with an allowed account to load dashboard data."
+              : isBackendUnavailableError(error)
+                ? "Dashboard is unavailable because the backend or database is not ready. If this is dev or staging, start Cloud SQL and try again."
+                : presentApiError(error)
+          }
+          tone={isBackendUnavailableError(error) ? "warning" : "error"}
+        />
       )}
 
       {data && (

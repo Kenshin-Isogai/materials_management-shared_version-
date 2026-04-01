@@ -20,6 +20,28 @@ export type ApiErr = {
 
 export type ApiResponse<T> = ApiOk<T> | ApiErr;
 
+export class ApiClientError extends Error {
+  statusCode: number | null;
+  code: string | null;
+  details: unknown;
+  isNetworkError: boolean;
+
+  constructor(params: {
+    message: string;
+    statusCode?: number | null;
+    code?: string | null;
+    details?: unknown;
+    isNetworkError?: boolean;
+  }) {
+    super(params.message);
+    this.name = "ApiClientError";
+    this.statusCode = params.statusCode ?? null;
+    this.code = params.code ?? null;
+    this.details = params.details;
+    this.isNetworkError = params.isNetworkError ?? false;
+  }
+}
+
 export type UserRole = "admin" | "operator" | "viewer";
 
 export type User = {

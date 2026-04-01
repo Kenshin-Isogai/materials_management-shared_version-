@@ -1,3 +1,15 @@
+## 2026-04-02
+
+### Changed
+
+- Tightened cloud-auth UX and error handling after the first GCP rollout validation.
+  - frontend API failures now distinguish auth-required, backend-unavailable, and generic request failures instead of surfacing a generic fetch error
+  - frontend mutation requests now preserve auth-classified header-preparation failures (including expired-session refresh failures) instead of masking them as backend-unavailable errors
+  - dashboard and shell login status now show operator-meaningful messages when a token is missing, invalid, or not mapped to an active app user
+  - dashboard/workspace views and the global shell now show dedicated sign-in guidance and environment-unavailable callouts instead of raw error strings
+  - projects, inventory, reservations, orders, items, history, and shared editor surfaces now reuse the same API error presentation instead of rendering raw `String(error)` output
+  - backend JWT verification failures are now normalized into `INVALID_TOKEN` API responses instead of leaking PyJWT exceptions through the middleware stack
+
 ## 2026-04-01
 
 ### Changed
@@ -8,6 +20,7 @@
   - backend deploy assets now preserve the working Identity Platform settings by defaulting to `JWT_SIGNING_ALGORITHMS=RS256` and exposing `OIDC_REQUIRE_EMAIL_VERIFIED` as an explicit deployment choice
   - Cloud Run deployment assets now include backend/frontend env templates, PowerShell deploy scripts, a migration-job script, a Secret Manager helper, and a GitHub Actions deployment workflow
   - the GitHub Actions workflow now supports `backend`, `frontend`, and `full` deployment targets so first-time environment rollout does not require both public URLs up front
+  - added a first-time environment bootstrap runbook with concrete `gcloud`, GitHub Actions, and bootstrap-admin examples
   - rollout docs now describe Identity Platform configuration instead of Google Identity client setup
 
 ## 2026-03-30

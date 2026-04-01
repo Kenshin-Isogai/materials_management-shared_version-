@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
+import { ApiErrorNotice } from "../components/ApiErrorNotice";
 import { CatalogPicker } from "../components/CatalogPicker";
 import { apiDownload, apiGet, apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
 import { formatActionError, resolvePreviewSelection } from "../lib/previewState";
@@ -1326,7 +1327,7 @@ export function ItemsPage() {
         </p>
         {importJobsMessage && <p className="mt-2 text-sm text-signal">{importJobsMessage}</p>}
         {importJobsLoading && <p className="mt-2 text-sm text-slate-500">Loading import jobs...</p>}
-        {importJobsError && <p className="mt-2 text-sm text-red-600">{String(importJobsError)}</p>}
+        {importJobsError && <ApiErrorNotice error={importJobsError} area="item import job data" className="mt-2" />}
         {importJobs.length > 0 ? (
           <div className="mt-3 overflow-x-auto">
             <table className="min-w-[980px] text-sm">
@@ -1397,9 +1398,7 @@ export function ItemsPage() {
           <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
             <p className="text-sm font-semibold text-slate-900">Selected Job #{selectedImportJobId}</p>
             {importJobDetailLoading && <p className="mt-2 text-sm text-slate-500">Loading job detail...</p>}
-            {importJobDetailError && (
-              <p className="mt-2 text-sm text-red-600">{String(importJobDetailError)}</p>
-            )}
+            {importJobDetailError && <ApiErrorNotice error={importJobDetailError} area="item import job detail" className="mt-2" />}
             {selectedImportJob && (
               <>
                 <p className="mt-2 text-sm text-slate-700">
@@ -1592,7 +1591,7 @@ export function ItemsPage() {
           Referenced items can update metadata, but item number/manufacturer changes are blocked.
         </p>
         {isItemListExpanded && isLoading && <p className="text-sm text-slate-500">Loading...</p>}
-        {isItemListExpanded && error && <p className="text-sm text-red-600">{String(error)}</p>}
+        {isItemListExpanded && error && <ApiErrorNotice error={error} area="item list data" />}
         {isItemListExpanded && data?.data && (
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
@@ -1758,7 +1757,7 @@ export function ItemsPage() {
             </button>
           </div>
           {selectedFlowLoading && <p className="text-sm text-slate-500">Loading timeline...</p>}
-          {selectedFlowError && <p className="text-sm text-red-600">{String(selectedFlowError)}</p>}
+          {selectedFlowError && <ApiErrorNotice error={selectedFlowError} area="item flow timeline" />}
           {selectedFlowData && (
             <>
               <p className="mb-2 text-sm text-slate-700">

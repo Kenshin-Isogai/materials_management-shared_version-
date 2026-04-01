@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 import { apiDownload, apiGet, apiGetWithPagination, apiSend } from "../lib/api";
+import { ApiErrorNotice } from "./ApiErrorNotice";
 import {
   blankRequirementDraft,
   normalizeRequirementDrafts,
@@ -439,7 +440,7 @@ export function ProjectEditor({
   return (
     <section className={surfaceClassName}>
       <h2 className="mb-3 font-display text-lg font-semibold">{sectionTitle}</h2>
-      {projectError && <p className="mb-3 text-sm text-red-600">{String(projectError)}</p>}
+      {projectError && <ApiErrorNotice error={projectError} area="project editor data" className="mb-3" />}
       {isEditing && projectLoading && !projectData && (
         <p className="mb-3 text-sm text-slate-500">Loading project...</p>
       )}

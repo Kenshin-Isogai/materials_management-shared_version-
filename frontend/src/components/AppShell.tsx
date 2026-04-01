@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { RouteErrorBoundary } from "./RouteErrorBoundary";
+import { StatusCallout } from "./StatusCallout";
 import {
   clearStoredAuthSession,
   getStoredAccessTokenOrNull,
@@ -13,6 +14,7 @@ import {
   setStoredAccessToken,
   subscribeUsersChanged,
 } from "../lib/api";
+import { isAuthError, presentApiError } from "../lib/errorUtils";
 import type { User } from "../lib/types";
 
 const nav = [
@@ -43,6 +45,7 @@ export function AppShell() {
   const [loginBusy, setLoginBusy] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [authStatusMessage, setAuthStatusMessage] = useState<string | null>(null);
   const [authVersion, setAuthVersion] = useState(0);
   const [usersVersion, setUsersVersion] = useState(0);
 
@@ -75,6 +78,7 @@ export function AppShell() {
       subscribeAuthSessionChanged(() => {
         setIsSignedIn(Boolean(getStoredAccessTokenOrNull()));
         setAuthVersion((value) => value + 1);
+        setAuthStatusMessage(null);
       }),
     [],
   );
@@ -84,6 +88,7 @@ export function AppShell() {
     setAccessTokenDraft(nextToken);
     setIsSignedIn(Boolean(nextToken.trim()));
     setLoginError(null);
+    setAuthStatusMessage(null);
   };
 
   const clearToken = () => {
@@ -94,6 +99,7 @@ export function AppShell() {
     setCurrentUser(null);
     setIsSignedIn(false);
     setLoginError(null);
+    setAuthStatusMessage("Signed out.");
   };
 
   const submitIdentityPlatformLogin = async (event: FormEvent<HTMLFormElement>) => {
@@ -105,12 +111,44 @@ export function AppShell() {
       setLoginPassword("");
       setAccessTokenDraft("");
       setIsSignedIn(true);
+      setAuthStatusMessage("Signed in. Loading your user profile...");
     } catch (error) {
-      setLoginError(error instanceof Error ? error.message : String(error));
+      setLoginError(presentApiError(error));
     } finally {
       setLoginBusy(false);
     }
   };
+
+  useEffect(() => {
+    if (!isSignedIn) return;
+    let cancelled = false;
+    apiGet<User>("/users/me")
+      .then((user) => {
+        if (cancelled) return;
+        setCurrentUser(user);
+        setAuthStatusMessage(`Signed in as ${user.display_name} (${user.role}).`);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setCurrentUser(null);
+        if (isAuthError(error)) {
+          setAuthStatusMessage("Sign-in succeeded, but this account is not mapped to an active app user.");
+          return;
+        }
+        setAuthStatusMessage(presentApiError(error));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isSignedIn, authVersion]);
+
+  const helperMessage = !isSignedIn
+    ? isIdentityPlatformConfigured()
+      ? "Protected pages require an Identity Platform account that is also mapped to an active app user."
+      : "Paste a valid Bearer token to access protected pages."
+    : currentUser === null && !authStatusMessage
+      ? "Signed-in tokens still need an active app-user mapping before protected pages can load."
+      : null;
 
   return (
     <div className="min-h-screen text-ink">
@@ -202,10 +240,24 @@ export function AppShell() {
               />
             </label>
             {loginError ? <p className="text-xs text-red-600">{loginError}</p> : null}
+            {authStatusMessage ? <p className="text-xs text-slate-500">{authStatusMessage}</p> : null}
+            {!loginError && helperMessage ? <p className="text-xs text-slate-500">{helperMessage}</p> : null}
           </div>
         </div>
       </header>
       <main className="mx-auto max-w-7xl px-4 py-8">
+        {!isSignedIn && (
+          <div className="mb-6">
+            <StatusCallout
+              title="Sign in to use protected pages"
+              message={
+                isIdentityPlatformConfigured()
+                  ? "Use your provisioned email/password above. The account must also be registered as an active app user."
+                  : "Set a Bearer token above before opening protected pages."
+              }
+            />
+          </div>
+        )}
         <RouteErrorBoundary location={location}>
           <Outlet />
         </RouteErrorBoundary>

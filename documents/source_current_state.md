@@ -24,6 +24,9 @@ Last updated: 2026-03-29 (JST)
 - `frontend/`
   - `src/pages/`: active pages wired into the router: Dashboard, Workspace, Items (Search), Locations, Projects, Procurement, Orders, Inventory (Movements), Reservations (Reserve), BOM, Snapshot, History, Master, Users. Unused page files retained but not routed: `PlanningPage.tsx`, `RfqPage.tsx`, `AssembliesPage.tsx`, `PurchaseCandidatesPage.tsx`.
   - `src/lib/api.ts`: API client now normalizes `VITE_API_BASE`, supports absolute backend URLs for split Cloud Run services, and injects `Authorization: Bearer <JWT>` when a stored token exists
+  - `src/lib/errorUtils.ts`: frontend error classification/presentation helpers distinguish auth errors, backend-unavailable cases, and generic API failures for cloud-hosted UX
+  - `src/components/StatusCallout.tsx`: shared callout used by the shell, dashboard, and workspace to explain sign-in requirements and environment-unavailable states
+  - `src/components/ApiErrorNotice.tsx`: shared page-level API error presenter now used across major routed pages and embedded editors
   - `nginx.conf`: cloud-first static frontend config that does not proxy `/api`
   - `nginx.local-proxy.conf`: local Docker Compose nginx config that keeps same-origin `/api` proxying to the backend container
 - `documents/`

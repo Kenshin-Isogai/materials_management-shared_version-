@@ -3,7 +3,7 @@ import {
   getValidAccessTokenOrNull,
   setStoredAccessToken as setStoredAccessTokenInAuth,
 } from "./auth";
-import type { ApiResponse } from "./types";
+import { ApiClientError, type ApiResponse } from "./types";
 
 function normalizeApiBase(value: unknown): string {
   const raw = String(value ?? "/api").trim() || "/api";
@@ -56,23 +56,61 @@ type BuildHeadersOptions = {
 
 async function buildHeaders(init?: RequestInit, options?: BuildHeadersOptions): Promise<Headers> {
   const headers = new Headers(init?.headers ?? {});
-  const accessToken = await getValidAccessTokenOrNull();
+  let accessToken: string | null = null;
+  try {
+    accessToken = await getValidAccessTokenOrNull();
+  } catch (error) {
+    if (error instanceof ApiClientError) {
+      throw error;
+    }
+    throw new ApiClientError({
+      message: "Session expired. Please sign in again.",
+      statusCode: 401,
+      code: "INVALID_TOKEN",
+      details: error,
+    });
+  }
   if (accessToken) {
     headers.set("Authorization", `Bearer ${accessToken}`);
   }
   if (isMutationMethod(init?.method)) {
     if (!accessToken && !options?.allowAnonymousMutation) {
-      throw new Error("Set an access token before performing changes.");
+      throw new ApiClientError({
+        message: "Set an access token before performing changes.",
+        statusCode: 401,
+        code: "AUTH_REQUIRED",
+      });
     }
   }
   return headers;
 }
 
 async function fetchApi(path: string, init?: RequestInit): Promise<Response> {
-  return fetch(buildApiUrl(path), {
-    ...init,
-    headers: await buildHeaders(init),
-  });
+  const headers = await buildHeaders(init);
+  try {
+    return await fetch(buildApiUrl(path), {
+      ...init,
+      headers,
+    });
+  } catch (error) {
+    throw new ApiClientError({
+      message: "Could not reach the backend service.",
+      isNetworkError: true,
+      details: error,
+    });
+  }
+}
+
+async function performFetch(path: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(buildApiUrl(path), init);
+  } catch (error) {
+    throw new ApiClientError({
+      message: "Could not reach the backend service.",
+      isNetworkError: true,
+      details: error,
+    });
+  }
 }
 
 function extractFilename(
@@ -105,9 +143,12 @@ export async function apiGet<T>(path: string): Promise<T> {
   const res = await fetchApi(path);
   const payload = await parseJson<T>(res);
   if (!res.ok || payload.status === "error") {
-    throw new Error(
-      payload.status === "error" ? payload.error.message : `HTTP ${res.status}`
-    );
+    throw new ApiClientError({
+      message: payload.status === "error" ? payload.error.message : `HTTP ${res.status}`,
+      statusCode: res.status,
+      code: payload.status === "error" ? payload.error.code : null,
+      details: payload.status === "error" ? payload.error.details : null,
+    });
   }
   return payload.data;
 }
@@ -124,9 +165,12 @@ export async function apiGetWithPagination<T>(path: string): Promise<{
   const res = await fetchApi(path);
   const payload = await parseJson<T>(res);
   if (!res.ok || payload.status === "error") {
-    throw new Error(
-      payload.status === "error" ? payload.error.message : `HTTP ${res.status}`
-    );
+    throw new ApiClientError({
+      message: payload.status === "error" ? payload.error.message : `HTTP ${res.status}`,
+      statusCode: res.status,
+      code: payload.status === "error" ? payload.error.code : null,
+      details: payload.status === "error" ? payload.error.details : null,
+    });
   }
   return { data: payload.data, pagination: payload.pagination };
 }
@@ -163,16 +207,19 @@ export async function apiSend<T>(
 ): Promise<T> {
   const headers = await buildHeaders({ ...init, method: init?.method ?? "POST" }, options);
   headers.set("Content-Type", "application/json");
-  const res = await fetch(buildApiUrl(path), {
+  const res = await performFetch(path, {
     ...init,
     method: init?.method ?? "POST",
     headers,
   });
   const payload = await parseJson<T>(res);
   if (!res.ok || payload.status === "error") {
-    throw new Error(
-      payload.status === "error" ? payload.error.message : `HTTP ${res.status}`
-    );
+    throw new ApiClientError({
+      message: payload.status === "error" ? payload.error.message : `HTTP ${res.status}`,
+      statusCode: res.status,
+      code: payload.status === "error" ? payload.error.code : null,
+      details: payload.status === "error" ? payload.error.details : null,
+    });
   }
   return payload.data;
 }
@@ -184,9 +231,12 @@ export async function apiSendForm<T>(
   const res = await fetchApi(path, { method: "POST", body: formData });
   const payload = await parseJson<T>(res);
   if (!res.ok || payload.status === "error") {
-    throw new Error(
-      payload.status === "error" ? payload.error.message : `HTTP ${res.status}`
-    );
+    throw new ApiClientError({
+      message: payload.status === "error" ? payload.error.message : `HTTP ${res.status}`,
+      statusCode: res.status,
+      code: payload.status === "error" ? payload.error.code : null,
+      details: payload.status === "error" ? payload.error.details : null,
+    });
   }
   return payload.data;
 }
@@ -201,11 +251,17 @@ export async function apiDownload(
     const contentType = res.headers.get("content-type") ?? "";
     if (contentType.includes("application/json")) {
       const payload = await parseJson<unknown>(res);
-      throw new Error(
-        payload.status === "error" ? payload.error.message : `HTTP ${res.status}`
-      );
+      throw new ApiClientError({
+        message: payload.status === "error" ? payload.error.message : `HTTP ${res.status}`,
+        statusCode: res.status,
+        code: payload.status === "error" ? payload.error.code : null,
+        details: payload.status === "error" ? payload.error.details : null,
+      });
     }
-    throw new Error((await res.text()) || `HTTP ${res.status}`);
+    throw new ApiClientError({
+      message: (await res.text()) || `HTTP ${res.status}`,
+      statusCode: res.status,
+    });
   }
 
   const blob = await res.blob();

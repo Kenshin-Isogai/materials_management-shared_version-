@@ -8,6 +8,7 @@ import {
 } from "react";
 import useSWR from "swr";
 import { apiGet } from "../lib/api";
+import { presentApiError } from "../lib/errorUtils";
 import type {
   CatalogEntityType,
   CatalogSearchResponse,
@@ -349,7 +350,7 @@ export function CatalogPicker(props: CatalogPickerProps) {
             )}
             {isLoading && <p className="px-2 py-3 text-sm text-slate-500">Searching…</p>}
             {!isLoading && error && (
-              <p className="px-2 py-3 text-sm text-red-600">{String(error)}</p>
+              <p className="px-2 py-3 text-sm text-red-600">{presentApiError(error)}</p>
             )}
             {!isLoading && !error && groupedResults.length === 0 && (
               <p className="px-2 py-3 text-sm text-slate-500">
