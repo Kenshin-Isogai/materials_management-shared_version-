@@ -59,6 +59,7 @@ uv run --project backend python -m pytest --import-mode=importlib
 - `RBAC_MODE` controls role enforcement: `none`, `rbac_dry_run`, or `rbac_enforced`.
 - `JWT_VERIFIER` now supports `shared_secret` for local/test fixture tokens and `jwks` for deployed OIDC/JWKS verification.
 - Set `OIDC_JWKS_URL` when `JWT_VERIFIER=jwks`.
+- Identity Platform email/password rollout should use `OIDC_PROVIDER=identity_platform`, `OIDC_EXPECTED_ISSUER=https://securetoken.google.com/<project-id>`, and `OIDC_EXPECTED_AUDIENCE=<project-id>`.
 - Verified OIDC claims are mapped to active `users` rows through `email`, `identity_provider` + `external_subject`, and optional `hosted_domain`.
 - `DIAGNOSTICS_AUTH_ROLE` controls `GET /api/health` and `GET /api/auth/capabilities` exposure.
   - local default: `public`

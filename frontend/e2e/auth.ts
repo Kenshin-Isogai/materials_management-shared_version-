@@ -15,5 +15,6 @@ export async function installAccessToken(page: Page): Promise<void> {
   }
   await page.addInitScript((token: string) => {
     window.localStorage.setItem('materials.access-token', token);
+    window.sessionStorage.setItem('materials.auth-session', JSON.stringify({ accessToken: token }));
   }, E2E_BEARER_TOKEN);
 }

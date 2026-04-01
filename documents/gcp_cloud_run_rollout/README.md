@@ -18,7 +18,7 @@ The repository already contains most of the code-level changes needed for:
 The main remaining work is now the live-production layer on top of an already-hardened repository:
 
 - real GCP resource wiring and live validation
-- cloud-side Google/OIDC client and issuer rollout
+- cloud-side Identity Platform and issuer rollout
 - backup/restore and rollback procedure ownership
 - production monitoring, alerting, and routine change management
 
@@ -31,7 +31,7 @@ The main remaining work is now the live-production layer on top of an already-ha
 - persistent application-managed files use GCS
 - Cloud SQL uses the connector / Unix socket model
 - the first rollout keeps nginx in the frontend container
-- repository auth now assumes Bearer JWT identity and already includes Google Identity UI, JWKS-backed verification, diagnostics gating, and structured domain audit logs
+- repository auth now assumes Bearer JWT identity and already includes Identity Platform email/password UI, JWKS-backed verification, diagnostics gating, and structured domain audit logs
 - order import no longer accepts legacy `pdf_link`; `quotation_document_url` is now the only supported contract
 
 ## Reading order
@@ -41,6 +41,7 @@ The main remaining work is now the live-production layer on top of an already-ha
 3. `environment_and_runtime_matrix.md`
 4. `cloud_run_deployment_runbook.md`
 5. `security_and_cost_considerations.md`
+6. `github_actions_environment_setup.md`
 
 Use these only as supporting references:
 
@@ -55,6 +56,7 @@ Use these only as supporting references:
 - `environment_and_runtime_matrix.md`: runtime/deployment variable contract
 - `cloud_run_deployment_runbook.md`: deployment, update, rollback, and recovery workflow
 - `security_and_cost_considerations.md`: security, robustness, and cost guardrails
+- `github_actions_environment_setup.md`: GitHub Environment variables/secrets and first-time workflow order
 - `implementation_plan.md`: remaining hardening workstreams
 - `implementation_slices.md`: compressed execution order split between repo-side follow-up and post-project work
 - `task_breakdown_by_file.md`: repository surfaces that still matter if further hardening code changes are needed

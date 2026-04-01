@@ -1,0 +1,94 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const originalApiKey = import.meta.env.VITE_IDENTITY_PLATFORM_API_KEY;
+
+async function loadAuthModule() {
+  vi.resetModules();
+  return import("../src/lib/auth");
+}
+
+describe("auth session handling", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+    import.meta.env.VITE_IDENTITY_PLATFORM_API_KEY = "test-api-key";
+    vi.restoreAllMocks();
+  });
+
+  afterEach(() => {
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+    import.meta.env.VITE_IDENTITY_PLATFORM_API_KEY = originalApiKey;
+  });
+
+  it("refreshes when the token is inside the safety window", async () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          id_token: "refreshed-token",
+          refresh_token: "refresh-1",
+          expires_in: "3600",
+        }),
+      })),
+    );
+    window.sessionStorage.setItem(
+      "materials.auth-session",
+      JSON.stringify({
+        accessToken: "old-token",
+        refreshToken: "refresh-1",
+        expiresAt: now + 30_000,
+        email: "user@example.com",
+      }),
+    );
+
+    const auth = await loadAuthModule();
+    await expect(auth.getValidAccessTokenOrNull()).resolves.toBe("refreshed-token");
+
+    const stored = JSON.parse(window.sessionStorage.getItem("materials.auth-session") ?? "{}");
+    expect(stored.accessToken).toBe("refreshed-token");
+    expect(stored.refreshToken).toBe("refresh-1");
+    expect(stored.email).toBe("user@example.com");
+  });
+
+  it("clears the session when refresh fails", async () => {
+    const now = 1_700_000_000_000;
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status: 400,
+        json: async () => ({
+          error: { message: "TOKEN_EXPIRED" },
+        }),
+      })),
+    );
+    window.sessionStorage.setItem(
+      "materials.auth-session",
+      JSON.stringify({
+        accessToken: "old-token",
+        refreshToken: "refresh-1",
+        expiresAt: now + 30_000,
+      }),
+    );
+
+    const auth = await loadAuthModule();
+    await expect(auth.getValidAccessTokenOrNull()).rejects.toThrow("TOKEN_EXPIRED");
+    expect(window.sessionStorage.getItem("materials.auth-session")).toBeNull();
+  });
+
+  it("does not attempt refresh for manual token fallback", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    window.localStorage.setItem("materials.access-token", "manual-token");
+
+    const auth = await loadAuthModule();
+    await expect(auth.getValidAccessTokenOrNull()).resolves.toBe("manual-token");
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(window.sessionStorage.getItem("materials.auth-session")).toContain("manual-token");
+  });
+});

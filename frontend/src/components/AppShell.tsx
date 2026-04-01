@@ -1,15 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { RouteErrorBoundary } from "./RouteErrorBoundary";
 import {
-  apiGet,
+  clearStoredAuthSession,
   getStoredAccessTokenOrNull,
+  isIdentityPlatformConfigured,
+  signInWithIdentityPlatformEmailPassword,
+  subscribeAuthSessionChanged,
+} from "../lib/auth";
+import {
+  apiGet,
   setStoredAccessToken,
   subscribeUsersChanged,
 } from "../lib/api";
 import type { User } from "../lib/types";
-
-const GOOGLE_CLIENT_ID = (import.meta.env.VITE_GOOGLE_CLIENT_ID ?? "").trim();
 
 const nav = [
   { to: "/", label: "Dashboard" },
@@ -32,16 +36,19 @@ const nav = [
 
 export function AppShell() {
   const location = useLocation();
-  const [accessToken, setAccessTokenState] = useState<string>(getStoredAccessTokenOrNull() ?? "");
+  const [accessTokenDraft, setAccessTokenDraft] = useState<string>("");
+  const [isSignedIn, setIsSignedIn] = useState<boolean>(Boolean(getStoredAccessTokenOrNull()));
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
-  const [googleStatus, setGoogleStatus] = useState<"hidden" | "loading" | "ready" | "error">(
-    GOOGLE_CLIENT_ID ? "loading" : "hidden",
-  );
+  const [authVersion, setAuthVersion] = useState(0);
   const [usersVersion, setUsersVersion] = useState(0);
 
   useEffect(() => {
     let active = true;
-    if (!accessToken) {
+    if (!isSignedIn) {
       setCurrentUser(null);
       return () => {
         active = false;
@@ -60,83 +67,49 @@ export function AppShell() {
     return () => {
       active = false;
     };
-  }, [accessToken, usersVersion]);
+  }, [isSignedIn, authVersion, usersVersion]);
 
   useEffect(() => subscribeUsersChanged(() => setUsersVersion((value) => value + 1)), []);
-
-  useEffect(() => {
-    if (!GOOGLE_CLIENT_ID) {
-      setGoogleStatus("hidden");
-      return;
-    }
-    let active = true;
-    const buttonContainer = document.getElementById("google-signin-button");
-    if (!buttonContainer) return;
-
-    const renderGoogleButton = () => {
-      if (!active || !window.google?.accounts?.id || !buttonContainer) return;
-      buttonContainer.innerHTML = "";
-      window.google.accounts.id.initialize({
-        client_id: GOOGLE_CLIENT_ID,
-        callback: (response) => {
-          if (!response.credential) return;
-          setStoredAccessToken(response.credential);
-          setAccessTokenState(response.credential);
-        },
-      });
-      window.google.accounts.id.renderButton(buttonContainer, {
-        theme: "outline",
-        size: "medium",
-        shape: "pill",
-        text: "signin_with",
-        width: 240,
-      });
-      setGoogleStatus("ready");
-    };
-
-    if (window.google?.accounts?.id) {
-      renderGoogleButton();
-      return () => {
-        active = false;
-      };
-    }
-
-    const existingScript = document.querySelector<HTMLScriptElement>(
-      'script[data-google-identity-script="true"]',
-    );
-    const script =
-      existingScript ??
-      Object.assign(document.createElement("script"), {
-        src: "https://accounts.google.com/gsi/client",
-        async: true,
-        defer: true,
-      });
-
-    script.dataset.googleIdentityScript = "true";
-    const handleScriptError = () => {
-      if (active) setGoogleStatus("error");
-    };
-    script.addEventListener("load", renderGoogleButton);
-    script.addEventListener("error", handleScriptError);
-    if (!existingScript) {
-      document.head.appendChild(script);
-    }
-    return () => {
-      active = false;
-      script.removeEventListener("load", renderGoogleButton);
-      script.removeEventListener("error", handleScriptError);
-    };
-  }, []);
+  useEffect(
+    () =>
+      subscribeAuthSessionChanged(() => {
+        setIsSignedIn(Boolean(getStoredAccessTokenOrNull()));
+        setAuthVersion((value) => value + 1);
+      }),
+    [],
+  );
 
   const handleTokenChange = (nextToken: string) => {
     setStoredAccessToken(nextToken || null);
-    setAccessTokenState(nextToken);
+    setAccessTokenDraft(nextToken);
+    setIsSignedIn(Boolean(nextToken.trim()));
+    setLoginError(null);
   };
 
   const clearToken = () => {
-    setStoredAccessToken(null);
-    setAccessTokenState("");
+    clearStoredAuthSession();
+    setAccessTokenDraft("");
+    setLoginEmail("");
+    setLoginPassword("");
     setCurrentUser(null);
+    setIsSignedIn(false);
+    setLoginError(null);
+  };
+
+  const submitIdentityPlatformLogin = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setLoginBusy(true);
+    setLoginError(null);
+    try {
+      await signInWithIdentityPlatformEmailPassword(loginEmail, loginPassword);
+      setLoginPassword("");
+      setAccessTokenDraft("");
+      setIsSignedIn(true);
+    } catch (error) {
+      setLoginError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLoginBusy(false);
+    }
   };
 
   return (
@@ -165,9 +138,9 @@ export function AppShell() {
             <div className="flex items-center gap-2">
               <span className="font-semibold text-slate-600">Login</span>
               <span className="text-xs text-slate-500">
-                {currentUser ? `${currentUser.display_name} (${currentUser.role})` : "anonymous"}
+                {currentUser ? `${currentUser.display_name} (${currentUser.role})` : isSignedIn ? "signed in" : "anonymous"}
               </span>
-              {accessToken ? (
+              {isSignedIn ? (
                 <button
                   className="ml-auto rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-50"
                   onClick={clearToken}
@@ -177,27 +150,58 @@ export function AppShell() {
                 </button>
               ) : null}
             </div>
-            {GOOGLE_CLIENT_ID ? (
-              <div className="flex items-center gap-3">
-                <div id="google-signin-button" />
-                <span className="text-xs text-slate-500">
-                  {googleStatus === "loading" ? "Loading Google sign-in..." : null}
-                  {googleStatus === "error" ? "Google sign-in could not be loaded." : null}
-                  {googleStatus === "ready" ? "Google Identity active" : null}
-                </span>
-              </div>
+            {isIdentityPlatformConfigured() ? (
+              <form className="grid gap-2" onSubmit={submitIdentityPlatformLogin}>
+                <label className="flex items-center gap-2">
+                  <span className="w-24 font-semibold text-slate-600">Email</span>
+                  <input
+                    className="min-w-0 flex-1 rounded-md border border-slate-200 px-2 py-1 text-slate-900 outline-none"
+                    autoComplete="email"
+                    onChange={(event) => setLoginEmail(event.target.value)}
+                    placeholder="user@example.com"
+                    required
+                    type="email"
+                    value={loginEmail}
+                  />
+                </label>
+                <label className="flex items-center gap-2">
+                  <span className="w-24 font-semibold text-slate-600">Password</span>
+                  <input
+                    className="min-w-0 flex-1 rounded-md border border-slate-200 px-2 py-1 text-slate-900 outline-none"
+                    autoComplete="current-password"
+                    onChange={(event) => setLoginPassword(event.target.value)}
+                    placeholder="Identity Platform password"
+                    required
+                    type="password"
+                    value={loginPassword}
+                  />
+                </label>
+                <div className="flex items-center gap-2">
+                  <button
+                    className="button-subtle"
+                    disabled={loginBusy || !loginEmail.trim() || !loginPassword}
+                    type="submit"
+                  >
+                    {loginBusy ? "Signing in..." : "Sign in"}
+                  </button>
+                  <span className="text-xs text-slate-500">
+                    Identity Platform email/password
+                  </span>
+                </div>
+              </form>
             ) : null}
             <label className="flex items-center gap-2">
               <span className="font-semibold text-slate-600">
-                {GOOGLE_CLIENT_ID ? "Fallback token" : "Bearer token"}
+                {isIdentityPlatformConfigured() ? "Fallback token" : "Bearer token"}
               </span>
               <input
                 className="min-w-0 flex-1 bg-transparent text-slate-900 outline-none"
                 onChange={(event) => handleTokenChange(event.target.value)}
                 placeholder="Paste local fixture or OIDC bearer token"
-                value={accessToken}
+                value={accessTokenDraft}
               />
             </label>
+            {loginError ? <p className="text-xs text-red-600">{loginError}</p> : null}
           </div>
         </div>
       </header>

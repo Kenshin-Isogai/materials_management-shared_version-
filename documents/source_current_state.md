@@ -46,7 +46,7 @@ Last updated: 2026-03-29 (JST)
   - first-rollout Cloud Run guardrails are controlled by `MAX_UPLOAD_BYTES`, `HEAVY_REQUEST_TARGET_SECONDS`, and `CLOUD_RUN_CONCURRENCY_TARGET`
   - browser CORS defaults are runtime-specific: localhost-friendly defaults locally, explicit `CORS_ALLOWED_ORIGINS` required for Cloud Run browser traffic
   - deployment metadata/config now also exposes `INSTANCE_CONNECTION_NAME`, `BACKEND_PUBLIC_BASE_URL`, `FRONTEND_PUBLIC_BASE_URL`, `STORAGE_BACKEND`, `GCS_BUCKET`, and `GCS_OBJECT_PREFIX`
-  - auth/runtime config now also supports `JWT_VERIFIER=jwks`, `OIDC_JWKS_URL`, `DIAGNOSTICS_AUTH_ROLE`, `GOOGLE_IDENTITY_CLIENT_ID`, and `VITE_GOOGLE_CLIENT_ID`
+  - auth/runtime config now also supports `JWT_VERIFIER=jwks`, `JWT_SIGNING_ALGORITHMS`, `OIDC_JWKS_URL`, `DIAGNOSTICS_AUTH_ROLE`, and `VITE_IDENTITY_PLATFORM_API_KEY`
   - generated artifact persistence now goes through a storage boundary (`backend/app/storage.py`), with current local refs stored as `local://generated_artifacts/...`
   - the storage layer now supports `gcs://...` refs for durable Cloud Run storage and keeps `local://...` for local/shared-server operation
   - default durable item/order archive moves now also route through that storage boundary; local disk remains the mechanism for temporary staging and a narrower set of local compatibility flows
@@ -121,7 +121,7 @@ Last updated: 2026-03-29 (JST)
 - Added `/users` as the dedicated shared-server user administration route.
   - supports browser-side create, edit, activate, and deactivate flows against the existing `/api/users` endpoints
   - the global shell now stores a bearer token and resolves the mapped current user through `/api/users/me`
-  - when `VITE_GOOGLE_CLIENT_ID` is set, the shared header renders a Google Identity sign-in button and stores the returned credential as the Bearer token
+  - when `VITE_IDENTITY_PLATFORM_API_KEY` is set, the shared header renders an Identity Platform email/password sign-in form, stores the returned Bearer token plus refresh token in session-scoped browser storage, migrates the legacy `materials.access-token` key on first read, and refreshes the session before expiry
 - Shared-server browser CSV workflows are now preview-first on the main Items and Orders pages.
   - Items page uses one `General Items CSV Import` surface for regular item CSVs and order-generated missing-item CSVs
   - generated missing-item CSVs are downloaded from Orders and then edited/re-imported through the normal Items preview/import flow

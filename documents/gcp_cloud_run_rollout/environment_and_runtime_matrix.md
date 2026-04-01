@@ -60,7 +60,7 @@ It focuses on:
 | Variable | Service | Secret | Stage | Notes |
 |---|---|---:|---|---|
 | `VITE_API_BASE` | Frontend | No | project | Final value depends on the real backend URL and is baked in at build time |
-| `VITE_GOOGLE_CLIENT_ID` | Frontend | No | project | Final value depends on the real browser OAuth client used by Google Identity |
+| `VITE_IDENTITY_PLATFORM_API_KEY` | Frontend | No | project | Final value depends on the real Identity Platform web API key exposed to the browser |
 
 ## Local-only or de-emphasized variables
 
@@ -96,7 +96,7 @@ It focuses on:
 - actual object prefix by environment
 - actual Cloud SQL instance name
 - actual Secret Manager secret names
-- actual Google/OIDC issuer, audience, and browser login client wiring
+- actual Identity Platform issuer, audience, and browser login API key wiring
 
 ## Operational note
 
@@ -107,7 +107,7 @@ The following still need separate operational ownership:
 - backup and restore
 - deployment rollback
 - monitoring and alerting
-- Google Identity login rollout and JWKS-backed verification
+- Identity Platform login rollout and JWKS-backed verification
 
 ## Repo-visible recovery contract
 

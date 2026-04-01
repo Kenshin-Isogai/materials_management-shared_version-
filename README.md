@@ -122,11 +122,13 @@ This wrapper sets `NGINX_HOST_PORT=8088` for the E2E stack, so Playwright does n
 - Set `DATABASE_URL` from Secret Manager / Cloud SQL connection config
 - Set `INSTANCE_CONNECTION_NAME` for the target Cloud SQL instance and keep `DATABASE_URL` on the Cloud SQL Unix-socket form
 - Set `VITE_API_BASE` to the backend Cloud Run public `/api` URL for split-service deployment
-- Set `VITE_GOOGLE_CLIENT_ID` to the browser OAuth client used for Google Identity sign-in
+- Set `VITE_IDENTITY_PLATFORM_API_KEY` to the Identity Platform web API key used by the frontend login form
 - The built frontend image no longer proxies `/api` to an internal backend container by default; browser API traffic should come from `VITE_API_BASE`
 - Set `BACKEND_PUBLIC_BASE_URL` and `FRONTEND_PUBLIC_BASE_URL` if you want the runtime health surface to report the intended public URLs explicitly
 - Set `CORS_ALLOWED_ORIGINS` to the frontend Cloud Run origin explicitly
 - Set `JWT_VERIFIER=jwks` plus `OIDC_JWKS_URL`, `OIDC_EXPECTED_ISSUER`, and `OIDC_EXPECTED_AUDIENCE` for deployed OIDC verification
+- Set `JWT_SIGNING_ALGORITHMS=RS256` for Identity Platform / Google-signed ID tokens
+- For the current email/password dev rollout, keep `OIDC_REQUIRE_EMAIL_VERIFIED=0` unless the Identity Platform user emails are explicitly verified
 - `DIAGNOSTICS_AUTH_ROLE` defaults to `admin` in Cloud Run so `/api/health` and `/api/auth/capabilities` do not stay anonymously public
 - Keep `MAX_UPLOAD_BYTES=33554432` unless you intentionally revise the first-rollout 32 MB ceiling
 - Keep `CLOUD_RUN_CONCURRENCY_TARGET=10` and align actual Cloud Run/Gunicorn settings with Cloud SQL capacity
@@ -139,6 +141,9 @@ This wrapper sets `NGINX_HOST_PORT=8088` for the E2E stack, so Playwright does n
 - manual order-import missing-item outputs are now exposed through artifact metadata/download endpoints rather than raw path fields
 - Legacy ZIP/PDF compatibility import remains a local/shared-server workflow, not the target Cloud Run path
 - Concrete first-rollout deploy steps are documented in [documents/gcp_cloud_run_rollout/cloud_run_deployment_runbook.md](documents/gcp_cloud_run_rollout/cloud_run_deployment_runbook.md)
+- Repo-side deployment assets live under `deployment/gcp/`, including backend/frontend env templates, PowerShell deploy scripts, and a Secret Manager helper
+- A manual GitHub Actions deploy workflow now lives at `.github/workflows/deploy-gcp.yml`
+- GitHub Environment variable/secret setup is documented in [documents/gcp_cloud_run_rollout/github_actions_environment_setup.md](documents/gcp_cloud_run_rollout/github_actions_environment_setup.md)
 
 ## API
 
@@ -148,7 +153,7 @@ This wrapper sets `NGINX_HOST_PORT=8088` for the E2E stack, so Playwright does n
 - Runtime auth is controlled by `AUTH_MODE` (`none`, `oidc_dry_run`, `oidc_enforced`) and `RBAC_MODE` (`none`, `rbac_dry_run`, `rbac_enforced`).
 - `JWT_VERIFIER` supports `shared_secret` for local fixtures and `jwks` for deployed OIDC verification.
 - App users are mapped from verified OIDC claims (`email`, `sub`, `hd`) onto active rows in `users`.
-- The frontend header bar now supports Google Identity sign-in when `VITE_GOOGLE_CLIENT_ID` is configured and keeps manual Bearer token entry as a fallback.
+- The frontend header bar now supports Identity Platform email/password sign-in when `VITE_IDENTITY_PLATFORM_API_KEY` is configured and keeps manual Bearer token entry as a fallback.
 
 ## Database and File Layout
 

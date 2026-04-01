@@ -16,8 +16,8 @@ It covers:
 - frontend/backend split-service contract is unchanged
 - `dev`, `staging`, and `prod` environments are treated as separate deployment targets
 - backend startup migrations remain disabled in Cloud Run request-serving startup
-- the team understands that repository auth now expects Bearer JWTs and that live Google Identity/JWKS validation still needs cloud-side rollout work
-- manual token entry in the current frontend is a repo-side transitional workflow, not the intended long-term production login UX
+- the team understands that repository auth now expects Bearer JWTs and that live Identity Platform/JWKS validation still needs cloud-side rollout work
+- manual token entry in the current frontend is a local/test fallback, not the intended long-term production login UX
 
 ## Canonical backend environment contract
 
@@ -42,7 +42,16 @@ DB_MAX_OVERFLOW=10
 DB_POOL_TIMEOUT=30
 DB_POOL_RECYCLE_SECONDS=1800
 WEB_CONCURRENCY=2
+JWT_SIGNING_ALGORITHMS=RS256
 ```
+
+For the current dev rollout that uses Identity Platform email/password, keep:
+
+```text
+OIDC_REQUIRE_EMAIL_VERIFIED=0
+```
+
+unless the allowed Identity Platform user emails are explicitly verified.
 
 ## Recovery policy contract to finalize per environment
 
@@ -245,7 +254,7 @@ Treat the repo-side PITR preparation as complete only when a future live-cloud d
 
 - open the frontend
 - verify read/list pages load
-- authenticate with the currently supported bearer-token path (and later replace this with Google Identity sign-in validation)
+- authenticate with the configured Identity Platform email/password flow or another valid bearer-token path
 - execute at least one mutation using `Authorization: Bearer <JWT>`
 - execute one artifact-producing flow
 - execute one durable archive or import-history flow
@@ -262,7 +271,7 @@ Treat the repo-side PITR preparation as complete only when a future live-cloud d
 
 ## Important warnings
 
-- repository auth now expects bearer tokens, but production readiness still depends on live Google Identity/JWKS rollout and cloud validation
+- repository auth now expects bearer tokens, but production readiness still depends on live Identity Platform/JWKS rollout and cloud validation
 - the backend remains browser-reachable in the first rollout unless a stronger edge design is introduced
 - increase concurrency only after observing Cloud SQL connection behavior
 - no production plan should assume that Cloud Run revision rollback alone solves DB-level mistakes

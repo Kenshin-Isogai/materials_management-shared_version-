@@ -19,7 +19,7 @@ This document focuses on operating the target GCP deployment safely.
 
 The current codebase is cloud-aware and the repo-side trust boundary is now materially hardened.
 
-Treat manual token pasting as a local/test fallback only. The intended production browser path is Google Identity sign-in plus deployed JWKS verification.
+Treat manual token pasting as a local/test fallback only. The intended production browser path is Identity Platform sign-in plus deployed JWKS verification.
 
 ### Immediate hardening targets
 
@@ -43,7 +43,7 @@ Treat manual token pasting as a local/test fallback only. The intended productio
 
 ### Current gaps
 
-- repository-side bearer-token auth, Google Identity UI, JWKS verification, and audit logging now exist; live cloud validation still remains
+- repository-side bearer-token auth, Identity Platform UI, JWKS verification, and audit logging now exist; live cloud validation still remains
 - live cloud validation is still pending
 - Cloud SQL backup/PITR policy is documented, but real per-environment enablement is still pending
 - GCS lifecycle/versioning policy is documented, but real per-environment enablement is still pending

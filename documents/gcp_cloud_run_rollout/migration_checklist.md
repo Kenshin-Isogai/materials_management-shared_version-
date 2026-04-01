@@ -21,7 +21,7 @@
 
 - [x] Repository auth now uses Bearer JWT / OIDC-oriented identity plumbing instead of the temporary header bridge
 - [x] Secret Manager is the intended source of cloud secrets
-- [~] Stronger production authentication is partially implemented (repo-side Google Identity sign-in, bearer auth, RBAC, and JWKS-backed verification are now in place, but live cloud rollout still needs real Google/OIDC configuration and validation)
+- [~] Stronger production authentication is partially implemented (repo-side Identity Platform sign-in, bearer auth, RBAC, and JWKS-backed verification are now in place, but live cloud rollout still needs real provider configuration and validation)
 - [x] Production access policy for health/admin/diagnostic endpoints is repo-defined (`/healthz` and `/readyz` stay public; `/api/health` and `/api/auth/capabilities` are controlled by `DIAGNOSTICS_AUTH_ROLE`, defaulting to `admin` in Cloud Run)
 - [x] Domain audit logging for high-impact mutations is emitted through structured `domain.audit` application logs
 
@@ -63,7 +63,7 @@
 
 Do not treat the rollout as operationally ready until all items below are complete:
 
-- live Google Identity/JWKS rollout is complete or the temporary bearer-token posture is explicitly risk-accepted with owner and expiry
+- live Identity Platform/JWKS rollout is complete or the temporary bearer-token posture is explicitly risk-accepted with owner and expiry
 - live cloud validation is complete
 - backup/restore path is documented and enabled
 - rollback path is rehearsed
