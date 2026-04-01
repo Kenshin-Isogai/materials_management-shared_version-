@@ -59,13 +59,21 @@ export function UsersPage() {
   const pendingRequests = registrationRequests.filter((request) => request.status === "pending");
   const hasActiveUsers = users.some((user) => user.is_active);
   const summary = useMemo(
-    () => ({
-      total: users.length,
-      active: users.filter((user) => user.is_active).length,
-      inactive: users.filter((user) => !user.is_active).length,
-      pending: pendingRequests.length,
-    }),
-    [pendingRequests.length, users],
+    () =>
+      usersQuery.data
+        ? {
+            total: users.length,
+            active: users.filter((user) => user.is_active).length,
+            inactive: users.filter((user) => !user.is_active).length,
+            pending: registrationRequestsQuery.data ? pendingRequests.length : null,
+          }
+        : {
+            total: null,
+            active: null,
+            inactive: null,
+            pending: registrationRequestsQuery.data ? pendingRequests.length : null,
+          },
+    [pendingRequests.length, registrationRequestsQuery.data, users, usersQuery.data],
   );
 
   function beginEdit(user: User) {
@@ -289,19 +297,19 @@ export function UsersPage() {
         <div className="flex gap-3 text-sm">
           <div className="panel min-w-28 px-4 py-3">
             <div className="text-slate-500">Total</div>
-            <div className="font-display text-2xl font-bold">{summary.total}</div>
+            <div className="font-display text-2xl font-bold">{summary.total ?? "—"}</div>
           </div>
           <div className="panel min-w-28 px-4 py-3">
             <div className="text-slate-500">Active</div>
-            <div className="font-display text-2xl font-bold text-emerald-700">{summary.active}</div>
+            <div className="font-display text-2xl font-bold text-emerald-700">{summary.active ?? "—"}</div>
           </div>
           <div className="panel min-w-28 px-4 py-3">
             <div className="text-slate-500">Inactive</div>
-            <div className="font-display text-2xl font-bold text-slate-500">{summary.inactive}</div>
+            <div className="font-display text-2xl font-bold text-slate-500">{summary.inactive ?? "—"}</div>
           </div>
           <div className="panel min-w-28 px-4 py-3">
             <div className="text-slate-500">Pending</div>
-            <div className="font-display text-2xl font-bold text-amber-700">{summary.pending}</div>
+            <div className="font-display text-2xl font-bold text-amber-700">{summary.pending ?? "—"}</div>
           </div>
         </div>
       </section>

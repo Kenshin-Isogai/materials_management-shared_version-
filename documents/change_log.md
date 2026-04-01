@@ -7,6 +7,8 @@
   - anonymous dashboard visits now stop at explicit sign-in guidance instead of surfacing a confusing backend/database unavailable message
   - the header now exposes a first-time-user registration guidance link before sign-in, clarifying that registration starts after verified sign-in
   - the Users page now removes `identity_provider` / `hosted_domain` from the primary operator UI and tucks raw external-subject mapping behind an advanced recovery toggle
+  - the verify-email page now refreshes the stored session on demand after verification so the browser no longer remains stuck on an old unverified token
+  - the Users page summary cards now show `—` when the protected `/users` data is unavailable instead of implying that the system has zero users
 
 - Extended the browser auth flow for `OIDC_REQUIRE_EMAIL_VERIFIED=1` launch readiness.
   - shared header login now supports Identity Platform email/password sign-up in addition to sign-in

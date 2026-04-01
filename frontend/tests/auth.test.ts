@@ -131,4 +131,45 @@ describe("auth session handling", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it("can force-refresh the stored session after email verification", async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("securetoken.googleapis.com")) {
+        return {
+          ok: true,
+          json: async () => ({
+            id_token:
+              "eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6InNpZ251cEBleGFtcGxlLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlfQ.signature",
+            refresh_token: "refresh-signup",
+            expires_in: "3600",
+          }),
+        };
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.sessionStorage.setItem(
+      "materials.auth-session",
+      JSON.stringify({
+        accessToken:
+          "eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6InNpZ251cEBleGFtcGxlLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjpmYWxzZX0.signature",
+        refreshToken: "refresh-signup",
+        expiresAt: Date.now() + 3_600_000,
+        email: "signup@example.com",
+        emailVerified: false,
+      }),
+    );
+
+    try {
+      const auth = await loadAuthModule();
+      await auth.refreshStoredAuthSessionNow();
+
+      const stored = JSON.parse(window.sessionStorage.getItem("materials.auth-session") ?? "{}");
+      expect(stored.email).toBe("signup@example.com");
+      expect(stored.emailVerified).toBe(true);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

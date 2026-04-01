@@ -294,6 +294,23 @@ export async function getValidAccessTokenOrNull(): Promise<string | null> {
   return refreshedSession?.accessToken ?? null;
 }
 
+export async function refreshStoredAuthSessionNow(): Promise<string | null> {
+  const session = readStoredAuthSession() ?? migrateLegacyStoredTokenIfNeeded();
+  if (!session) return null;
+  if (!session.refreshToken || !isIdentityPlatformConfigured()) {
+    return session.accessToken;
+  }
+  const nextSession = await refreshIdentityPlatformSession(session.refreshToken);
+  const mergedSession: StoredAuthSession = {
+    ...session,
+    ...nextSession,
+    email: nextSession.email ?? session.email ?? null,
+    emailVerified: nextSession.emailVerified ?? session.emailVerified ?? null,
+  };
+  writeStoredAuthSession(mergedSession);
+  return mergedSession.accessToken;
+}
+
 export async function signInWithIdentityPlatformEmailPassword(
   email: string,
   password: string,
