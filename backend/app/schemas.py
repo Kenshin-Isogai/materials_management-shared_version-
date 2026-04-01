@@ -410,7 +410,7 @@ class RegistrationRequestCreate(BaseModel):
 
 
 class RegistrationRequestApprove(BaseModel):
-    role: str = "viewer"
+    role: str | None = None
     username: str | None = None
     display_name: str | None = None
 

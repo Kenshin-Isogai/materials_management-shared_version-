@@ -180,7 +180,7 @@ def _validated_email_claim(payload: dict[str, Any]) -> str | None:
     email = _normalized_optional_text(payload.get("email"), lower=True)
     if email and OIDC_REQUIRE_EMAIL_VERIFIED and payload.get("email_verified") is not True:
         raise AppError(
-            code="INVALID_TOKEN",
+            code="EMAIL_VERIFICATION_REQUIRED",
             message="Verified email claim is required when email is present",
             status_code=401,
         )

@@ -777,7 +777,8 @@ def approve_registration_request(
         str(data.get("display_name") or request_row["display_name"]),
         "display_name",
     )
-    role = _require_valid_role(str(data.get("role") or "viewer"))
+    requested_role = request_row.get("requested_role")
+    role = _require_valid_role(str(data.get("role") or requested_role or "viewer"))
     existing_username = conn.execute(
         """
         SELECT user_id

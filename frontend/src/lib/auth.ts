@@ -312,12 +312,13 @@ export async function signInWithIdentityPlatformEmailPassword(
   if (!payload.idToken) {
     throw new Error("Identity Platform did not return an ID token.");
   }
+  const sessionMeta = deriveSessionMetadata(payload.idToken);
   writeStoredAuthSession({
     accessToken: payload.idToken,
     refreshToken: payload.refreshToken?.trim() || null,
     expiresAt: toExpiryTimestamp(payload.expiresIn),
-    email: payload.email?.trim() || deriveSessionMetadata(payload.idToken).email || email.trim(),
-    emailVerified: deriveSessionMetadata(payload.idToken).emailVerified,
+    email: payload.email?.trim() || sessionMeta.email || email.trim(),
+    emailVerified: sessionMeta.emailVerified,
   });
 }
 
