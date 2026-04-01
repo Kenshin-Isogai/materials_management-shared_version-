@@ -22,8 +22,9 @@ export function isAuthError(error: unknown): boolean {
 export function isEmailVerificationRequiredError(error: unknown): boolean {
   const apiError = asApiClientError(error);
   return (
-    apiError.code === "INVALID_TOKEN" &&
-    apiError.message.includes("Verified email claim is required")
+    apiError.code === "EMAIL_VERIFICATION_REQUIRED" ||
+    (apiError.code === "INVALID_TOKEN" &&
+      apiError.message.includes("Verified email claim is required"))
   );
 }
 

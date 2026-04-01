@@ -118,13 +118,17 @@ describe("auth session handling", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const auth = await loadAuthModule();
-    await auth.signUpWithIdentityPlatformEmailPassword("signup@example.com", "password");
-    await auth.sendIdentityPlatformVerificationEmail();
+    try {
+      const auth = await loadAuthModule();
+      await auth.signUpWithIdentityPlatformEmailPassword("signup@example.com", "password");
+      await auth.sendIdentityPlatformVerificationEmail();
 
-    const stored = JSON.parse(window.sessionStorage.getItem("materials.auth-session") ?? "{}");
-    expect(stored.email).toBe("signup@example.com");
-    expect(stored.emailVerified).toBe(false);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+      const stored = JSON.parse(window.sessionStorage.getItem("materials.auth-session") ?? "{}");
+      expect(stored.email).toBe("signup@example.com");
+      expect(stored.emailVerified).toBe(false);
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
