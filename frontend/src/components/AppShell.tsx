@@ -4,9 +4,12 @@ import { RouteErrorBoundary } from "./RouteErrorBoundary";
 import { StatusCallout } from "./StatusCallout";
 import {
   clearStoredAuthSession,
+  getStoredAuthSessionSnapshot,
   getStoredAccessTokenOrNull,
   isIdentityPlatformConfigured,
+  sendIdentityPlatformVerificationEmail,
   signInWithIdentityPlatformEmailPassword,
+  signUpWithIdentityPlatformEmailPassword,
   subscribeAuthSessionChanged,
 } from "../lib/auth";
 import {
@@ -14,7 +17,7 @@ import {
   setStoredAccessToken,
   subscribeUsersChanged,
 } from "../lib/api";
-import { isAuthError, presentApiError } from "../lib/errorUtils";
+import { isAuthError, isEmailVerificationRequiredError, presentApiError } from "../lib/errorUtils";
 import type { RegistrationStatus, User } from "../lib/types";
 
 const nav = [
@@ -44,19 +47,26 @@ export function AppShell() {
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
+  const [signupBusy, setSignupBusy] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [signupError, setSignupError] = useState<string | null>(null);
+  const [signupMessage, setSignupMessage] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [registrationStatus, setRegistrationStatus] = useState<RegistrationStatus | null>(null);
+  const [verificationRequired, setVerificationRequired] = useState(false);
   const [authStatusMessage, setAuthStatusMessage] = useState<string | null>(null);
   const [authVersion, setAuthVersion] = useState(0);
   const [usersVersion, setUsersVersion] = useState(0);
   const [authResolutionBusy, setAuthResolutionBusy] = useState(false);
   const onRegistrationPage = location.pathname === "/registration";
+  const onVerifyEmailPage = location.pathname === "/verify-email";
+  const [authFormMode, setAuthFormMode] = useState<"signin" | "signup">("signin");
 
   useEffect(() => {
     if (!isSignedIn) {
       setCurrentUser(null);
       setRegistrationStatus(null);
+      setVerificationRequired(false);
       setAuthResolutionBusy(false);
       return;
     }
@@ -68,6 +78,7 @@ export function AppShell() {
         const user = await apiGet<User>("/users/me");
         if (!active) return;
         setCurrentUser(user);
+        setVerificationRequired(false);
         setRegistrationStatus({
           state: "approved",
           email: user.email ?? null,
@@ -80,6 +91,12 @@ export function AppShell() {
       } catch (error) {
         if (!active) return;
         setCurrentUser(null);
+        if (isEmailVerificationRequiredError(error)) {
+          setVerificationRequired(true);
+          setRegistrationStatus(null);
+          setAuthStatusMessage("Verify your email address before accessing this environment.");
+          return;
+        }
         if (!isAuthError(error)) {
           setRegistrationStatus(null);
           setAuthStatusMessage(presentApiError(error));
@@ -89,6 +106,7 @@ export function AppShell() {
           const status = await apiGet<RegistrationStatus>("/auth/registration-status");
           if (!active) return;
           setRegistrationStatus(status);
+          setVerificationRequired(false);
           if (status.current_user) {
             setCurrentUser(status.current_user);
             setAuthStatusMessage(
@@ -112,6 +130,12 @@ export function AppShell() {
           }
         } catch (statusError) {
           if (!active) return;
+          if (isEmailVerificationRequiredError(statusError)) {
+            setVerificationRequired(true);
+            setRegistrationStatus(null);
+            setAuthStatusMessage("Verify your email address before accessing this environment.");
+            return;
+          }
           setRegistrationStatus(null);
           setAuthStatusMessage(presentApiError(statusError));
         }
@@ -133,6 +157,7 @@ export function AppShell() {
         setAuthVersion((value) => value + 1);
         setAuthStatusMessage(null);
         setRegistrationStatus(null);
+        setVerificationRequired(false);
       }),
     [],
   );
@@ -152,8 +177,11 @@ export function AppShell() {
     setLoginPassword("");
     setCurrentUser(null);
     setRegistrationStatus(null);
+    setVerificationRequired(false);
     setIsSignedIn(false);
     setLoginError(null);
+    setSignupError(null);
+    setSignupMessage(null);
     setAuthStatusMessage("Signed out.");
   };
 
@@ -161,6 +189,7 @@ export function AppShell() {
     event.preventDefault();
     setLoginBusy(true);
     setLoginError(null);
+    setSignupMessage(null);
     try {
       await signInWithIdentityPlatformEmailPassword(loginEmail, loginPassword);
       setLoginPassword("");
@@ -174,16 +203,63 @@ export function AppShell() {
     }
   };
 
+  const submitIdentityPlatformSignup = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSignupBusy(true);
+    setSignupError(null);
+    setSignupMessage(null);
+    try {
+      await signUpWithIdentityPlatformEmailPassword(loginEmail, loginPassword);
+      await sendIdentityPlatformVerificationEmail();
+      setIsSignedIn(true);
+      setVerificationRequired(true);
+      setAuthStatusMessage("Account created. Verify your email address before continuing.");
+      setSignupMessage("Account created. A verification email has been sent.");
+      setLoginPassword("");
+    } catch (error) {
+      setSignupError(presentApiError(error));
+    } finally {
+      setSignupBusy(false);
+    }
+  };
+
+  const resendVerificationEmail = async () => {
+    setSignupBusy(true);
+    setSignupError(null);
+    setSignupMessage(null);
+    try {
+      await sendIdentityPlatformVerificationEmail();
+      setSignupMessage("Verification email sent. Complete verification, then sign in again.");
+    } catch (error) {
+      setSignupError(presentApiError(error));
+    } finally {
+      setSignupBusy(false);
+    }
+  };
+
   useEffect(() => {
     if (!isSignedIn || authResolutionBusy) return;
-    if (currentUser && onRegistrationPage) {
+    if (currentUser && (onRegistrationPage || onVerifyEmailPage)) {
       navigate("/", { replace: true });
+      return;
+    }
+    if (!currentUser && verificationRequired && !onVerifyEmailPage) {
+      navigate("/verify-email", { replace: true });
       return;
     }
     if (!currentUser && registrationStatus && !registrationStatus.current_user && !onRegistrationPage) {
       navigate("/registration", { replace: true });
     }
-  }, [authResolutionBusy, currentUser, isSignedIn, navigate, onRegistrationPage, registrationStatus]);
+  }, [
+    authResolutionBusy,
+    currentUser,
+    isSignedIn,
+    navigate,
+    onRegistrationPage,
+    onVerifyEmailPage,
+    registrationStatus,
+    verificationRequired,
+  ]);
 
   const helperMessage = !isSignedIn
     ? isIdentityPlatformConfigured()
@@ -195,9 +271,12 @@ export function AppShell() {
 
   const visibleNav = useMemo(() => {
     if (!isSignedIn) return nav;
+    if (verificationRequired) return [{ to: "/verify-email", label: "Verify Email" }];
     if (!currentUser) return [{ to: "/registration", label: "Registration" }];
     return nav;
-  }, [currentUser, isSignedIn]);
+  }, [currentUser, isSignedIn, verificationRequired]);
+
+  const authSession = getStoredAuthSessionSnapshot();
 
   return (
     <div className="min-h-screen text-ink">
@@ -238,7 +317,24 @@ export function AppShell() {
               ) : null}
             </div>
             {!isSignedIn && isIdentityPlatformConfigured() ? (
-              <form className="grid gap-2" onSubmit={submitIdentityPlatformLogin}>
+              <div className="grid gap-2">
+                <div className="flex gap-2">
+                  <button
+                    className={authFormMode === "signin" ? "button-subtle" : "rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600"}
+                    onClick={() => setAuthFormMode("signin")}
+                    type="button"
+                  >
+                    Sign in
+                  </button>
+                  <button
+                    className={authFormMode === "signup" ? "button-subtle" : "rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600"}
+                    onClick={() => setAuthFormMode("signup")}
+                    type="button"
+                  >
+                    Create account
+                  </button>
+                </div>
+                <form className="grid gap-2" onSubmit={authFormMode === "signin" ? submitIdentityPlatformLogin : submitIdentityPlatformSignup}>
                 <label className="flex items-center gap-2">
                   <span className="w-24 font-semibold text-slate-600">Email</span>
                   <input
@@ -266,16 +362,25 @@ export function AppShell() {
                 <div className="flex items-center gap-2">
                   <button
                     className="button-subtle"
-                    disabled={loginBusy || !loginEmail.trim() || !loginPassword}
+                    disabled={(authFormMode === "signin" ? loginBusy : signupBusy) || !loginEmail.trim() || !loginPassword}
                     type="submit"
                   >
-                    {loginBusy ? "Signing in..." : "Sign in"}
+                    {authFormMode === "signin"
+                      ? loginBusy
+                        ? "Signing in..."
+                        : "Sign in"
+                      : signupBusy
+                        ? "Creating..."
+                        : "Create account"}
                   </button>
                   <span className="text-xs text-slate-500">
-                    Identity Platform email/password
+                    {authFormMode === "signin"
+                      ? "Identity Platform email/password"
+                      : "Email/password + verification mail"}
                   </span>
                 </div>
-              </form>
+                </form>
+              </div>
             ) : null}
             {!isSignedIn ? (
               <label className="flex items-center gap-2">
@@ -293,12 +398,19 @@ export function AppShell() {
               <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
                 {currentUser
                   ? `Signed in as ${currentUser.display_name} (${currentUser.role})`
-                  : registrationStatus?.email
-                    ? `Signed in as ${registrationStatus.email}`
+                  : authSession?.email
+                    ? `Signed in as ${authSession.email}${authSession.emailVerified ? "" : " (unverified)"}`
                     : "Signed in"}
               </div>
             )}
             {loginError ? <p className="text-xs text-red-600">{loginError}</p> : null}
+            {signupError ? <p className="text-xs text-red-600">{signupError}</p> : null}
+            {signupMessage ? <p className="text-xs text-emerald-700">{signupMessage}</p> : null}
+            {isSignedIn && verificationRequired ? (
+              <button className="button-subtle" disabled={signupBusy} onClick={() => void resendVerificationEmail()} type="button">
+                {signupBusy ? "Sending..." : "Resend verification email"}
+              </button>
+            ) : null}
             {authStatusMessage ? <p className="text-xs text-slate-500">{authStatusMessage}</p> : null}
             {!loginError && helperMessage ? <p className="text-xs text-slate-500">{helperMessage}</p> : null}
           </div>

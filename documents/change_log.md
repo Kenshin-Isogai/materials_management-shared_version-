@@ -2,6 +2,11 @@
 
 ### Changed
 
+- Extended the browser auth flow for `OIDC_REQUIRE_EMAIL_VERIFIED=1` launch readiness.
+  - shared header login now supports Identity Platform email/password sign-up in addition to sign-in
+  - newly created accounts now trigger verification-email delivery and signed-in-but-unverified users are redirected to a dedicated `/verify-email` holding page with resend support
+  - app routing now distinguishes `unverified identity` from `verified but unmapped identity`, sending the latter to `/registration` only after email verification succeeds
+
 - Added self-service onboarding with admin approval for Identity Platform sign-ins.
   - signed-in identities that are not yet mapped to an active app user are now redirected into `/registration`
   - applicants submit `username`, required `display_name`, requested role, and optional memo; email remains token-derived

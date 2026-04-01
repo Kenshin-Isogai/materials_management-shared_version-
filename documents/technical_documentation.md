@@ -42,6 +42,8 @@ This document explains the implemented architecture of the Materials Management 
   - admins manage `username`, display name, role, active state, and OIDC mapping fields
   - the global shell now stores a Bearer token and resolves the current user through `/api/users/me`
   - signed-in identities that are not yet mapped to an active app user now go through a dedicated `/registration` route instead of seeing generic fetch failures
+  - signed-in identities whose tokens are rejected because `email_verified=true` is required now go through a dedicated `/verify-email` route with verification-mail resend support
+  - the shared shell now supports both sign-in and sign-up against Identity Platform email/password, and newly created accounts immediately trigger verification-mail delivery through the Identity Toolkit REST API
   - self-registration requests are stored separately from active users so approval history can be retained without polluting the `users` table
   - applicants submit `username`, required `display_name`, requested role, and optional memo; email comes from the verified token identity
   - admins approve or reject requests inside `/users`; approval can override username/display name/role, rejection requires a reason, and both actions are recorded with reviewer metadata

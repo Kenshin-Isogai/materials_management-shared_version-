@@ -19,6 +19,14 @@ export function isAuthError(error: unknown): boolean {
   );
 }
 
+export function isEmailVerificationRequiredError(error: unknown): boolean {
+  const apiError = asApiClientError(error);
+  return (
+    apiError.code === "INVALID_TOKEN" &&
+    apiError.message.includes("Verified email claim is required")
+  );
+}
+
 export function isBackendUnavailableError(error: unknown): boolean {
   const apiError = asApiClientError(error);
   return (
@@ -32,6 +40,9 @@ export function isBackendUnavailableError(error: unknown): boolean {
 
 export function presentApiError(error: unknown): string {
   const apiError = asApiClientError(error);
+  if (isEmailVerificationRequiredError(apiError)) {
+    return "Verify your email address before signing in to this application.";
+  }
   if (isAuthError(apiError)) {
     return "Sign in with an allowed account to continue.";
   }

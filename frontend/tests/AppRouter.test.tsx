@@ -236,6 +236,37 @@ describe("app router", () => {
     expect(screen.getByRole("heading", { name: "Register for access" })).toBeTruthy();
   });
 
+  it("redirects signed-in but unverified identities to /verify-email", async () => {
+    apiGetMock.mockImplementation(async (path: string) => {
+      if (path === "/users/me") {
+        throw new ApiClientError({
+          message: "Verified email claim is required when email is present",
+          statusCode: 401,
+          code: "INVALID_TOKEN",
+        });
+      }
+      return defaultApiGet(path);
+    });
+
+    act(() => {
+      window.sessionStorage.setItem(
+        "materials.auth-session",
+        JSON.stringify({
+          accessToken: "token",
+          email: "verify@example.com",
+          emailVerified: false,
+        }),
+      );
+    });
+
+    const router = renderRouter("/");
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/verify-email");
+    });
+    expect(screen.getByRole("heading", { name: "Verify your email" })).toBeTruthy();
+  });
+
   it("redirects approved users away from /registration", async () => {
     act(() => {
       window.sessionStorage.setItem("materials.auth-session", JSON.stringify({ accessToken: "token" }));
