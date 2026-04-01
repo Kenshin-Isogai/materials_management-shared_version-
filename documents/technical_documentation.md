@@ -41,6 +41,11 @@ This document explains the implemented architecture of the Materials Management 
 - Frontend user administration at `/users` page.
   - admins manage `username`, display name, role, active state, and OIDC mapping fields
   - the global shell now stores a Bearer token and resolves the current user through `/api/users/me`
+  - signed-in identities that are not yet mapped to an active app user now go through a dedicated `/registration` route instead of seeing generic fetch failures
+  - self-registration requests are stored separately from active users so approval history can be retained without polluting the `users` table
+  - applicants submit `username`, required `display_name`, requested role, and optional memo; email comes from the verified token identity
+  - admins approve or reject requests inside `/users`; approval can override username/display name/role, rejection requires a reason, and both actions are recorded with reviewer metadata
+  - pending users cannot access the rest of the application; they can only read registration status and wait/reapply after rejection
   - frontend request handling now classifies auth failures, backend-unavailable failures, and generic API failures so cloud login and dashboard errors no longer collapse into a generic "Failed to fetch" UX
   - the shell now shows a persistent sign-in guidance callout while anonymous, and workspace/dashboard views surface a dedicated "environment unavailable" message when Cloud SQL or the backend is down
   - the same auth/backend-unavailable messaging is now reused across the other major routed pages (Orders, Items, Projects, Inventory, Reservations, History) and supporting editors so protected-page failures no longer surface as raw exception text

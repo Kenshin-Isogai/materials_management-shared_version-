@@ -10,6 +10,7 @@ type Summary = {
   expiring_reservations: Array<Record<string, unknown>>;
   low_stock_alerts: Array<Record<string, unknown>>;
   recent_activity: Array<Record<string, unknown>>;
+  pending_registration_requests: number;
 };
 
 export function DashboardPage() {
@@ -69,11 +70,12 @@ export function DashboardPage() {
 
       {data && (
         <>
-          <section className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
             <StatCard label="Overdue Orders" value={data.overdue_orders.length} tone="brass" />
             <StatCard label="Expiring Reservations" value={data.expiring_reservations.length} tone="signal" />
             <StatCard label="Low Stock Alerts" value={data.low_stock_alerts.length} />
             <StatCard label="Recent Logs" value={data.recent_activity.length} />
+            <StatCard label="Pending Registrations" value={data.pending_registration_requests} tone="brass" />
           </section>
 
           <section className="grid gap-5 lg:grid-cols-2">

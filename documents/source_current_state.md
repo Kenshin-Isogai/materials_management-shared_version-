@@ -125,6 +125,12 @@ Last updated: 2026-03-29 (JST)
   - supports browser-side create, edit, activate, and deactivate flows against the existing `/api/users` endpoints
   - the global shell now stores a bearer token and resolves the mapped current user through `/api/users/me`
   - when `VITE_IDENTITY_PLATFORM_API_KEY` is set, the shared header renders an Identity Platform email/password sign-in form, stores the returned Bearer token plus refresh token in session-scoped browser storage, migrates the legacy `materials.access-token` key on first read, and refreshes the session before expiry
+  - once signed in, the header collapses to account status plus sign-out instead of leaving email/password inputs visible
+  - signed-in identities without an active app-user mapping are redirected to `/registration`
+  - `/registration` now handles first-time self-service onboarding with `username`, required `display_name`, requested role, and optional memo
+  - pending applicants only see registration-status UX; they do not access normal app pages until approved
+  - the Users page now shows pending registration requests, supports approve/reject actions, and can optionally show resolved approval history
+  - dashboard summary now includes `pending_registration_requests` so admins can notice queued approvals quickly
 - Shared-server browser CSV workflows are now preview-first on the main Items and Orders pages.
   - Items page uses one `General Items CSV Import` surface for regular item CSVs and order-generated missing-item CSVs
   - generated missing-item CSVs are downloaded from Orders and then edited/re-imported through the normal Items preview/import flow

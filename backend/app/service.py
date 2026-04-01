@@ -479,6 +479,384 @@ def has_active_users(conn: sqlite3.Connection) -> bool:
     return bool(row[0]) if row is not None else False
 
 
+def list_registration_requests(
+    conn: sqlite3.Connection,
+    *,
+    include_resolved: bool = False,
+) -> list[dict[str, Any]]:
+    where_clause = "" if include_resolved else "WHERE rr.status = 'pending'"
+    rows = conn.execute(
+        f"""
+        SELECT
+            rr.request_id,
+            rr.email,
+            rr.username,
+            rr.display_name,
+            rr.memo,
+            rr.requested_role,
+            rr.identity_provider,
+            rr.external_subject,
+            rr.status,
+            rr.rejection_reason,
+            rr.reviewed_by_user_id,
+            reviewer.username AS reviewed_by_username,
+            rr.approved_user_id,
+            rr.reviewed_at,
+            rr.created_at,
+            rr.updated_at
+        FROM registration_requests rr
+        LEFT JOIN users reviewer ON reviewer.user_id = rr.reviewed_by_user_id
+        {where_clause}
+        ORDER BY
+            CASE rr.status WHEN 'pending' THEN 0 WHEN 'rejected' THEN 1 ELSE 2 END,
+            rr.created_at DESC,
+            rr.request_id DESC
+        """
+    ).fetchall()
+    return _rows_to_dict(rows)
+
+
+def get_registration_request(conn: sqlite3.Connection, request_id: int) -> dict[str, Any]:
+    row = conn.execute(
+        """
+        SELECT
+            rr.request_id,
+            rr.email,
+            rr.username,
+            rr.display_name,
+            rr.memo,
+            rr.requested_role,
+            rr.identity_provider,
+            rr.external_subject,
+            rr.status,
+            rr.rejection_reason,
+            rr.reviewed_by_user_id,
+            reviewer.username AS reviewed_by_username,
+            rr.approved_user_id,
+            rr.reviewed_at,
+            rr.created_at,
+            rr.updated_at
+        FROM registration_requests rr
+        LEFT JOIN users reviewer ON reviewer.user_id = rr.reviewed_by_user_id
+        WHERE rr.request_id = ?
+        """,
+        (request_id,),
+    ).fetchone()
+    if row is None:
+        raise AppError(
+            code="REGISTRATION_REQUEST_NOT_FOUND",
+            message=f"Registration request with id {request_id} not found",
+            status_code=404,
+        )
+    return dict(row)
+
+
+def _get_latest_registration_request_for_identity(
+    conn: sqlite3.Connection,
+    *,
+    email: str | None,
+    external_subject: str | None,
+    identity_provider: str | None,
+) -> dict[str, Any] | None:
+    normalized_email = _normalize_optional_email(email)
+    normalized_subject = _normalize_optional_identity_text(external_subject)
+    normalized_provider = _normalize_optional_identity_text(identity_provider, lower=True)
+    if normalized_email is None and not (normalized_subject and normalized_provider):
+        return None
+    row = conn.execute(
+        """
+        SELECT
+            request_id,
+            email,
+            username,
+            display_name,
+            memo,
+            requested_role,
+            identity_provider,
+            external_subject,
+            status,
+            rejection_reason,
+            reviewed_by_user_id,
+            approved_user_id,
+            reviewed_at,
+            created_at,
+            updated_at
+        FROM registration_requests
+        WHERE
+            (lower(email) = lower(?) AND ? IS NOT NULL)
+            OR (
+                identity_provider = ?
+                AND external_subject = ?
+                AND ? IS NOT NULL
+                AND ? IS NOT NULL
+            )
+        ORDER BY created_at DESC, request_id DESC
+        LIMIT 1
+        """,
+        (
+            normalized_email,
+            normalized_email,
+            normalized_provider,
+            normalized_subject,
+            normalized_provider,
+            normalized_subject,
+        ),
+    ).fetchone()
+    return None if row is None else dict(row)
+
+
+def get_registration_status(
+    conn: sqlite3.Connection,
+    *,
+    email: str | None,
+    external_subject: str | None,
+    identity_provider: str | None,
+    current_user: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    normalized_email = _normalize_optional_email(email)
+    normalized_subject = _normalize_optional_identity_text(external_subject)
+    normalized_provider = _normalize_optional_identity_text(identity_provider, lower=True)
+    if current_user is not None:
+        return {
+            "state": "approved",
+            "email": normalized_email,
+            "identity_provider": normalized_provider,
+            "external_subject": normalized_subject,
+            "request": None,
+            "current_user": current_user,
+        }
+    latest_request = _get_latest_registration_request_for_identity(
+        conn,
+        email=normalized_email,
+        external_subject=normalized_subject,
+        identity_provider=normalized_provider,
+    )
+    state = "not_requested" if latest_request is None else str(latest_request["status"])
+    return {
+        "state": state,
+        "email": normalized_email,
+        "identity_provider": normalized_provider,
+        "external_subject": normalized_subject,
+        "request": latest_request,
+        "current_user": None,
+    }
+
+
+def create_registration_request(
+    conn: sqlite3.Connection,
+    *,
+    data: dict[str, Any],
+    email: str | None,
+    external_subject: str | None,
+    identity_provider: str | None,
+) -> dict[str, Any]:
+    normalized_email = _normalize_optional_email(email)
+    normalized_subject = _normalize_optional_identity_text(external_subject)
+    normalized_provider = _normalize_optional_identity_text(identity_provider, lower=True)
+    if not normalized_email:
+        raise AppError(
+            code="REGISTRATION_EMAIL_REQUIRED",
+            message="A verified identity email is required to submit a registration request",
+            status_code=422,
+        )
+    username = require_non_empty(str(data.get("username") or ""), "username")
+    display_name = require_non_empty(str(data.get("display_name") or ""), "display_name")
+    memo = _normalize_optional_identity_text(data.get("memo"))
+    requested_role = _require_valid_role(str(data.get("requested_role") or "viewer"))
+
+    if get_active_user_by_identity(
+        conn,
+        email=normalized_email,
+        external_subject=normalized_subject,
+        identity_provider=normalized_provider,
+    ):
+        raise AppError(
+            code="REGISTRATION_ALREADY_APPROVED",
+            message="This identity is already mapped to an active user",
+            status_code=409,
+        )
+
+    pending_email = conn.execute(
+        """
+        SELECT request_id
+        FROM registration_requests
+        WHERE lower(email) = lower(?) AND status = 'pending'
+        ORDER BY request_id DESC
+        LIMIT 1
+        """,
+        (normalized_email,),
+    ).fetchone()
+    if pending_email is not None:
+        raise AppError(
+            code="REGISTRATION_REQUEST_PENDING",
+            message="A registration request for this email is already pending",
+            status_code=409,
+            details={"request_id": int(pending_email["request_id"])},
+        )
+
+    existing_username = conn.execute(
+        """
+        SELECT user_id
+        FROM users
+        WHERE lower(username) = lower(?)
+        LIMIT 1
+        """,
+        (username,),
+    ).fetchone()
+    if existing_username is not None:
+        raise AppError(
+            code="USERNAME_ALREADY_EXISTS",
+            message="Username is already in use",
+            status_code=409,
+        )
+
+    pending_username = conn.execute(
+        """
+        SELECT request_id
+        FROM registration_requests
+        WHERE lower(username) = lower(?) AND status = 'pending'
+        LIMIT 1
+        """,
+        (username,),
+    ).fetchone()
+    if pending_username is not None:
+        raise AppError(
+            code="USERNAME_ALREADY_PENDING",
+            message="Username is already reserved by another pending request",
+            status_code=409,
+        )
+
+    created_at = now_jst_iso()
+    cursor = conn.execute(
+        """
+        INSERT INTO registration_requests (
+            email,
+            username,
+            display_name,
+            memo,
+            requested_role,
+            identity_provider,
+            external_subject,
+            status,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+        """,
+        (
+            normalized_email,
+            username,
+            display_name,
+            memo,
+            requested_role,
+            normalized_provider,
+            normalized_subject,
+            created_at,
+            created_at,
+        ),
+    )
+    return get_registration_request(conn, int(cursor.lastrowid))
+
+
+def approve_registration_request(
+    conn: sqlite3.Connection,
+    request_id: int,
+    *,
+    reviewer_user_id: int,
+    data: dict[str, Any],
+) -> dict[str, Any]:
+    request_row = get_registration_request(conn, request_id)
+    if request_row["status"] != "pending":
+        raise AppError(
+            code="REGISTRATION_REQUEST_NOT_PENDING",
+            message="Only pending registration requests can be approved",
+            status_code=409,
+        )
+    username = require_non_empty(str(data.get("username") or request_row["username"]), "username")
+    display_name = require_non_empty(
+        str(data.get("display_name") or request_row["display_name"]),
+        "display_name",
+    )
+    role = _require_valid_role(str(data.get("role") or "viewer"))
+    created_user = create_user(
+        conn,
+        {
+            "username": username,
+            "display_name": display_name,
+            "email": request_row["email"],
+            "external_subject": request_row["external_subject"],
+            "identity_provider": request_row["identity_provider"],
+            "role": role,
+            "is_active": True,
+        },
+    )
+    reviewed_at = now_jst_iso()
+    conn.execute(
+        """
+        UPDATE registration_requests
+        SET
+            username = ?,
+            display_name = ?,
+            status = 'approved',
+            rejection_reason = NULL,
+            reviewed_by_user_id = ?,
+            approved_user_id = ?,
+            reviewed_at = ?,
+            updated_at = ?
+        WHERE request_id = ?
+        """,
+        (
+            username,
+            display_name,
+            reviewer_user_id,
+            created_user["user_id"],
+            reviewed_at,
+            reviewed_at,
+            request_id,
+        ),
+    )
+    return get_registration_request(conn, request_id)
+
+
+def reject_registration_request(
+    conn: sqlite3.Connection,
+    request_id: int,
+    *,
+    reviewer_user_id: int,
+    rejection_reason: str,
+) -> dict[str, Any]:
+    request_row = get_registration_request(conn, request_id)
+    if request_row["status"] != "pending":
+        raise AppError(
+            code="REGISTRATION_REQUEST_NOT_PENDING",
+            message="Only pending registration requests can be rejected",
+            status_code=409,
+        )
+    reason = require_non_empty(str(rejection_reason or ""), "rejection_reason")
+    reviewed_at = now_jst_iso()
+    conn.execute(
+        """
+        UPDATE registration_requests
+        SET
+            status = 'rejected',
+            rejection_reason = ?,
+            reviewed_by_user_id = ?,
+            approved_user_id = NULL,
+            reviewed_at = ?,
+            updated_at = ?
+        WHERE request_id = ?
+        """,
+        (
+            reason,
+            reviewer_user_id,
+            reviewed_at,
+            reviewed_at,
+            request_id,
+        ),
+    )
+    return get_registration_request(conn, request_id)
+
+
 def _require_valid_role(role: str) -> str:
     """
     Ensure that the given role is non-empty and one of the supported roles.
@@ -12455,11 +12833,21 @@ def dashboard_summary(conn: sqlite3.Connection, low_stock_threshold: int = 5) ->
             """
         ).fetchall()
     )
+    pending_registration_requests = int(
+        conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM registration_requests
+            WHERE status = 'pending'
+            """
+        ).fetchone()["count"]
+    )
     return {
         "overdue_orders": overdue_orders,
         "expiring_reservations": expiring_reservations,
         "low_stock_alerts": low_stock,
         "recent_activity": recent_activity,
+        "pending_registration_requests": pending_registration_requests,
     }
 
 

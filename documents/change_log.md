@@ -2,6 +2,13 @@
 
 ### Changed
 
+- Added self-service onboarding with admin approval for Identity Platform sign-ins.
+  - signed-in identities that are not yet mapped to an active app user are now redirected into `/registration`
+  - applicants submit `username`, required `display_name`, requested role, and optional memo; email remains token-derived
+  - backend now stores `registration_requests` separately from active users, preserving rejection history and reviewer audit metadata
+  - admins can review pending requests from the Users page, approve with a final role/username/display name override, or reject with a required reason
+  - dashboard summary now exposes pending-registration counts, and the shell no longer keeps the email/password inputs visible after sign-in
+
 - Tightened cloud-auth UX and error handling after the first GCP rollout validation.
   - frontend API failures now distinguish auth-required, backend-unavailable, and generic request failures instead of surfacing a generic fetch error
   - frontend mutation requests now preserve auth-classified header-preparation failures (including expired-session refresh failures) instead of masking them as backend-unavailable errors

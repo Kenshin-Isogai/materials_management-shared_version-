@@ -53,6 +53,7 @@ _PRIMARY_KEY_BY_TABLE = {
     "import_jobs": "import_job_id",
     "import_job_effects": "effect_id",
     "users": "user_id",
+    "registration_requests": "request_id",
 }
 
 _MANUAL_SAVEPOINT_SQL = re.compile(r"^\s*(SAVEPOINT|ROLLBACK\s+TO|RELEASE)\b", re.IGNORECASE)

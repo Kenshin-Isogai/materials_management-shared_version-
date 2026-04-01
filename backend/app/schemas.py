@@ -400,3 +400,20 @@ class UserUpdate(BaseModel):
         ):
             raise ValueError("at least one user field is required")
         return self
+
+
+class RegistrationRequestCreate(BaseModel):
+    username: str = Field(min_length=1)
+    display_name: str = Field(min_length=1)
+    memo: str | None = None
+    requested_role: str = "viewer"
+
+
+class RegistrationRequestApprove(BaseModel):
+    role: str = "viewer"
+    username: str | None = None
+    display_name: str | None = None
+
+
+class RegistrationRequestReject(BaseModel):
+    rejection_reason: str = Field(min_length=1)

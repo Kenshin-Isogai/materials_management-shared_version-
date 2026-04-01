@@ -89,6 +89,9 @@ from .schemas import (
     ProcurementBatchUpdate,
     ProcurementLineUpdate,
     QuotationUpdateRequest,
+    RegistrationRequestApprove,
+    RegistrationRequestCreate,
+    RegistrationRequestReject,
     ProjectCreate,
     ProjectRequirementUnresolvedItemsCsvRequest,
     ProjectRequirementPreviewRequest,
@@ -177,6 +180,13 @@ def ok(data: Any, pagination: dict[str, Any] | None = None) -> dict[str, Any]:
     if pagination is not None:
         payload["pagination"] = pagination
     return payload
+
+
+def _require_request_identity(request: Request) -> dict[str, Any]:
+    identity = getattr(request.state, "identity", None)
+    if not isinstance(identity, dict):
+        raise AppError(code="AUTH_REQUIRED", message="Bearer token is required", status_code=401)
+    return identity
 
 
 def csv_attachment(filename: str, content: bytes) -> Response:
@@ -271,6 +281,13 @@ def cleanup_unreg_file_with_retry(path_str: str) -> None:
 
 def _allows_first_user_bootstrap(request: Request) -> bool:
     return request.method == "POST" and request.url.path == "/api/users"
+
+
+def _allows_unmapped_identity_access(request: Request) -> bool:
+    return (request.method, request.url.path) in {
+        ("GET", "/api/auth/registration-status"),
+        ("POST", "/api/auth/register-request"),
+    }
 
 
 def _app_error_response(exc: AppError) -> JSONResponse:
@@ -391,6 +408,8 @@ class RequestIdentityMiddleware(BaseHTTPMiddleware):
                         error_code=missing_user_error.code,
                         error_details=missing_user_error.details,
                     )
+                    return await call_next(request)
+                if _allows_unmapped_identity_access(request):
                     return await call_next(request)
                 return _app_error_response(missing_user_error)
             request.state.user = user
@@ -696,6 +715,40 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
     def get_artifacts(artifact_type: str | None = None, conn= db):
         return ok(service.list_generated_artifacts(conn, artifact_type=artifact_type))
 
+    @app.get("/api/auth/registration-status")
+    def get_registration_status(request: Request, conn= db):
+        identity = _require_request_identity(request)
+        current_user = getattr(request.state, "user", None)
+        return ok(
+            service.get_registration_status(
+                conn,
+                email=identity.get("email"),
+                external_subject=identity.get("subject"),
+                identity_provider=identity.get("provider"),
+                current_user=current_user if isinstance(current_user, dict) else None,
+            )
+        )
+
+    @app.post("/api/auth/register-request")
+    def post_registration_request(body: RegistrationRequestCreate, request: Request, conn= db):
+        identity = _require_request_identity(request)
+        current_user = getattr(request.state, "user", None)
+        if isinstance(current_user, dict):
+            raise AppError(
+                code="REGISTRATION_ALREADY_APPROVED",
+                message="This identity is already mapped to an active user",
+                status_code=409,
+            )
+        result = service.create_registration_request(
+            conn,
+            data=body.model_dump(),
+            email=identity.get("email"),
+            external_subject=identity.get("subject"),
+            identity_provider=identity.get("provider"),
+        )
+        conn.commit()
+        return ok(result)
+
     @app.get("/api/artifacts/{artifact_id}")
     def get_artifact_detail(artifact_id: str, conn= db):
         return ok(service.get_generated_artifact(conn, artifact_id))
@@ -740,6 +793,48 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
     @app.delete("/api/users/{user_id}")
     def delete_user(user_id: int, conn= db):
         result = service.deactivate_user(conn, user_id)
+        conn.commit()
+        return ok(result)
+
+    @app.get("/api/registration-requests")
+    def get_registration_requests(include_resolved: bool = False, conn= db):
+        return ok(service.list_registration_requests(conn, include_resolved=include_resolved))
+
+    @app.post("/api/registration-requests/{request_id}/approve")
+    def post_approve_registration_request(
+        request_id: int,
+        body: RegistrationRequestApprove,
+        request: Request,
+        conn= db,
+    ):
+        current_user = getattr(request.state, "user", None)
+        if not isinstance(current_user, dict):
+            raise AppError(code="AUTH_REQUIRED", message="Bearer token is required", status_code=401)
+        result = service.approve_registration_request(
+            conn,
+            request_id,
+            reviewer_user_id=int(current_user["user_id"]),
+            data=body.model_dump(exclude_unset=True),
+        )
+        conn.commit()
+        return ok(result)
+
+    @app.post("/api/registration-requests/{request_id}/reject")
+    def post_reject_registration_request(
+        request_id: int,
+        body: RegistrationRequestReject,
+        request: Request,
+        conn= db,
+    ):
+        current_user = getattr(request.state, "user", None)
+        if not isinstance(current_user, dict):
+            raise AppError(code="AUTH_REQUIRED", message="Bearer token is required", status_code=401)
+        result = service.reject_registration_request(
+            conn,
+            request_id,
+            reviewer_user_id=int(current_user["user_id"]),
+            rejection_reason=body.rejection_reason,
+        )
         conn.commit()
         return ok(result)
 

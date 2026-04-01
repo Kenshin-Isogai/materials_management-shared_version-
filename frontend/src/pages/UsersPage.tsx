@@ -1,7 +1,9 @@
 import { FormEvent, useMemo, useState } from "react";
 import useSWR from "swr";
+import { ApiErrorNotice } from "../components/ApiErrorNotice";
 import { apiGet, apiSend, notifyUsersChanged } from "../lib/api";
-import type { User, UserRole } from "../lib/types";
+import { presentApiError } from "../lib/errorUtils";
+import type { RegistrationRequest, User, UserRole } from "../lib/types";
 
 const USER_ROLES: UserRole[] = ["admin", "operator", "viewer"];
 
@@ -11,35 +13,63 @@ type UserDraft = {
   is_active: boolean;
 };
 
+type ApprovalDraft = {
+  username: string;
+  display_name: string;
+  role: UserRole;
+  rejection_reason: string;
+};
+
+function makeApprovalDraft(request: RegistrationRequest): ApprovalDraft {
+  return {
+    username: request.username,
+    display_name: request.display_name,
+    role: request.requested_role || "viewer",
+    rejection_reason: "",
+  };
+}
+
 export function UsersPage() {
+  const [showResolvedRequests, setShowResolvedRequests] = useState(false);
   const usersQuery = useSWR("/users?include_inactive=true", () =>
-    apiGet<User[]>("/users?include_inactive=true")
+    apiGet<User[]>("/users?include_inactive=true"),
+  );
+  const registrationRequestsQuery = useSWR(
+    `/registration-requests?include_resolved=${showResolvedRequests ? "1" : "0"}`,
+    () =>
+      apiGet<RegistrationRequest[]>(
+        `/registration-requests?include_resolved=${showResolvedRequests ? "true" : "false"}`,
+      ),
   );
   const [createForm, setCreateForm] = useState({
     username: "",
     display_name: "",
     email: "",
     external_subject: "",
-    identity_provider: "test-oidc",
+    identity_provider: "identity_platform",
     hosted_domain: "",
     role: "operator" as UserRole,
     is_active: true,
   });
   const [editingUserId, setEditingUserId] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState<UserDraft | null>(null);
+  const [approvalDrafts, setApprovalDrafts] = useState<Record<number, ApprovalDraft>>({});
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const users = usersQuery.data ?? [];
+  const registrationRequests = registrationRequestsQuery.data ?? [];
+  const pendingRequests = registrationRequests.filter((request) => request.status === "pending");
   const hasActiveUsers = users.some((user) => user.is_active);
   const summary = useMemo(
     () => ({
       total: users.length,
       active: users.filter((user) => user.is_active).length,
       inactive: users.filter((user) => !user.is_active).length,
+      pending: pendingRequests.length,
     }),
-    [users]
+    [pendingRequests.length, users],
   );
 
   function beginEdit(user: User) {
@@ -58,8 +88,19 @@ export function UsersPage() {
     setEditDraft(null);
   }
 
-  async function reloadUsers(successMessage?: string) {
-    await usersQuery.mutate();
+  function getApprovalDraft(request: RegistrationRequest): ApprovalDraft {
+    return approvalDrafts[request.request_id] ?? makeApprovalDraft(request);
+  }
+
+  function setApprovalDraft(request: RegistrationRequest, updater: (draft: ApprovalDraft) => ApprovalDraft) {
+    setApprovalDrafts((current) => ({
+      ...current,
+      [request.request_id]: updater(current[request.request_id] ?? makeApprovalDraft(request)),
+    }));
+  }
+
+  async function reloadAll(successMessage?: string) {
+    await Promise.all([usersQuery.mutate(), registrationRequestsQuery.mutate()]);
     notifyUsersChanged();
     if (successMessage) {
       setMessage(successMessage);
@@ -92,21 +133,21 @@ export function UsersPage() {
         },
         {
           allowAnonymousMutation: !hasActiveUsers,
-        }
+        },
       );
       setCreateForm({
         username: "",
         display_name: "",
         email: "",
         external_subject: "",
-        identity_provider: "test-oidc",
+        identity_provider: "identity_platform",
         hosted_domain: "",
         role: "operator",
         is_active: true,
       });
-      await reloadUsers("User created.");
+      await reloadAll("User created.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create user.");
+      setError(presentApiError(err));
     } finally {
       setBusy(false);
     }
@@ -127,9 +168,9 @@ export function UsersPage() {
         }),
       });
       resetEdit();
-      await reloadUsers("User updated.");
+      await reloadAll("User updated.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update user.");
+      setError(presentApiError(err));
     } finally {
       setBusy(false);
     }
@@ -147,9 +188,9 @@ export function UsersPage() {
       if (editingUserId === user.user_id) {
         resetEdit();
       }
-      await reloadUsers(`User "${user.display_name}" deactivated.`);
+      await reloadAll(`User "${user.display_name}" deactivated.`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to deactivate user.");
+      setError(presentApiError(err));
     } finally {
       setBusy(false);
     }
@@ -171,11 +212,68 @@ export function UsersPage() {
       if (editingUserId === user.user_id) {
         resetEdit();
       }
-      await reloadUsers(
-        isActive ? `User "${user.display_name}" reactivated.` : `User "${user.display_name}" deactivated.`
+      await reloadAll(
+        isActive ? `User "${user.display_name}" reactivated.` : `User "${user.display_name}" deactivated.`,
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update user status.");
+      setError(presentApiError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleApprove(request: RegistrationRequest) {
+    const draft = getApprovalDraft(request);
+    if (!draft.username.trim() || !draft.display_name.trim()) return;
+    setBusy(true);
+    setMessage(null);
+    setError(null);
+    try {
+      await apiSend(`/registration-requests/${request.request_id}/approve`, {
+        method: "POST",
+        body: JSON.stringify({
+          username: draft.username.trim(),
+          display_name: draft.display_name.trim(),
+          role: draft.role,
+        }),
+      });
+      setApprovalDrafts((current) => {
+        const next = { ...current };
+        delete next[request.request_id];
+        return next;
+      });
+      await reloadAll(`Approved registration for "${request.email}".`);
+    } catch (err) {
+      setError(presentApiError(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleReject(request: RegistrationRequest) {
+    const draft = getApprovalDraft(request);
+    if (!draft.rejection_reason.trim()) {
+      setError("Rejection reason is required.");
+      return;
+    }
+    setBusy(true);
+    setMessage(null);
+    setError(null);
+    try {
+      await apiSend(`/registration-requests/${request.request_id}/reject`, {
+        method: "POST",
+        body: JSON.stringify({
+          rejection_reason: draft.rejection_reason.trim(),
+        }),
+      });
+      setApprovalDrafts((current) => {
+        const next = { ...current };
+        delete next[request.request_id];
+        return next;
+      });
+      await reloadAll(`Rejected registration for "${request.email}".`);
+    } catch (err) {
+      setError(presentApiError(err));
     } finally {
       setBusy(false);
     }
@@ -187,7 +285,7 @@ export function UsersPage() {
         <div>
           <h1 className="font-display text-3xl font-bold">Users</h1>
           <p className="mt-1 text-sm text-slate-600">
-            Create, update, activate, and deactivate browser users for shared-server operation.
+            Create manual recovery users and review self-registration requests.
           </p>
         </div>
         <div className="flex gap-3 text-sm">
@@ -203,6 +301,204 @@ export function UsersPage() {
             <div className="text-slate-500">Inactive</div>
             <div className="font-display text-2xl font-bold text-slate-500">{summary.inactive}</div>
           </div>
+          <div className="panel min-w-28 px-4 py-3">
+            <div className="text-slate-500">Pending</div>
+            <div className="font-display text-2xl font-bold text-amber-700">{summary.pending}</div>
+          </div>
+        </div>
+      </section>
+
+      {message ? <div className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{message}</div> : null}
+      {error ? <div className="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-800">{error}</div> : null}
+      {registrationRequestsQuery.error ? <ApiErrorNotice area="registration requests" error={registrationRequestsQuery.error} /> : null}
+      {usersQuery.error ? <ApiErrorNotice area="users" error={usersQuery.error} /> : null}
+
+      <section className="panel space-y-4 p-5">
+        <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+          <div>
+            <h2 className="font-display text-xl font-semibold">Pending registrations</h2>
+            <p className="mt-1 text-sm text-slate-600">
+              New sign-ins land here until an admin approves or rejects the request.
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            <label className="flex items-center gap-2 text-sm text-slate-600">
+              <input
+                checked={showResolvedRequests}
+                onChange={(event) => setShowResolvedRequests(event.target.checked)}
+                type="checkbox"
+              />
+              <span>Show resolved history</span>
+            </label>
+            <button
+              className="button-subtle"
+              disabled={busy || registrationRequestsQuery.isLoading}
+              onClick={() => {
+                setMessage(null);
+                setError(null);
+                void registrationRequestsQuery.mutate();
+              }}
+              type="button"
+            >
+              Refresh
+            </button>
+          </div>
+        </div>
+
+        {!registrationRequests.length && !registrationRequestsQuery.isLoading ? (
+          <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-500">
+            No registration requests yet.
+          </div>
+        ) : null}
+
+        <div className="space-y-4">
+          {registrationRequests.map((request) => {
+            const draft = getApprovalDraft(request);
+            const resolved = request.status !== "pending";
+            return (
+              <article
+                key={request.request_id}
+                className={`rounded-2xl border px-4 py-4 ${
+                  request.status === "pending"
+                    ? "border-amber-200 bg-amber-50/70"
+                    : request.status === "rejected"
+                      ? "border-rose-200 bg-rose-50/70"
+                      : "border-emerald-200 bg-emerald-50/70"
+                }`}
+              >
+                <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-display text-lg font-semibold">{request.display_name}</span>
+                      <span
+                        className={`inline-flex rounded-full px-2 py-1 text-xs font-semibold ${
+                          request.status === "pending"
+                            ? "bg-amber-200 text-amber-900"
+                            : request.status === "rejected"
+                              ? "bg-rose-200 text-rose-900"
+                              : "bg-emerald-200 text-emerald-900"
+                        }`}
+                      >
+                        {request.status}
+                      </span>
+                    </div>
+                    <div className="text-sm text-slate-700">
+                      <span className="font-semibold">Email:</span> {request.email}
+                    </div>
+                    <div className="text-sm text-slate-700">
+                      <span className="font-semibold">Requested username:</span> {request.username}
+                    </div>
+                    <div className="text-sm text-slate-700">
+                      <span className="font-semibold">Requested role:</span> {request.requested_role}
+                    </div>
+                    <div className="text-sm text-slate-700">
+                      <span className="font-semibold">Submitted:</span> {request.created_at}
+                    </div>
+                    {request.memo ? (
+                      <div className="rounded-lg bg-white/80 px-3 py-2 text-sm text-slate-700">
+                        <span className="font-semibold">Memo:</span> {request.memo}
+                      </div>
+                    ) : null}
+                    {request.identity_provider || request.external_subject ? (
+                      <div className="rounded-lg bg-white/80 px-3 py-2 text-xs text-slate-600">
+                        <div className="font-semibold text-slate-700">Identity mapping</div>
+                        <div>provider: {request.identity_provider || "-"}</div>
+                        <div className="break-all">sub: {request.external_subject || "-"}</div>
+                      </div>
+                    ) : null}
+                    {resolved ? (
+                      <div className="text-xs text-slate-600">
+                        Reviewed at {request.reviewed_at || "-"} by {request.reviewed_by_username || "-"}
+                        {request.rejection_reason ? ` | Reason: ${request.rejection_reason}` : ""}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  {request.status === "pending" ? (
+                    <div className="grid min-w-[18rem] gap-3 rounded-xl bg-white/90 p-3 shadow-sm">
+                      <label className="block space-y-1 text-sm">
+                        <span className="font-semibold text-slate-700">Approved username</span>
+                        <input
+                          className="input"
+                          value={draft.username}
+                          onChange={(event) =>
+                            setApprovalDraft(request, (current) => ({
+                              ...current,
+                              username: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="block space-y-1 text-sm">
+                        <span className="font-semibold text-slate-700">Approved display name</span>
+                        <input
+                          className="input"
+                          value={draft.display_name}
+                          onChange={(event) =>
+                            setApprovalDraft(request, (current) => ({
+                              ...current,
+                              display_name: event.target.value,
+                            }))
+                          }
+                        />
+                      </label>
+                      <label className="block space-y-1 text-sm">
+                        <span className="font-semibold text-slate-700">Approved role</span>
+                        <select
+                          className="input"
+                          value={draft.role}
+                          onChange={(event) =>
+                            setApprovalDraft(request, (current) => ({
+                              ...current,
+                              role: event.target.value as UserRole,
+                            }))
+                          }
+                        >
+                          {USER_ROLES.map((role) => (
+                            <option key={role} value={role}>
+                              {role}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="block space-y-1 text-sm">
+                        <span className="font-semibold text-slate-700">Rejection reason</span>
+                        <textarea
+                          className="input min-h-[88px]"
+                          value={draft.rejection_reason}
+                          onChange={(event) =>
+                            setApprovalDraft(request, (current) => ({
+                              ...current,
+                              rejection_reason: event.target.value,
+                            }))
+                          }
+                          placeholder="Required if you reject this request."
+                        />
+                      </label>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          className="button"
+                          disabled={busy || !draft.username.trim() || !draft.display_name.trim()}
+                          onClick={() => void handleApprove(request)}
+                          type="button"
+                        >
+                          Approve
+                        </button>
+                        <button
+                          className="button-subtle"
+                          disabled={busy || !draft.rejection_reason.trim()}
+                          onClick={() => void handleReject(request)}
+                          type="button"
+                        >
+                          Reject
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </article>
+            );
+          })}
         </div>
       </section>
 
@@ -211,7 +507,7 @@ export function UsersPage() {
           <div>
             <h2 className="font-display text-xl font-semibold">Create User</h2>
             <p className="mt-1 text-sm text-slate-600">
-              Map app users to OIDC claims so Bearer tokens resolve cleanly in the browser and on Cloud Run.
+              Keep manual user creation as a recovery path for the first admin or incident handling.
             </p>
             {!hasActiveUsers ? (
               <p className="mt-2 text-sm text-amber-700">
@@ -266,7 +562,7 @@ export function UsersPage() {
               onChange={(event) =>
                 setCreateForm((current) => ({ ...current, identity_provider: event.target.value }))
               }
-              placeholder="google"
+              placeholder="identity_platform"
             />
           </label>
 
@@ -278,7 +574,7 @@ export function UsersPage() {
               onChange={(event) =>
                 setCreateForm((current) => ({ ...current, external_subject: event.target.value }))
               }
-              placeholder="google-oauth2|1234567890"
+              placeholder="identity-platform-subject"
             />
           </label>
 
@@ -335,8 +631,8 @@ export function UsersPage() {
             <div>
               <h2 className="font-display text-xl font-semibold">User Directory</h2>
               <p className="mt-1 text-sm text-slate-600">
-                 Active users keep their OIDC mapping and stay visible here for review or reactivation.
-               </p>
+                Active users keep their identity mapping and stay visible here for review or reactivation.
+              </p>
             </div>
             <button
               className="button-subtle"
@@ -353,14 +649,6 @@ export function UsersPage() {
             </button>
           </div>
 
-          {message ? <div className="rounded-xl bg-emerald-50 px-3 py-2 text-sm text-emerald-800">{message}</div> : null}
-          {error ? <div className="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-800">{error}</div> : null}
-          {usersQuery.error ? (
-            <div className="rounded-xl bg-rose-50 px-3 py-2 text-sm text-rose-800">
-              {usersQuery.error instanceof Error ? usersQuery.error.message : "Failed to load users."}
-            </div>
-          ) : null}
-
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead>
@@ -368,7 +656,7 @@ export function UsersPage() {
                   <th className="px-3 py-2">Username</th>
                   <th className="px-3 py-2">Display name</th>
                   <th className="px-3 py-2">Email</th>
-                  <th className="px-3 py-2">OIDC mapping</th>
+                  <th className="px-3 py-2">Identity mapping</th>
                   <th className="px-3 py-2">Role</th>
                   <th className="px-3 py-2">Status</th>
                   <th className="px-3 py-2">Updated</th>
@@ -388,7 +676,7 @@ export function UsersPage() {
                             value={editDraft.display_name}
                             onChange={(event) =>
                               setEditDraft((current) =>
-                                current ? { ...current, display_name: event.target.value } : current
+                                current ? { ...current, display_name: event.target.value } : current,
                               )
                             }
                           />
@@ -401,7 +689,7 @@ export function UsersPage() {
                         {user.identity_provider && user.external_subject ? (
                           <div className="space-y-1">
                             <div className="font-mono">{user.identity_provider}</div>
-                            <div className="font-mono">{user.external_subject}</div>
+                            <div className="font-mono break-all">{user.external_subject}</div>
                             <div>{user.hosted_domain || "-"}</div>
                           </div>
                         ) : (
@@ -415,7 +703,7 @@ export function UsersPage() {
                             value={editDraft.role}
                             onChange={(event) =>
                               setEditDraft((current) =>
-                                current ? { ...current, role: event.target.value as UserRole } : current
+                                current ? { ...current, role: event.target.value as UserRole } : current,
                               )
                             }
                           >
@@ -436,7 +724,7 @@ export function UsersPage() {
                               checked={editDraft.is_active}
                               onChange={(event) =>
                                 setEditDraft((current) =>
-                                  current ? { ...current, is_active: event.target.checked } : current
+                                  current ? { ...current, is_active: event.target.checked } : current,
                                 )
                               }
                               type="checkbox"

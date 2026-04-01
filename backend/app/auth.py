@@ -48,6 +48,8 @@ OPERATOR_GET_PATTERNS = [
 ADMIN_ENDPOINT_PATTERNS: list[tuple[set[str], re.Pattern[str]]] = [
     ({"GET", "POST"}, re.compile(r"^/api/users$")),
     ({"GET", "PUT", "DELETE"}, re.compile(r"^/api/users/\d+$")),
+    ({"GET"}, re.compile(r"^/api/registration-requests$")),
+    ({"POST"}, re.compile(r"^/api/registration-requests/\d+/(approve|reject)$")),
 ]
 
 
@@ -109,6 +111,8 @@ def required_role_for_request(request: Request) -> str | None:
     path = request.url.path
     method = normalize_http_method(request.method)
     if request.method.upper() == "OPTIONS":
+        return None
+    if path in {"/api/auth/registration-status", "/api/auth/register-request"}:
         return None
     if path in {"/healthz", "/readyz"}:
         return None

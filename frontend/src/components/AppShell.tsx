@@ -1,5 +1,5 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { RouteErrorBoundary } from "./RouteErrorBoundary";
 import { StatusCallout } from "./StatusCallout";
 import {
@@ -15,7 +15,7 @@ import {
   subscribeUsersChanged,
 } from "../lib/api";
 import { isAuthError, presentApiError } from "../lib/errorUtils";
-import type { User } from "../lib/types";
+import type { RegistrationStatus, User } from "../lib/types";
 
 const nav = [
   { to: "/", label: "Dashboard" },
@@ -38,6 +38,7 @@ const nav = [
 
 export function AppShell() {
   const location = useLocation();
+  const navigate = useNavigate();
   const [accessTokenDraft, setAccessTokenDraft] = useState<string>("");
   const [isSignedIn, setIsSignedIn] = useState<boolean>(Boolean(getStoredAccessTokenOrNull()));
   const [loginEmail, setLoginEmail] = useState("");
@@ -45,27 +46,79 @@ export function AppShell() {
   const [loginBusy, setLoginBusy] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [registrationStatus, setRegistrationStatus] = useState<RegistrationStatus | null>(null);
   const [authStatusMessage, setAuthStatusMessage] = useState<string | null>(null);
   const [authVersion, setAuthVersion] = useState(0);
   const [usersVersion, setUsersVersion] = useState(0);
+  const [authResolutionBusy, setAuthResolutionBusy] = useState(false);
+  const onRegistrationPage = location.pathname === "/registration";
 
   useEffect(() => {
-    let active = true;
     if (!isSignedIn) {
       setCurrentUser(null);
-      return () => {
-        active = false;
-      };
+      setRegistrationStatus(null);
+      setAuthResolutionBusy(false);
+      return;
     }
+
+    let active = true;
+    setAuthResolutionBusy(true);
     apiGet<User>("/users/me")
       .then((user) => {
         if (!active) return;
         setCurrentUser(user);
+        setRegistrationStatus({
+          state: "approved",
+          email: user.email ?? null,
+          identity_provider: user.identity_provider ?? null,
+          external_subject: user.external_subject ?? null,
+          current_user: user,
+          request: null,
+        });
+        setAuthStatusMessage(`Signed in as ${user.display_name} (${user.role}).`);
       })
-      .catch(() => {
-        if (active) {
-          setCurrentUser(null);
+      .catch((error) => {
+        if (!active) return;
+        setCurrentUser(null);
+        if (!isAuthError(error)) {
+          setRegistrationStatus(null);
+          setAuthStatusMessage(presentApiError(error));
+          return;
         }
+        apiGet<RegistrationStatus>("/auth/registration-status")
+          .then((status) => {
+            if (!active) return;
+            setRegistrationStatus(status);
+            if (status.current_user) {
+              setCurrentUser(status.current_user);
+              setAuthStatusMessage(
+                `Signed in as ${status.current_user.display_name} (${status.current_user.role}).`,
+              );
+              return;
+            }
+            switch (status.state) {
+              case "pending":
+                setAuthStatusMessage("Registration is pending admin approval.");
+                break;
+              case "rejected":
+                setAuthStatusMessage("Registration was rejected. Review the reason and resubmit.");
+                break;
+              default:
+                setAuthStatusMessage("Sign-in succeeded. Complete a registration request to access the app.");
+                break;
+            }
+          })
+          .catch((statusError) => {
+            if (!active) return;
+            setRegistrationStatus(null);
+            setAuthStatusMessage(presentApiError(statusError));
+          })
+          .finally(() => {
+            if (active) setAuthResolutionBusy(false);
+          });
+      })
+      .finally(() => {
+        if (active) setAuthResolutionBusy(false);
       });
     return () => {
       active = false;
@@ -79,6 +132,7 @@ export function AppShell() {
         setIsSignedIn(Boolean(getStoredAccessTokenOrNull()));
         setAuthVersion((value) => value + 1);
         setAuthStatusMessage(null);
+        setRegistrationStatus(null);
       }),
     [],
   );
@@ -97,6 +151,7 @@ export function AppShell() {
     setLoginEmail("");
     setLoginPassword("");
     setCurrentUser(null);
+    setRegistrationStatus(null);
     setIsSignedIn(false);
     setLoginError(null);
     setAuthStatusMessage("Signed out.");
@@ -120,27 +175,15 @@ export function AppShell() {
   };
 
   useEffect(() => {
-    if (!isSignedIn) return;
-    let cancelled = false;
-    apiGet<User>("/users/me")
-      .then((user) => {
-        if (cancelled) return;
-        setCurrentUser(user);
-        setAuthStatusMessage(`Signed in as ${user.display_name} (${user.role}).`);
-      })
-      .catch((error) => {
-        if (cancelled) return;
-        setCurrentUser(null);
-        if (isAuthError(error)) {
-          setAuthStatusMessage("Sign-in succeeded, but this account is not mapped to an active app user.");
-          return;
-        }
-        setAuthStatusMessage(presentApiError(error));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [isSignedIn, authVersion]);
+    if (!isSignedIn || authResolutionBusy) return;
+    if (currentUser && onRegistrationPage) {
+      navigate("/", { replace: true });
+      return;
+    }
+    if (!currentUser && registrationStatus && !registrationStatus.current_user && !onRegistrationPage) {
+      navigate("/registration", { replace: true });
+    }
+  }, [authResolutionBusy, currentUser, isSignedIn, navigate, onRegistrationPage, registrationStatus]);
 
   const helperMessage = !isSignedIn
     ? isIdentityPlatformConfigured()
@@ -150,6 +193,12 @@ export function AppShell() {
       ? "Signed-in tokens still need an active app-user mapping before protected pages can load."
       : null;
 
+  const visibleNav = useMemo(() => {
+    if (!isSignedIn) return nav;
+    if (!currentUser) return [{ to: "/registration", label: "Registration" }];
+    return nav;
+  }, [currentUser, isSignedIn]);
+
   return (
     <div className="min-h-screen text-ink">
       <header className="sticky top-0 z-40 border-b border-black/5 bg-canvas/90 backdrop-blur">
@@ -157,7 +206,7 @@ export function AppShell() {
           <div className="mr-3 rounded-xl bg-slatebrand px-3 py-2 font-display text-sm font-bold tracking-wide text-white">
             Optical Inventory
           </div>
-          {nav.map((item) => (
+          {visibleNav.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
@@ -188,7 +237,7 @@ export function AppShell() {
                 </button>
               ) : null}
             </div>
-            {isIdentityPlatformConfigured() ? (
+            {!isSignedIn && isIdentityPlatformConfigured() ? (
               <form className="grid gap-2" onSubmit={submitIdentityPlatformLogin}>
                 <label className="flex items-center gap-2">
                   <span className="w-24 font-semibold text-slate-600">Email</span>
@@ -228,17 +277,27 @@ export function AppShell() {
                 </div>
               </form>
             ) : null}
-            <label className="flex items-center gap-2">
-              <span className="font-semibold text-slate-600">
-                {isIdentityPlatformConfigured() ? "Fallback token" : "Bearer token"}
-              </span>
-              <input
-                className="min-w-0 flex-1 bg-transparent text-slate-900 outline-none"
-                onChange={(event) => handleTokenChange(event.target.value)}
-                placeholder="Paste local fixture or OIDC bearer token"
-                value={accessTokenDraft}
-              />
-            </label>
+            {!isSignedIn ? (
+              <label className="flex items-center gap-2">
+                <span className="font-semibold text-slate-600">
+                  {isIdentityPlatformConfigured() ? "Fallback token" : "Bearer token"}
+                </span>
+                <input
+                  className="min-w-0 flex-1 bg-transparent text-slate-900 outline-none"
+                  onChange={(event) => handleTokenChange(event.target.value)}
+                  placeholder="Paste local fixture or OIDC bearer token"
+                  value={accessTokenDraft}
+                />
+              </label>
+            ) : (
+              <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                {currentUser
+                  ? `Signed in as ${currentUser.display_name} (${currentUser.role})`
+                  : registrationStatus?.email
+                    ? `Signed in as ${registrationStatus.email}`
+                    : "Signed in"}
+              </div>
+            )}
             {loginError ? <p className="text-xs text-red-600">{loginError}</p> : null}
             {authStatusMessage ? <p className="text-xs text-slate-500">{authStatusMessage}</p> : null}
             {!loginError && helperMessage ? <p className="text-xs text-slate-500">{helperMessage}</p> : null}
