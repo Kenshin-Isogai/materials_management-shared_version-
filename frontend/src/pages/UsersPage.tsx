@@ -43,11 +43,10 @@ export function UsersPage() {
     display_name: "",
     email: "",
     external_subject: "",
-    identity_provider: "identity_platform",
-    hosted_domain: "",
     role: "operator" as UserRole,
     is_active: true,
   });
+  const [showAdvancedIdentityMapping, setShowAdvancedIdentityMapping] = useState(false);
   const [editingUserId, setEditingUserId] = useState<number | null>(null);
   const [editDraft, setEditDraft] = useState<UserDraft | null>(null);
   const [approvalDrafts, setApprovalDrafts] = useState<Record<number, ApprovalDraft>>({});
@@ -125,9 +124,9 @@ export function UsersPage() {
             email: createForm.email.trim() || null,
             external_subject: createForm.external_subject.trim() || null,
             identity_provider: createForm.external_subject.trim()
-              ? createForm.identity_provider.trim() || null
+              ? "identity_platform"
               : null,
-            hosted_domain: createForm.hosted_domain.trim() || null,
+            hosted_domain: null,
             role: createForm.role,
             is_active: createForm.is_active,
           }),
@@ -141,8 +140,6 @@ export function UsersPage() {
         display_name: "",
         email: "",
         external_subject: "",
-        identity_provider: "identity_platform",
-        hosted_domain: "",
         role: "operator",
         is_active: true,
       });
@@ -508,7 +505,7 @@ export function UsersPage() {
           <div>
             <h2 className="font-display text-xl font-semibold">Create User</h2>
             <p className="mt-1 text-sm text-slate-600">
-              Keep manual user creation as a recovery path for the first admin or incident handling.
+              Keep manual user creation as a recovery path for the first admin or incident handling. Standard users should onboard through self-registration.
             </p>
             {!hasActiveUsers ? (
               <p className="mt-2 text-sm text-amber-700">
@@ -555,41 +552,33 @@ export function UsersPage() {
             />
           </label>
 
-          <label className="block space-y-2 text-sm">
-            <span className="font-semibold text-slate-700">Identity provider</span>
-            <input
-              className="input"
-              value={createForm.identity_provider}
-              onChange={(event) =>
-                setCreateForm((current) => ({ ...current, identity_provider: event.target.value }))
-              }
-              placeholder="identity_platform"
-            />
-          </label>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm">
+            <label className="flex items-center gap-2">
+              <input
+                checked={showAdvancedIdentityMapping}
+                onChange={(event) => setShowAdvancedIdentityMapping(event.target.checked)}
+                type="checkbox"
+              />
+              <span className="font-semibold text-slate-700">Advanced identity mapping</span>
+            </label>
+            <p className="mt-1 text-xs text-slate-500">
+              Normally email matching is enough. Use external subject only for recovery or stricter identity pinning.
+            </p>
+          </div>
 
-          <label className="block space-y-2 text-sm">
-            <span className="font-semibold text-slate-700">External subject</span>
-            <input
-              className="input"
-              value={createForm.external_subject}
-              onChange={(event) =>
-                setCreateForm((current) => ({ ...current, external_subject: event.target.value }))
-              }
-              placeholder="identity-platform-subject"
-            />
-          </label>
-
-          <label className="block space-y-2 text-sm">
-            <span className="font-semibold text-slate-700">Hosted domain</span>
-            <input
-              className="input"
-              value={createForm.hosted_domain}
-              onChange={(event) =>
-                setCreateForm((current) => ({ ...current, hosted_domain: event.target.value }))
-              }
-              placeholder="example.com"
-            />
-          </label>
+          {showAdvancedIdentityMapping ? (
+            <label className="block space-y-2 text-sm">
+              <span className="font-semibold text-slate-700">External subject</span>
+              <input
+                className="input"
+                value={createForm.external_subject}
+                onChange={(event) =>
+                  setCreateForm((current) => ({ ...current, external_subject: event.target.value }))
+                }
+                placeholder="identity-platform-subject"
+              />
+            </label>
+          ) : null}
 
           <label className="block space-y-2 text-sm">
             <span className="font-semibold text-slate-700">Role</span>
@@ -657,7 +646,7 @@ export function UsersPage() {
                   <th className="px-3 py-2">Username</th>
                   <th className="px-3 py-2">Display name</th>
                   <th className="px-3 py-2">Email</th>
-                  <th className="px-3 py-2">Identity mapping</th>
+                  <th className="px-3 py-2">Identity</th>
                   <th className="px-3 py-2">Role</th>
                   <th className="px-3 py-2">Status</th>
                   <th className="px-3 py-2">Updated</th>
@@ -687,12 +676,13 @@ export function UsersPage() {
                       </td>
                       <td className="px-3 py-3 text-slate-600">{user.email || "-"}</td>
                       <td className="px-3 py-3 text-xs text-slate-600">
-                        {user.identity_provider && user.external_subject ? (
+                        {user.external_subject ? (
                           <div className="space-y-1">
-                            <div className="font-mono">{user.identity_provider}</div>
+                            <div className="font-semibold text-slate-700">Email + subject linked</div>
                             <div className="font-mono break-all">{user.external_subject}</div>
-                            <div>{user.hosted_domain || "-"}</div>
                           </div>
+                        ) : user.email ? (
+                          <span>Email-only</span>
                         ) : (
                           <span>-</span>
                         )}

@@ -61,6 +61,9 @@ export function AppShell() {
   const onRegistrationPage = location.pathname === "/registration";
   const onVerifyEmailPage = location.pathname === "/verify-email";
   const [authFormMode, setAuthFormMode] = useState<"signin" | "signup">("signin");
+  const allowManualTokenEntry =
+    !isIdentityPlatformConfigured() ||
+    ["localhost", "127.0.0.1"].includes(window.location.hostname);
 
   useEffect(() => {
     if (!isSignedIn) {
@@ -263,7 +266,7 @@ export function AppShell() {
 
   const helperMessage = !isSignedIn
     ? isIdentityPlatformConfigured()
-      ? "Protected pages require an Identity Platform account that is also mapped to an active app user."
+      ? "Create an account or sign in first. After email verification, unapproved users are guided to registration automatically."
       : "Paste a valid Bearer token to access protected pages."
     : currentUser === null && !authStatusMessage
       ? "Signed-in tokens still need an active app-user mapping before protected pages can load."
@@ -382,7 +385,7 @@ export function AppShell() {
                 </form>
               </div>
             ) : null}
-            {!isSignedIn ? (
+            {!isSignedIn && allowManualTokenEntry ? (
               <label className="flex items-center gap-2">
                 <span className="font-semibold text-slate-600">
                   {isIdentityPlatformConfigured() ? "Fallback token" : "Bearer token"}
@@ -394,7 +397,8 @@ export function AppShell() {
                   value={accessTokenDraft}
                 />
               </label>
-            ) : (
+            ) : null}
+            {isSignedIn ? (
               <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
                 {currentUser
                   ? `Signed in as ${currentUser.display_name} (${currentUser.role})`
@@ -402,7 +406,17 @@ export function AppShell() {
                     ? `Signed in as ${authSession.email}${authSession.emailVerified ? "" : " (unverified)"}`
                     : "Signed in"}
               </div>
-            )}
+            ) : null}
+            {!isSignedIn && isIdentityPlatformConfigured() ? (
+              <div className="rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+                New users: create an account, verify the email, then sign in. Registration opens automatically after verification.
+                <div className="mt-2">
+                  <NavLink className="font-semibold text-signal hover:underline" to="/registration">
+                    Open registration guidance
+                  </NavLink>
+                </div>
+              </div>
+            ) : null}
             {loginError ? <p className="text-xs text-red-600">{loginError}</p> : null}
             {signupError ? <p className="text-xs text-red-600">{signupError}</p> : null}
             {signupMessage ? <p className="text-xs text-emerald-700">{signupMessage}</p> : null}
@@ -420,10 +434,10 @@ export function AppShell() {
         {!isSignedIn && (
           <div className="mb-6">
             <StatusCallout
-              title="Sign in to use protected pages"
+              title="Sign in before opening protected pages"
               message={
                 isIdentityPlatformConfigured()
-                  ? "Use your provisioned email/password above. The account must also be registered as an active app user."
+                  ? "Create an account or sign in above. After verification, accounts without app access are sent to registration for admin approval."
                   : "Set a Bearer token above before opening protected pages."
               }
             />

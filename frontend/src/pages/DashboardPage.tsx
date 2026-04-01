@@ -4,6 +4,7 @@ import { apiGet } from "../lib/api";
 import { StatCard } from "../components/StatCard";
 import { StatusCallout } from "../components/StatusCallout";
 import { isAuthError, isBackendUnavailableError, presentApiError } from "../lib/errorUtils";
+import { getStoredAccessTokenOrNull, isIdentityPlatformConfigured } from "../lib/auth";
 
 type Summary = {
   overdue_orders: Array<Record<string, unknown>>;
@@ -15,8 +16,9 @@ type Summary = {
 
 export function DashboardPage() {
   const [overdueQuery, setOverdueQuery] = useState("");
+  const requiresSignInFirst = isIdentityPlatformConfigured() && !getStoredAccessTokenOrNull();
   const { data, error, isLoading } = useSWR<Summary>(
-    "/dashboard",
+    requiresSignInFirst ? null : "/dashboard",
     () => apiGet<Summary>("/dashboard/summary"),
     { refreshInterval: 20_000 }
   );
@@ -47,8 +49,14 @@ export function DashboardPage() {
         </p>
       </section>
 
-      {isLoading && <div className="panel p-6 text-sm text-slate-500">Loading...</div>}
-      {error && (
+      {requiresSignInFirst ? (
+        <StatusCallout
+          title="Sign in to load dashboard data"
+          message="Create an account or sign in from the header first. After email verification, unapproved users are guided to registration automatically."
+        />
+      ) : null}
+      {isLoading && !requiresSignInFirst && <div className="panel p-6 text-sm text-slate-500">Loading...</div>}
+      {error && !requiresSignInFirst && (
         <StatusCallout
           title={
             isAuthError(error)

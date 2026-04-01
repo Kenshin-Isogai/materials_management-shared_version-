@@ -1,4 +1,5 @@
 import { isAuthError, isBackendUnavailableError, presentApiError } from "../lib/errorUtils";
+import { getStoredAccessTokenOrNull, isIdentityPlatformConfigured } from "../lib/auth";
 import { StatusCallout } from "./StatusCallout";
 
 type ApiErrorNoticeProps = {
@@ -8,6 +9,7 @@ type ApiErrorNoticeProps = {
 };
 
 export function ApiErrorNotice({ error, area, className }: ApiErrorNoticeProps) {
+  const isAnonymousIdentityPlatform = isIdentityPlatformConfigured() && !getStoredAccessTokenOrNull();
   const content = isAuthError(error) ? (
     <StatusCallout
       title="Sign-in required"
@@ -16,8 +18,12 @@ export function ApiErrorNotice({ error, area, className }: ApiErrorNoticeProps) 
     />
   ) : isBackendUnavailableError(error) ? (
     <StatusCallout
-      title="Environment unavailable"
-      message={`${area} is unavailable because the backend or database is not ready. If this is dev or staging, start Cloud SQL and try again.`}
+      title={isAnonymousIdentityPlatform ? "Sign in required" : "Environment unavailable"}
+      message={
+        isAnonymousIdentityPlatform
+          ? `Sign in or create an account before loading ${area}. If you are already signed in and still see this later, the backend or database may be unavailable.`
+          : `${area} is unavailable because the backend or database is not ready. If this is dev or staging, start Cloud SQL and try again.`
+      }
       tone="warning"
     />
   ) : (

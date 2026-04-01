@@ -44,9 +44,12 @@ This document explains the implemented architecture of the Materials Management 
   - signed-in identities that are not yet mapped to an active app user now go through a dedicated `/registration` route instead of seeing generic fetch failures
   - signed-in identities whose tokens are rejected because `email_verified=true` is required now go through a dedicated `/verify-email` route with verification-mail resend support
   - the shared shell now supports both sign-in and sign-up against Identity Platform email/password, and newly created accounts immediately trigger verification-mail delivery through the Identity Toolkit REST API
+  - hosted cloud UX now hides the manual bearer-token fallback entry by default; that token override remains visible only for local/test-style localhost operation
+  - anonymous dashboard access now stops at explicit sign-in guidance instead of trying to load protected data and misreporting backend unavailability
   - self-registration requests are stored separately from active users so approval history can be retained without polluting the `users` table
   - applicants submit `username`, required `display_name`, requested role, and optional memo; email comes from the verified token identity
   - admins approve or reject requests inside `/users`; approval can override username/display name/role, rejection requires a reason, and both actions are recorded with reviewer metadata
+  - the Users page now trims identity-mapping internals from the main operator UI: normal manual recovery creation is email-first, while raw `sub` mapping is tucked under an advanced section and provider/domain internals are no longer shown as first-class fields
   - pending users cannot access the rest of the application; they can only read registration status and wait/reapply after rejection
   - frontend request handling now classifies auth failures, backend-unavailable failures, and generic API failures so cloud login and dashboard errors no longer collapse into a generic "Failed to fetch" UX
   - the shell now shows a persistent sign-in guidance callout while anonymous, and workspace/dashboard views surface a dedicated "environment unavailable" message when Cloud SQL or the backend is down

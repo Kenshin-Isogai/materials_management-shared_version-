@@ -82,6 +82,14 @@ vi.mock("../src/lib/api", async (importOriginal) => {
   };
 });
 
+vi.mock("../src/lib/auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/lib/auth")>();
+  return {
+    ...actual,
+    isIdentityPlatformConfigured: () => true,
+  };
+});
+
 vi.mock("../src/components/ProjectEditor", () => ({
   ProjectEditor: ({ onDirtyChange }: { onDirtyChange?: (isDirty: boolean) => void }) => {
     useEffect(() => {
@@ -179,7 +187,21 @@ describe("app router", () => {
     ).toBeTruthy();
   });
 
-  it("shows an environment-unavailable message when dashboard requests cannot reach the backend", async () => {
+  it("shows sign-in guidance on the dashboard before anonymous users load protected data", async () => {
+    renderRouter("/");
+
+    await waitFor(() => {
+      expect(screen.getByText("Sign in to load dashboard data")).toBeTruthy();
+    });
+    expect(
+      screen.getByText(
+        "Create an account or sign in from the header first. After email verification, unapproved users are guided to registration automatically.",
+      ),
+    ).toBeTruthy();
+    expect(apiGetMock).not.toHaveBeenCalledWith("/dashboard/summary");
+  });
+
+  it("shows an environment-unavailable message when signed-in dashboard requests cannot reach the backend", async () => {
     apiGetMock.mockImplementation(async (path: string) => {
       if (path === "/dashboard/summary") {
         throw new ApiClientError({
@@ -188,6 +210,10 @@ describe("app router", () => {
         });
       }
       return defaultApiGet(path);
+    });
+
+    act(() => {
+      window.sessionStorage.setItem("materials.auth-session", JSON.stringify({ accessToken: "token" }));
     });
 
     renderRouter("/");

@@ -78,6 +78,13 @@ export function RegistrationPage() {
 
       {statusQuery.isLoading && <p className="text-sm text-slate-500">Loading registration status...</p>}
       {statusQuery.error ? <ApiErrorNotice area="registration status" error={statusQuery.error} /> : null}
+      {!statusQuery.isLoading && statusQuery.error ? (
+        <StatusCallout
+          title="Sign in or create an account first"
+          message="Registration requests require a verified signed-in account. Create an account, verify the email, and sign in from the header before using this page."
+          tone="info"
+        />
+      ) : null}
 
       {status?.current_user ? (
         <StatusCallout
