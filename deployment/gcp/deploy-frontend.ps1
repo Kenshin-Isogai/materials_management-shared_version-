@@ -38,6 +38,7 @@ gcloud run deploy $ServiceName `
     --image $image `
     --service-account $ServiceAccount `
     --allow-unauthenticated `
+    --port 80 `
     --concurrency 50 `
     --cpu 1 `
     --memory 512Mi `

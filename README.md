@@ -127,6 +127,8 @@ This wrapper sets `NGINX_HOST_PORT=8088` for the E2E stack, so Playwright does n
 - Set `BACKEND_PUBLIC_BASE_URL` and `FRONTEND_PUBLIC_BASE_URL` if you want the runtime health surface to report the intended public URLs explicitly
 - Set `CORS_ALLOWED_ORIGINS` to the frontend Cloud Run origin explicitly
 - Set `JWT_VERIFIER=jwks` plus `OIDC_JWKS_URL`, `OIDC_EXPECTED_ISSUER`, and `OIDC_EXPECTED_AUDIENCE` for deployed OIDC verification
+- Set `JWT_SIGNING_ALGORITHMS=RS256` for Identity Platform / Google-signed ID tokens
+- For the current email/password dev rollout, keep `OIDC_REQUIRE_EMAIL_VERIFIED=0` unless the Identity Platform user emails are explicitly verified
 - `DIAGNOSTICS_AUTH_ROLE` defaults to `admin` in Cloud Run so `/api/health` and `/api/auth/capabilities` do not stay anonymously public
 - Keep `MAX_UPLOAD_BYTES=33554432` unless you intentionally revise the first-rollout 32 MB ceiling
 - Keep `CLOUD_RUN_CONCURRENCY_TARGET=10` and align actual Cloud Run/Gunicorn settings with Cloud SQL capacity
@@ -141,6 +143,7 @@ This wrapper sets `NGINX_HOST_PORT=8088` for the E2E stack, so Playwright does n
 - Concrete first-rollout deploy steps are documented in [documents/gcp_cloud_run_rollout/cloud_run_deployment_runbook.md](documents/gcp_cloud_run_rollout/cloud_run_deployment_runbook.md)
 - Repo-side deployment assets live under `deployment/gcp/`, including backend/frontend env templates, PowerShell deploy scripts, and a Secret Manager helper
 - A manual GitHub Actions deploy workflow now lives at `.github/workflows/deploy-gcp.yml`
+- GitHub Environment variable/secret setup is documented in [documents/gcp_cloud_run_rollout/github_actions_environment_setup.md](documents/gcp_cloud_run_rollout/github_actions_environment_setup.md)
 
 ## API
 

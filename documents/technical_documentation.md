@@ -34,6 +34,7 @@ This document explains the implemented architecture of the Materials Management 
   - `AUTH_MODE` controls auth posture: `none`, `oidc_dry_run`, `oidc_enforced`
   - `RBAC_MODE` controls authorization posture: `none`, `rbac_dry_run`, `rbac_enforced`
   - `JWT_VERIFIER` supports `shared_secret` and `jwks`; deployed OIDC verification uses `OIDC_JWKS_URL`
+  - Identity Platform / Google-signed ID tokens require `JWT_SIGNING_ALGORITHMS=RS256` instead of the local fixture default
   - `/api/users*` is admin-only, normal mutations/exports/imports are operator scope, and authenticated reads default to viewer scope
   - supported persisted user roles are constrained to `admin`, `operator`, and `viewer` on both create and update flows
   - bootstrap exception: `POST /api/users` is allowed without Bearer auth only while the system has zero active users

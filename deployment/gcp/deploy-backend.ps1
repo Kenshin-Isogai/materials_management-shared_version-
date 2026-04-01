@@ -21,19 +21,22 @@ param(
 
     [string]$ObjectPrefix = "materials-management",
 
-    [Parameter(Mandatory = $true)]
-    [string]$FrontendUrl,
+    [string]$FrontendUrl = "",
+
+    [string]$BackendUrl = "",
 
     [Parameter(Mandatory = $true)]
-    [string]$BackendUrl,
+    [string]$DatabaseUrlSecretName,
 
-    [Parameter(Mandatory = $true)]
-    [string]$DatabaseUrlSecretName
+    [string]$JwtSigningAlgorithms = "RS256",
+
+    [bool]$RequireEmailVerified = $false
 )
 
 $ErrorActionPreference = "Stop"
 
 $image = "{0}-docker.pkg.dev/{1}/{2}/materials-backend:{3}" -f $Region, $ProjectId, $Repository, $ImageTag
+$databaseSecretRef = "DATABASE_URL={0}:latest" -f $DatabaseUrlSecretName
 
 docker build -t $image .\backend
 docker push $image
@@ -54,19 +57,27 @@ $envVars = @(
     "GCS_BUCKET=$Bucket",
     "GCS_OBJECT_PREFIX=$ObjectPrefix",
     "INSTANCE_CONNECTION_NAME=$InstanceConnectionName",
-    "CORS_ALLOWED_ORIGINS=$FrontendUrl",
-    "BACKEND_PUBLIC_BASE_URL=$BackendUrl",
-    "FRONTEND_PUBLIC_BASE_URL=$FrontendUrl",
     "AUTH_MODE=oidc_enforced",
     "RBAC_MODE=rbac_enforced",
     "JWT_VERIFIER=jwks",
+    "JWT_SIGNING_ALGORITHMS=$JwtSigningAlgorithms",
     "OIDC_PROVIDER=identity_platform",
     "OIDC_EXPECTED_ISSUER=https://securetoken.google.com/$ProjectId",
     "OIDC_EXPECTED_AUDIENCE=$ProjectId",
     "OIDC_JWKS_URL=https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com",
-    "OIDC_REQUIRE_EMAIL_VERIFIED=1",
+    "OIDC_REQUIRE_EMAIL_VERIFIED=$([int]$RequireEmailVerified)",
     "DIAGNOSTICS_AUTH_ROLE=admin"
-) -join ","
+)
+
+if ($FrontendUrl) {
+    $envVars += "CORS_ALLOWED_ORIGINS=$FrontendUrl"
+    $envVars += "FRONTEND_PUBLIC_BASE_URL=$FrontendUrl"
+}
+if ($BackendUrl) {
+    $envVars += "BACKEND_PUBLIC_BASE_URL=$BackendUrl"
+}
+
+$envVars = $envVars -join ","
 
 gcloud run deploy $ServiceName `
     --project $ProjectId `
@@ -75,7 +86,7 @@ gcloud run deploy $ServiceName `
     --service-account $ServiceAccount `
     --allow-unauthenticated `
     --set-cloudsql-instances $InstanceConnectionName `
-    --set-secrets "DATABASE_URL=$DatabaseUrlSecretName:latest" `
+    --set-secrets $databaseSecretRef `
     --set-env-vars $envVars `
     --concurrency 10 `
     --cpu 1 `

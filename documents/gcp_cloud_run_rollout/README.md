@@ -41,6 +41,7 @@ The main remaining work is now the live-production layer on top of an already-ha
 3. `environment_and_runtime_matrix.md`
 4. `cloud_run_deployment_runbook.md`
 5. `security_and_cost_considerations.md`
+6. `github_actions_environment_setup.md`
 
 Use these only as supporting references:
 
@@ -55,6 +56,7 @@ Use these only as supporting references:
 - `environment_and_runtime_matrix.md`: runtime/deployment variable contract
 - `cloud_run_deployment_runbook.md`: deployment, update, rollback, and recovery workflow
 - `security_and_cost_considerations.md`: security, robustness, and cost guardrails
+- `github_actions_environment_setup.md`: GitHub Environment variables/secrets and first-time workflow order
 - `implementation_plan.md`: remaining hardening workstreams
 - `implementation_slices.md`: compressed execution order split between repo-side follow-up and post-project work
 - `task_breakdown_by_file.md`: repository surfaces that still matter if further hardening code changes are needed

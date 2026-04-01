@@ -23,6 +23,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 $image = "{0}-docker.pkg.dev/{1}/{2}/materials-backend:{3}" -f $Region, $ProjectId, $Repository, $ImageTag
+$databaseSecretRef = "DATABASE_URL={0}:latest" -f $DatabaseUrlSecretName
 
 gcloud run jobs deploy $JobName `
     --project $ProjectId `
@@ -30,9 +31,12 @@ gcloud run jobs deploy $JobName `
     --image $image `
     --service-account $ServiceAccount `
     --set-cloudsql-instances $InstanceConnectionName `
-    --set-secrets "DATABASE_URL=$DatabaseUrlSecretName:latest" `
+    --set-secrets $databaseSecretRef `
     --set-env-vars "APP_RUNTIME_TARGET=cloud_run,AUTO_MIGRATE_ON_STARTUP=0" `
     --command uv `
-    --args run,alembic,upgrade,head
+    --args run `
+    --args alembic `
+    --args upgrade `
+    --args head
 
 gcloud run jobs execute $JobName --project $ProjectId --region $Region --wait

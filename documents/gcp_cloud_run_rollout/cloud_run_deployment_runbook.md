@@ -42,7 +42,16 @@ DB_MAX_OVERFLOW=10
 DB_POOL_TIMEOUT=30
 DB_POOL_RECYCLE_SECONDS=1800
 WEB_CONCURRENCY=2
+JWT_SIGNING_ALGORITHMS=RS256
 ```
+
+For the current dev rollout that uses Identity Platform email/password, keep:
+
+```text
+OIDC_REQUIRE_EMAIL_VERIFIED=0
+```
+
+unless the allowed Identity Platform user emails are explicitly verified.
 
 ## Recovery policy contract to finalize per environment
 

@@ -46,7 +46,7 @@ Last updated: 2026-03-29 (JST)
   - first-rollout Cloud Run guardrails are controlled by `MAX_UPLOAD_BYTES`, `HEAVY_REQUEST_TARGET_SECONDS`, and `CLOUD_RUN_CONCURRENCY_TARGET`
   - browser CORS defaults are runtime-specific: localhost-friendly defaults locally, explicit `CORS_ALLOWED_ORIGINS` required for Cloud Run browser traffic
   - deployment metadata/config now also exposes `INSTANCE_CONNECTION_NAME`, `BACKEND_PUBLIC_BASE_URL`, `FRONTEND_PUBLIC_BASE_URL`, `STORAGE_BACKEND`, `GCS_BUCKET`, and `GCS_OBJECT_PREFIX`
-  - auth/runtime config now also supports `JWT_VERIFIER=jwks`, `OIDC_JWKS_URL`, `DIAGNOSTICS_AUTH_ROLE`, and `VITE_IDENTITY_PLATFORM_API_KEY`
+  - auth/runtime config now also supports `JWT_VERIFIER=jwks`, `JWT_SIGNING_ALGORITHMS`, `OIDC_JWKS_URL`, `DIAGNOSTICS_AUTH_ROLE`, and `VITE_IDENTITY_PLATFORM_API_KEY`
   - generated artifact persistence now goes through a storage boundary (`backend/app/storage.py`), with current local refs stored as `local://generated_artifacts/...`
   - the storage layer now supports `gcs://...` refs for durable Cloud Run storage and keeps `local://...` for local/shared-server operation
   - default durable item/order archive moves now also route through that storage boundary; local disk remains the mechanism for temporary staging and a narrower set of local compatibility flows
