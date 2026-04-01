@@ -297,6 +297,32 @@ def test_reject_registration_request_requires_reason_and_records_review_metadata
     assert rejected["reviewed_by_user_id"] == reviewer["user_id"]
     assert rejected["reviewed_at"] is not None
 
+
+def test_get_registration_status_handles_email_only_identity_lookup(conn):
+    service.create_registration_request(
+        conn,
+        data={
+            "username": "email-only",
+            "display_name": "Email Only",
+            "requested_role": "viewer",
+        },
+        email="email-only@example.test",
+        external_subject=None,
+        identity_provider=None,
+    )
+
+    status = service.get_registration_status(
+        conn,
+        email="email-only@example.test",
+        external_subject=None,
+        identity_provider=None,
+        current_user=None,
+    )
+
+    assert status["state"] == "pending"
+    assert status["request"] is not None
+    assert status["request"]["email"] == "email-only@example.test"
+
 def test_reservation_release_roundtrip(conn):
     item = _create_basic_item(conn, item_number="ITEM-RES-001")
     service.adjust_inventory(

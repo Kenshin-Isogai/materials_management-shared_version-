@@ -563,8 +563,16 @@ def _get_latest_registration_request_for_identity(
     normalized_provider = _normalize_optional_identity_text(identity_provider, lower=True)
     if normalized_email is None and not (normalized_subject and normalized_provider):
         return None
+    where_clauses: list[str] = []
+    params: list[Any] = []
+    if normalized_email is not None:
+        where_clauses.append("lower(email) = lower(?)")
+        params.append(normalized_email)
+    if normalized_subject and normalized_provider:
+        where_clauses.append("(identity_provider = ? AND external_subject = ?)")
+        params.extend([normalized_provider, normalized_subject])
     row = conn.execute(
-        """
+        f"""
         SELECT
             request_id,
             email,
@@ -582,25 +590,11 @@ def _get_latest_registration_request_for_identity(
             created_at,
             updated_at
         FROM registration_requests
-        WHERE
-            (lower(email) = lower(?) AND ? IS NOT NULL)
-            OR (
-                identity_provider = ?
-                AND external_subject = ?
-                AND ? IS NOT NULL
-                AND ? IS NOT NULL
-            )
+        WHERE {" OR ".join(where_clauses)}
         ORDER BY created_at DESC, request_id DESC
         LIMIT 1
         """,
-        (
-            normalized_email,
-            normalized_email,
-            normalized_provider,
-            normalized_subject,
-            normalized_provider,
-            normalized_subject,
-        ),
+        tuple(params),
     ).fetchone()
     return None if row is None else dict(row)
 
