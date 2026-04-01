@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
@@ -66,6 +66,9 @@ const apiGetAllPagesMock = vi.fn(async () => []);
 const apiGetWithPaginationMock = vi.fn(async () => ({ data: [], pagination: undefined }));
 const apiSendMock = vi.fn();
 const apiDownloadMock = vi.fn();
+const signInWithIdentityPlatformEmailPasswordMock = vi.fn(async () => undefined);
+const signUpWithIdentityPlatformEmailPasswordMock = vi.fn(async () => undefined);
+const sendIdentityPlatformVerificationEmailMock = vi.fn(async () => undefined);
 
 vi.mock("../src/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/lib/api")>();
@@ -87,6 +90,12 @@ vi.mock("../src/lib/auth", async (importOriginal) => {
   return {
     ...actual,
     isIdentityPlatformConfigured: () => true,
+    sendIdentityPlatformVerificationEmail: (...args: unknown[]) =>
+      sendIdentityPlatformVerificationEmailMock(...args),
+    signInWithIdentityPlatformEmailPassword: (...args: unknown[]) =>
+      signInWithIdentityPlatformEmailPasswordMock(...args),
+    signUpWithIdentityPlatformEmailPassword: (...args: unknown[]) =>
+      signUpWithIdentityPlatformEmailPasswordMock(...args),
   };
 });
 
@@ -129,6 +138,12 @@ describe("app router", () => {
     apiGetWithPaginationMock.mockImplementation(async () => ({ data: [], pagination: undefined }));
     apiSendMock.mockReset();
     apiDownloadMock.mockReset();
+    signInWithIdentityPlatformEmailPasswordMock.mockReset();
+    signInWithIdentityPlatformEmailPasswordMock.mockImplementation(async () => undefined);
+    signUpWithIdentityPlatformEmailPasswordMock.mockReset();
+    signUpWithIdentityPlatformEmailPasswordMock.mockImplementation(async () => undefined);
+    sendIdentityPlatformVerificationEmailMock.mockReset();
+    sendIdentityPlatformVerificationEmailMock.mockImplementation(async () => undefined);
   });
 
   afterEach(() => {
@@ -304,6 +319,45 @@ describe("app router", () => {
       expect(router.state.location.pathname).toBe("/");
     });
     expect(screen.getByRole("heading", { name: "Dashboard" })).toBeTruthy();
+  });
+
+  it("clears a stale signup error after switching to sign-in and logging in successfully", async () => {
+    signUpWithIdentityPlatformEmailPasswordMock.mockRejectedValueOnce(
+      new ApiClientError({
+        message: "EMAIL_EXISTS",
+        statusCode: 400,
+        code: "EMAIL_EXISTS",
+      }),
+    );
+
+    renderRouter("/");
+
+    fireEvent.click(screen.getByRole("button", { name: "Create account" }));
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: "admin@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "password123" },
+    });
+    fireEvent.click(screen.getAllByRole("button", { name: "Create account" })[1]);
+
+    await waitFor(() => {
+      expect(screen.getByText("EMAIL_EXISTS")).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    fireEvent.click(screen.getAllByRole("button", { name: "Sign in" })[1]);
+
+    await waitFor(() => {
+      expect(signInWithIdentityPlatformEmailPasswordMock).toHaveBeenCalledWith(
+        "admin@example.com",
+        "password123",
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText("EMAIL_EXISTS")).toBeNull();
+    });
   });
 
 });

@@ -65,6 +65,12 @@ export function AppShell() {
     !isIdentityPlatformConfigured() ||
     ["localhost", "127.0.0.1"].includes(window.location.hostname);
 
+  const clearAuthFeedback = () => {
+    setLoginError(null);
+    setSignupError(null);
+    setSignupMessage(null);
+  };
+
   useEffect(() => {
     if (!isSignedIn) {
       setCurrentUser(null);
@@ -158,6 +164,7 @@ export function AppShell() {
       subscribeAuthSessionChanged(() => {
         setIsSignedIn(Boolean(getStoredAccessTokenOrNull()));
         setAuthVersion((value) => value + 1);
+        clearAuthFeedback();
         setAuthStatusMessage(null);
         setRegistrationStatus(null);
         setVerificationRequired(false);
@@ -169,7 +176,7 @@ export function AppShell() {
     setStoredAccessToken(nextToken || null);
     setAccessTokenDraft(nextToken);
     setIsSignedIn(Boolean(nextToken.trim()));
-    setLoginError(null);
+    clearAuthFeedback();
     setAuthStatusMessage(null);
   };
 
@@ -182,17 +189,14 @@ export function AppShell() {
     setRegistrationStatus(null);
     setVerificationRequired(false);
     setIsSignedIn(false);
-    setLoginError(null);
-    setSignupError(null);
-    setSignupMessage(null);
+    clearAuthFeedback();
     setAuthStatusMessage("Signed out.");
   };
 
   const submitIdentityPlatformLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setLoginBusy(true);
-    setLoginError(null);
-    setSignupMessage(null);
+    clearAuthFeedback();
     try {
       await signInWithIdentityPlatformEmailPassword(loginEmail, loginPassword);
       setLoginPassword("");
@@ -209,8 +213,7 @@ export function AppShell() {
   const submitIdentityPlatformSignup = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setSignupBusy(true);
-    setSignupError(null);
-    setSignupMessage(null);
+    clearAuthFeedback();
     try {
       await signUpWithIdentityPlatformEmailPassword(loginEmail, loginPassword);
       await sendIdentityPlatformVerificationEmail();
@@ -228,8 +231,7 @@ export function AppShell() {
 
   const resendVerificationEmail = async () => {
     setSignupBusy(true);
-    setSignupError(null);
-    setSignupMessage(null);
+    clearAuthFeedback();
     try {
       await sendIdentityPlatformVerificationEmail();
       setSignupMessage("Verification email sent. Complete verification, then sign in again.");
@@ -324,14 +326,20 @@ export function AppShell() {
                 <div className="flex gap-2">
                   <button
                     className={authFormMode === "signin" ? "button-subtle" : "rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600"}
-                    onClick={() => setAuthFormMode("signin")}
+                    onClick={() => {
+                      clearAuthFeedback();
+                      setAuthFormMode("signin");
+                    }}
                     type="button"
                   >
                     Sign in
                   </button>
                   <button
                     className={authFormMode === "signup" ? "button-subtle" : "rounded-md border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600"}
-                    onClick={() => setAuthFormMode("signup")}
+                    onClick={() => {
+                      clearAuthFeedback();
+                      setAuthFormMode("signup");
+                    }}
                     type="button"
                   >
                     Create account
