@@ -11,7 +11,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-gcloud secrets describe $SecretName --project $ProjectId | Out-Null 2>$null
+gcloud secrets describe $SecretName --project $ProjectId 2>$null | Out-Null
 if ($LASTEXITCODE -ne 0) {
     gcloud secrets create $SecretName --replication-policy="automatic" --project $ProjectId | Out-Null
 }

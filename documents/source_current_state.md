@@ -121,7 +121,7 @@ Last updated: 2026-03-29 (JST)
 - Added `/users` as the dedicated shared-server user administration route.
   - supports browser-side create, edit, activate, and deactivate flows against the existing `/api/users` endpoints
   - the global shell now stores a bearer token and resolves the mapped current user through `/api/users/me`
-  - when `VITE_IDENTITY_PLATFORM_API_KEY` is set, the shared header renders an Identity Platform email/password sign-in form, stores the returned Bearer token plus refresh token, and refreshes the session before expiry
+  - when `VITE_IDENTITY_PLATFORM_API_KEY` is set, the shared header renders an Identity Platform email/password sign-in form, stores the returned Bearer token plus refresh token in session-scoped browser storage, migrates the legacy `materials.access-token` key on first read, and refreshes the session before expiry
 - Shared-server browser CSV workflows are now preview-first on the main Items and Orders pages.
   - Items page uses one `General Items CSV Import` surface for regular item CSVs and order-generated missing-item CSVs
   - generated missing-item CSVs are downloaded from Orders and then edited/re-imported through the normal Items preview/import flow

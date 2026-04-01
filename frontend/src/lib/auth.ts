@@ -1,4 +1,5 @@
 const AUTH_SESSION_STORAGE_KEY = "materials.auth-session";
+const LEGACY_ACCESS_TOKEN_STORAGE_KEY = "materials.access-token";
 const AUTH_SESSION_CHANGED_EVENT = "materials:auth-session-changed";
 const IDENTITY_PLATFORM_API_KEY = String(import.meta.env.VITE_IDENTITY_PLATFORM_API_KEY ?? "").trim();
 const EXPIRY_SAFETY_WINDOW_MS = 60_000;
@@ -31,6 +32,7 @@ type IdentityPlatformRefreshResponse = {
 };
 
 let refreshInFlight: Promise<StoredAuthSession | null> | null = null;
+let refreshInFlightToken: string | null = null;
 
 function normalizeSession(value: unknown): StoredAuthSession | null {
   if (!value) return null;
@@ -61,9 +63,24 @@ function emitAuthSessionChanged(): void {
   window.dispatchEvent(new CustomEvent(AUTH_SESSION_CHANGED_EVENT));
 }
 
-function readStoredAuthSession(): StoredAuthSession | null {
+function getPersistentStorage(): Storage | null {
   if (typeof window === "undefined") return null;
-  const raw = window.localStorage.getItem(AUTH_SESSION_STORAGE_KEY);
+  return window.localStorage;
+}
+
+function getSessionStorage(): Storage | null {
+  if (typeof window === "undefined") return null;
+  return window.sessionStorage;
+}
+
+function clearLegacyStoredToken(): void {
+  getPersistentStorage()?.removeItem(LEGACY_ACCESS_TOKEN_STORAGE_KEY);
+  getSessionStorage()?.removeItem(LEGACY_ACCESS_TOKEN_STORAGE_KEY);
+}
+
+function readStoredAuthSession(): StoredAuthSession | null {
+  const sessionStorage = getSessionStorage();
+  const raw = sessionStorage?.getItem(AUTH_SESSION_STORAGE_KEY) ?? null;
   if (!raw) return null;
   try {
     return normalizeSession(JSON.parse(raw));
@@ -72,14 +89,37 @@ function readStoredAuthSession(): StoredAuthSession | null {
   }
 }
 
+function migrateLegacyStoredTokenIfNeeded(): StoredAuthSession | null {
+  const sessionStorage = getSessionStorage();
+  const persistentStorage = getPersistentStorage();
+  const legacyToken =
+    sessionStorage?.getItem(LEGACY_ACCESS_TOKEN_STORAGE_KEY) ??
+    persistentStorage?.getItem(LEGACY_ACCESS_TOKEN_STORAGE_KEY) ??
+    null;
+  const normalized = normalizeSession(legacyToken);
+  if (!normalized) return null;
+  if (sessionStorage) {
+    sessionStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(normalized));
+  }
+  clearLegacyStoredToken();
+  emitAuthSessionChanged();
+  return normalized;
+}
+
 function writeStoredAuthSession(session: StoredAuthSession | null): void {
-  if (typeof window === "undefined") return;
+  const sessionStorage = getSessionStorage();
+  const persistentStorage = getPersistentStorage();
+  if (!sessionStorage && !persistentStorage) return;
   if (!session) {
-    window.localStorage.removeItem(AUTH_SESSION_STORAGE_KEY);
+    sessionStorage?.removeItem(AUTH_SESSION_STORAGE_KEY);
+    clearLegacyStoredToken();
+    refreshInFlight = null;
+    refreshInFlightToken = null;
     emitAuthSessionChanged();
     return;
   }
-  window.localStorage.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(session));
+  sessionStorage?.setItem(AUTH_SESSION_STORAGE_KEY, JSON.stringify(session));
+  clearLegacyStoredToken();
   emitAuthSessionChanged();
 }
 
@@ -148,7 +188,7 @@ export function isIdentityPlatformConfigured(): boolean {
 }
 
 export function getStoredAccessTokenOrNull(): string | null {
-  return readStoredAuthSession()?.accessToken ?? null;
+  return (readStoredAuthSession() ?? migrateLegacyStoredTokenIfNeeded())?.accessToken ?? null;
 }
 
 export function setStoredAccessToken(token: string | null): void {
@@ -170,7 +210,7 @@ export function subscribeAuthSessionChanged(listener: () => void): () => void {
 }
 
 export async function getValidAccessTokenOrNull(): Promise<string | null> {
-  const session = readStoredAuthSession();
+  const session = readStoredAuthSession() ?? migrateLegacyStoredTokenIfNeeded();
   if (!session) return null;
   if (!sessionNeedsRefresh(session)) {
     return session.accessToken;
@@ -179,17 +219,35 @@ export async function getValidAccessTokenOrNull(): Promise<string | null> {
     return session.accessToken;
   }
   if (!refreshInFlight) {
+    refreshInFlightToken = session.refreshToken;
     refreshInFlight = refreshIdentityPlatformSession(session.refreshToken)
       .then((nextSession) => {
-        writeStoredAuthSession(nextSession);
-        return nextSession;
+        const currentSession = readStoredAuthSession();
+        if (
+          !currentSession ||
+          !refreshInFlightToken ||
+          currentSession.refreshToken !== refreshInFlightToken
+        ) {
+          return currentSession;
+        }
+        const mergedSession: StoredAuthSession = {
+          ...currentSession,
+          ...nextSession,
+          email: currentSession.email ?? nextSession.email ?? null,
+        };
+        writeStoredAuthSession(mergedSession);
+        return mergedSession;
       })
       .catch((error) => {
-        clearStoredAuthSession();
+        const currentSession = readStoredAuthSession();
+        if (currentSession?.refreshToken === refreshInFlightToken) {
+          clearStoredAuthSession();
+        }
         throw error;
       })
       .finally(() => {
         refreshInFlight = null;
+        refreshInFlightToken = null;
       });
   }
   const refreshedSession = await refreshInFlight;
