@@ -204,7 +204,14 @@ class SharedSecretJwtVerifier:
             decode_kwargs["options"] = {**options, "verify_aud": False}
         if OIDC_EXPECTED_ISSUER:
             decode_kwargs["issuer"] = OIDC_EXPECTED_ISSUER
-        payload = jwt.decode(token, JWT_SHARED_SECRET, **decode_kwargs)
+        try:
+            payload = jwt.decode(token, JWT_SHARED_SECRET, **decode_kwargs)
+        except jwt.PyJWTError as exc:
+            raise AppError(
+                code="INVALID_TOKEN",
+                message="Bearer token is invalid for the configured verifier",
+                status_code=401,
+            ) from exc
         subject = str(payload.get("sub") or "").strip()
         if not subject:
             raise AppError(code="INVALID_TOKEN", message="JWT subject claim is required", status_code=401)
@@ -266,7 +273,14 @@ class JwksJwtVerifier:
         self._client = jwt.PyJWKClient(OIDC_JWKS_URL)
 
     def verify(self, token: str) -> RequestIdentity:
-        signing_key = self._client.get_signing_key_from_jwt(token)
+        try:
+            signing_key = self._client.get_signing_key_from_jwt(token)
+        except jwt.PyJWTError as exc:
+            raise AppError(
+                code="INVALID_TOKEN",
+                message="Bearer token could not be verified",
+                status_code=401,
+            ) from exc
         options = {"require": ["sub"]}
         decode_kwargs: dict[str, Any] = {
             "algorithms": JWT_SIGNING_ALGORITHMS,
@@ -278,7 +292,14 @@ class JwksJwtVerifier:
             decode_kwargs["options"] = {**options, "verify_aud": False}
         if OIDC_EXPECTED_ISSUER:
             decode_kwargs["issuer"] = OIDC_EXPECTED_ISSUER
-        payload = jwt.decode(token, signing_key.key, **decode_kwargs)
+        try:
+            payload = jwt.decode(token, signing_key.key, **decode_kwargs)
+        except jwt.PyJWTError as exc:
+            raise AppError(
+                code="INVALID_TOKEN",
+                message="Bearer token is invalid for the configured verifier",
+                status_code=401,
+            ) from exc
         subject = str(payload.get("sub") or "").strip()
         if not subject:
             raise AppError(code="INVALID_TOKEN", message="JWT subject claim is required", status_code=401)

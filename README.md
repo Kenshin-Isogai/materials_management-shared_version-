@@ -144,6 +144,7 @@ This wrapper sets `NGINX_HOST_PORT=8088` for the E2E stack, so Playwright does n
 - Repo-side deployment assets live under `deployment/gcp/`, including backend/frontend env templates, PowerShell deploy scripts, and a Secret Manager helper
 - A manual GitHub Actions deploy workflow now lives at `.github/workflows/deploy-gcp.yml`
 - GitHub Environment variable/secret setup is documented in [documents/gcp_cloud_run_rollout/github_actions_environment_setup.md](documents/gcp_cloud_run_rollout/github_actions_environment_setup.md)
+- First-time per-environment bootstrap steps are documented in [documents/gcp_cloud_run_rollout/first_time_environment_bootstrap.md](documents/gcp_cloud_run_rollout/first_time_environment_bootstrap.md)
 
 ## API
 

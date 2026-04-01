@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
+import { ApiErrorNotice } from "./ApiErrorNotice";
 import { apiGet, apiGetAllPages, apiGetWithPagination, apiSend } from "../lib/api";
 import { areRfqLineDraftsEqual, type RfqLineDraft } from "../lib/editorDrafts";
 import {
@@ -395,7 +396,7 @@ export function RfqBatchEditor({
         <section className="panel p-4">
           <h3 className="mb-3 font-display text-lg font-semibold">Batch List</h3>
           {batchesLoading && <p className="text-sm text-slate-500">Loading RFQ batches...</p>}
-          {batchesError && <p className="text-sm text-red-600">{String(batchesError)}</p>}
+          {batchesError && <ApiErrorNotice error={batchesError} area="RFQ batch data" />}
           <div className="space-y-3">
             {batches.map((batch) => {
               const active = String(batch.rfq_id) === selectedBatchId;
@@ -454,7 +455,7 @@ export function RfqBatchEditor({
             <>
               <section className="panel p-4">
                 {detailLoading && <p className="text-sm text-slate-500">Loading RFQ details...</p>}
-                {detailError && <p className="text-sm text-red-600">{String(detailError)}</p>}
+                {detailError && <ApiErrorNotice error={detailError} area="RFQ batch detail" />}
                 {detailData && (
                   <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr),auto]">
                     <div className="grid gap-3 md:grid-cols-3">

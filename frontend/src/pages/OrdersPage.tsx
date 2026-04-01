@@ -1,6 +1,7 @@
 import { FormEvent, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import useSWR from "swr";
+import { ApiErrorNotice } from "../components/ApiErrorNotice";
 import { CatalogPicker } from "../components/CatalogPicker";
 import { apiDownload, apiGet, apiGetAllPages, apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
 import { formatActionError, resolvePreviewSelection } from "../lib/previewState";
@@ -1373,7 +1374,7 @@ export function OrdersPage() {
           />
         </div>
         {isLoading && <p className="mt-3 text-sm text-slate-500">Loading...</p>}
-        {error && <p className="mt-3 text-sm text-red-600">{String(error)}</p>}
+        {error && <ApiErrorNotice error={error} area="purchase order line data" className="mt-3" />}
         {ordersData && (
           <div className="mt-3 grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
             <div className="max-h-[42rem] overflow-y-auto pr-1">
@@ -1530,7 +1531,7 @@ export function OrdersPage() {
           </div>
           <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
             {quotationsLoading && <p className="text-sm text-slate-500">Loading...</p>}
-            {quotationsError && <p className="text-sm text-red-600">{String(quotationsError)}</p>}
+            {quotationsError && <ApiErrorNotice error={quotationsError} area="quotation data" />}
             {quotationsData && (
               <>
                 <p className="mb-2 text-xs text-slate-500">Showing {filteredSortedQuotations.length} / {quotationsData.length} quotations</p>
@@ -1620,7 +1621,7 @@ export function OrdersPage() {
           </div>
           <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
             {purchaseOrdersLoading && <p className="text-sm text-slate-500">Loading...</p>}
-            {purchaseOrdersError && <p className="text-sm text-red-600">{String(purchaseOrdersError)}</p>}
+            {purchaseOrdersError && <ApiErrorNotice error={purchaseOrdersError} area="purchase order header data" />}
             {purchaseOrdersData && (
               <>
                 <p className="mb-2 text-xs text-slate-500">Showing {filteredPurchaseOrders.length} / {purchaseOrdersData.length} purchase orders</p>

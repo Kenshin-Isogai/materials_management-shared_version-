@@ -3,8 +3,32 @@ import { useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { SWRConfig } from "swr";
+import { ApiClientError } from "../src/lib/types";
 
 const defaultApiGet = async (path: string) => {
+  if (path === "/dashboard/summary") {
+    return {
+      overdue_orders: [],
+      expiring_reservations: [],
+      low_stock_alerts: [],
+      recent_activity: [],
+    };
+  }
+  if (path === "/users/me") {
+    return {
+      user_id: 1,
+      username: "admin",
+      display_name: "Admin",
+      role: "admin",
+      is_active: true,
+      created_at: "2026-03-08T00:00:00+09:00",
+      updated_at: "2026-03-08T00:00:00+09:00",
+      email: "admin@example.com",
+      external_subject: null,
+      identity_provider: null,
+      hosted_domain: null,
+    };
+  }
   if (path === "/workspace/summary") {
     return {
       generated_at: "2026-03-08T00:00:00+09:00",
@@ -116,6 +140,53 @@ describe("app router", () => {
 
     expect(screen.queryByText("RFQ Workspace")).toBeNull();
     expect(router.state.location.pathname).toBe("/");
+  });
+
+  it("shows a sign-in prompt when dashboard requests return auth errors", async () => {
+    apiGetMock.mockImplementation(async (path: string) => {
+      if (path === "/dashboard/summary" || path === "/users/me") {
+        throw new ApiClientError({
+          message: "Bearer token is required",
+          statusCode: 401,
+          code: "AUTH_REQUIRED",
+        });
+      }
+      return defaultApiGet(path);
+    });
+
+    act(() => {
+      window.sessionStorage.setItem("materials.auth-session", JSON.stringify({ accessToken: "token" }));
+    });
+
+    renderRouter("/");
+
+    await waitFor(() => {
+      expect(screen.getByText("Sign-in required")).toBeTruthy();
+    });
+    expect(screen.getByText("Sign in with an allowed account to load dashboard data.")).toBeTruthy();
+  });
+
+  it("shows an environment-unavailable message when dashboard requests cannot reach the backend", async () => {
+    apiGetMock.mockImplementation(async (path: string) => {
+      if (path === "/dashboard/summary") {
+        throw new ApiClientError({
+          message: "Could not reach the backend service.",
+          isNetworkError: true,
+        });
+      }
+      return defaultApiGet(path);
+    });
+
+    renderRouter("/");
+
+    await waitFor(() => {
+      expect(screen.getByText("Environment unavailable")).toBeTruthy();
+    });
+    expect(
+      screen.getByText(
+        "Dashboard is unavailable because the backend or database is not ready. If this is dev or staging, start Cloud SQL and try again.",
+      ),
+    ).toBeTruthy();
   });
 
 });

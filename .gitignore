@@ -87,3 +87,8 @@ secrets/
 /temporary
 /temporary
 dev_token.txt
+
+#---------------
+#Confidential
+#---------------
+secret_passwords.md

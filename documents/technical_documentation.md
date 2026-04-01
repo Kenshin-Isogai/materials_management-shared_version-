@@ -41,6 +41,9 @@ This document explains the implemented architecture of the Materials Management 
 - Frontend user administration at `/users` page.
   - admins manage `username`, display name, role, active state, and OIDC mapping fields
   - the global shell now stores a Bearer token and resolves the current user through `/api/users/me`
+  - frontend request handling now classifies auth failures, backend-unavailable failures, and generic API failures so cloud login and dashboard errors no longer collapse into a generic "Failed to fetch" UX
+  - the shell now shows a persistent sign-in guidance callout while anonymous, and workspace/dashboard views surface a dedicated "environment unavailable" message when Cloud SQL or the backend is down
+  - the same auth/backend-unavailable messaging is now reused across the other major routed pages (Orders, Items, Projects, Inventory, Reservations, History) and supporting editors so protected-page failures no longer surface as raw exception text
   - create/update/deactivate flows emit a frontend refresh signal so the shared header picker stays aligned
 - The browser-facing item registration flow is now unified around the preview-first Items CSV import.
   - order-generated missing-item CSVs are downloaded to the browser, edited, and re-imported through `POST /api/items/import-preview` + `POST /api/items/import`

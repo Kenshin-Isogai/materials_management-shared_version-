@@ -1,5 +1,6 @@
 import { useState } from "react";
 import useSWR from "swr";
+import { ApiErrorNotice } from "../components/ApiErrorNotice";
 import { apiGetWithPagination, apiSend } from "../lib/api";
 import type { Transaction } from "../lib/types";
 
@@ -33,7 +34,7 @@ export function HistoryPage() {
 
       <section className="panel p-4">
         {isLoading && <p className="text-sm text-slate-500">Loading...</p>}
-        {error && <p className="text-sm text-red-600">{String(error)}</p>}
+        {error && <ApiErrorNotice error={error} area="history data" />}
         {data?.data && (
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">

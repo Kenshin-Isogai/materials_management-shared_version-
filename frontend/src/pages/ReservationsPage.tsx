@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 import { useLocation } from "react-router-dom";
+import { ApiErrorNotice } from "../components/ApiErrorNotice";
 import { apiDownload, apiGetAllPages, apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
 import { CatalogPicker } from "../components/CatalogPicker";
 import { formatActionError, resolvePreviewSelection } from "../lib/previewState";
@@ -815,7 +816,7 @@ export function ReservationsPage() {
       <section className="panel p-4">
         <h2 className="mb-3 font-display text-lg font-semibold">Reservation List</h2>
         {isLoading && <p className="text-sm text-slate-500">Loading...</p>}
-        {error && <p className="text-sm text-red-600">{String(error)}</p>}
+        {error && <ApiErrorNotice error={error} area="reservation data" />}
         {data?.data && (
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">

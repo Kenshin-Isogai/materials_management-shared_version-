@@ -6,8 +6,10 @@ import {
 } from "react-router-dom";
 import useSWR from "swr";
 import { ProjectEditor } from "../components/ProjectEditor";
+import { StatusCallout } from "../components/StatusCallout";
 import { WorkspaceDrawer } from "../components/WorkspaceDrawer";
 import { apiDownload, apiGet, apiGetWithPagination, apiSend } from "../lib/api";
+import { isAuthError, isBackendUnavailableError, presentApiError } from "../lib/errorUtils";
 import { nextSynchronizedBoardDate, resolveDrawerStackPush } from "../lib/workspaceState";
 import type {
   ConfirmAllocationResult,
@@ -67,6 +69,28 @@ const EMPTY_PROCUREMENT_SUMMARY: WorkspaceProjectSummary["procurement_summary"] 
 
 function cx(...values: Array<string | false | null | undefined>): string {
   return values.filter(Boolean).join(" ");
+}
+
+function renderWorkspaceError(error: unknown, area: string) {
+  if (isAuthError(error)) {
+    return (
+      <StatusCallout
+        title="Sign-in required"
+        message={`Sign in with an allowed account to load ${area}.`}
+        tone="error"
+      />
+    );
+  }
+  if (isBackendUnavailableError(error)) {
+    return (
+      <StatusCallout
+        title="Environment unavailable"
+        message={`${area} is unavailable because the backend or database is not ready. If this is dev or staging, start Cloud SQL and try again.`}
+        tone="warning"
+      />
+    );
+  }
+  return <p className="text-sm text-red-600">{presentApiError(error)}</p>;
 }
 
 function statusTone(status: string): string {
@@ -418,7 +442,7 @@ function ProjectDrawerContent(_props: {
   return (
     <div className="space-y-5">
       {isLoading && <p className="text-sm text-slate-500">Loading project context...</p>}
-      {error && <p className="text-sm text-red-600">{String(error)}</p>}
+      {error && renderWorkspaceError(error, "project context")}
       {data && (
         <>
           <section className="space-y-3">
@@ -511,7 +535,7 @@ function ItemDrawerContent(_props: {
 
   return (
     <div className="space-y-5">
-      {itemError && <p className="text-sm text-red-600">{String(itemError)}</p>}
+      {itemError && renderWorkspaceError(itemError, "item context")}
       {itemData ? (
         <>
           <section className="space-y-2">
@@ -1323,7 +1347,7 @@ export function WorkspacePage() {
         </button>
       </section>
 
-      {workspaceError && <p className="text-sm text-red-600">{String(workspaceError)}</p>}
+      {workspaceError && renderWorkspaceError(workspaceError, "workspace data")}
       {workspaceLoading && <p className="text-sm text-slate-500">Loading workspace summary...</p>}
 
       {view === "summary" && (
@@ -1479,7 +1503,7 @@ export function WorkspacePage() {
                   </p>
                 )}
                 {!!actionMessage && <p className="text-sm text-slate-700">{actionMessage}</p>}
-                {analysisError && <p className="text-sm text-red-600">{String(analysisError)}</p>}
+                {analysisError && renderWorkspaceError(analysisError, "planning analysis")}
               </div>
 
               {analysisData?.summary && (

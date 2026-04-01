@@ -1,5 +1,6 @@
 import { FormEvent, useMemo, useState } from "react";
 import useSWR from "swr";
+import { ApiErrorNotice } from "../components/ApiErrorNotice";
 import { CatalogPicker } from "../components/CatalogPicker";
 import { apiDownload, apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
 import { getNextMovementEntryLocations } from "../lib/movementEntry";
@@ -508,7 +509,7 @@ export function InventoryPage() {
       <section className="panel p-4">
         <h2 className="mb-3 font-display text-lg font-semibold">Current Inventory</h2>
         {isLoading && <p className="text-sm text-slate-500">Loading...</p>}
-        {error && <p className="text-sm text-red-600">{String(error)}</p>}
+        {error && <ApiErrorNotice error={error} area="inventory data" />}
         {data?.data && (
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
