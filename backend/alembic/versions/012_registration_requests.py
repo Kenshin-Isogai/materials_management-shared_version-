@@ -4,7 +4,7 @@ from alembic import op
 
 
 revision = "012_registration_requests"
-down_revision = "011_purchase_order_line_naming_and_nullable_quotation"
+down_revision = "011_po_line_naming_nullable_q"
 branch_labels = None
 depends_on = None
 
