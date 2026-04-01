@@ -56,7 +56,20 @@ type BuildHeadersOptions = {
 
 async function buildHeaders(init?: RequestInit, options?: BuildHeadersOptions): Promise<Headers> {
   const headers = new Headers(init?.headers ?? {});
-  const accessToken = await getValidAccessTokenOrNull();
+  let accessToken: string | null = null;
+  try {
+    accessToken = await getValidAccessTokenOrNull();
+  } catch (error) {
+    if (error instanceof ApiClientError) {
+      throw error;
+    }
+    throw new ApiClientError({
+      message: "Sign in again to continue.",
+      statusCode: 401,
+      code: "INVALID_TOKEN",
+      details: error,
+    });
+  }
   if (accessToken) {
     headers.set("Authorization", `Bearer ${accessToken}`);
   }
@@ -73,10 +86,11 @@ async function buildHeaders(init?: RequestInit, options?: BuildHeadersOptions): 
 }
 
 async function fetchApi(path: string, init?: RequestInit): Promise<Response> {
+  const headers = await buildHeaders(init);
   try {
     return await fetch(buildApiUrl(path), {
       ...init,
-      headers: await buildHeaders(init),
+      headers,
     });
   } catch (error) {
     throw new ApiClientError({
