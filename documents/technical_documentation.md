@@ -43,6 +43,7 @@ This document explains the implemented architecture of the Materials Management 
   - the global shell now stores a Bearer token and resolves the current user through `/api/users/me`
   - signed-in identities that are not yet mapped to an active app user now go through a dedicated `/registration` route instead of seeing generic fetch failures
   - signed-in identities whose tokens are rejected because `email_verified=true` is required now go through a dedicated `/verify-email` route with verification-mail resend support
+  - `/verify-email` now also offers an explicit "I have verified this email" action that refreshes the stored Identity Platform session immediately, so the UI does not stay stuck on an old unverified ID token after the user completes verification in another tab/window
   - the shared shell now supports both sign-in and sign-up against Identity Platform email/password, and newly created accounts immediately trigger verification-mail delivery through the Identity Toolkit REST API
   - hosted cloud UX now hides the manual bearer-token fallback entry by default; that token override remains visible only for local/test-style localhost operation
   - anonymous dashboard access now stops at explicit sign-in guidance instead of trying to load protected data and misreporting backend unavailability

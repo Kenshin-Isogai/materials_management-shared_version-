@@ -126,6 +126,7 @@ Last updated: 2026-03-29 (JST)
   - the global shell now stores a bearer token and resolves the mapped current user through `/api/users/me`
   - when `VITE_IDENTITY_PLATFORM_API_KEY` is set, the shared header renders an Identity Platform email/password sign-in form, stores the returned Bearer token plus refresh token in session-scoped browser storage, migrates the legacy `materials.access-token` key on first read, and refreshes the session before expiry
   - the shared header now also supports email/password sign-up and verification-email send/resend flows through Identity Platform REST endpoints
+  - the verify-email holding page can now refresh the stored Identity Platform session immediately after the user completes verification, so a stale pre-verification ID token does not keep the browser stuck in `unverified`
   - when Identity Platform is configured in a hosted environment, the manual bearer-token fallback field is hidden from the main header UI; localhost keeps it as a local/test escape hatch
   - once signed in, the header collapses to account status plus sign-out instead of leaving email/password inputs visible
   - signed-in but unverified users are redirected to `/verify-email` and blocked from reaching `/registration` or the normal app pages until verification is complete
@@ -134,6 +135,7 @@ Last updated: 2026-03-29 (JST)
   - `/registration` now handles first-time self-service onboarding with `username`, required `display_name`, requested role, and optional memo
   - pending applicants only see registration-status UX; they do not access normal app pages until approved
   - the Users page now shows pending registration requests, supports approve/reject actions, and can optionally show resolved approval history
+  - when the Users page cannot load protected data, its summary cards now show `—` instead of misleading `0` counts
   - manual user creation now defaults to email-based recovery, with raw external-subject mapping moved behind an advanced toggle and provider/domain internals removed from the primary UI
   - dashboard summary now includes `pending_registration_requests` so admins can notice queued approvals quickly
 - Shared-server browser CSV workflows are now preview-first on the main Items and Orders pages.

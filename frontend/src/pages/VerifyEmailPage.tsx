@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { sendIdentityPlatformVerificationEmail } from "../lib/auth";
+import { useNavigate } from "react-router-dom";
+import { refreshStoredAuthSessionNow, sendIdentityPlatformVerificationEmail } from "../lib/auth";
 import { presentApiError } from "../lib/errorUtils";
 import { StatusCallout } from "../components/StatusCallout";
 
@@ -8,6 +9,7 @@ type VerifyEmailPageProps = {
 };
 
 export function VerifyEmailPage({ email }: VerifyEmailPageProps) {
+  const navigate = useNavigate();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -21,6 +23,21 @@ export function VerifyEmailPage({ email }: VerifyEmailPageProps) {
       setMessage("Verification email sent. Open the inbox for this account, complete verification, then sign in again.");
     } catch (sendError) {
       setError(presentApiError(sendError));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function refreshVerifiedSession() {
+    setBusy(true);
+    setMessage(null);
+    setError(null);
+    try {
+      await refreshStoredAuthSessionNow();
+      setMessage("Verification state refreshed. If the account is verified, you can continue into the application.");
+      navigate("/", { replace: true });
+    } catch (refreshError) {
+      setError(presentApiError(refreshError));
     } finally {
       setBusy(false);
     }
@@ -51,9 +68,14 @@ export function VerifyEmailPage({ email }: VerifyEmailPageProps) {
         </p>
         {message ? <p className="text-sm text-emerald-700">{message}</p> : null}
         {error ? <p className="text-sm text-red-600">{error}</p> : null}
-        <button className="button" disabled={busy} onClick={() => void resendVerificationEmail()} type="button">
-          {busy ? "Sending..." : "Resend verification email"}
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button className="button" disabled={busy} onClick={() => void resendVerificationEmail()} type="button">
+            {busy ? "Sending..." : "Resend verification email"}
+          </button>
+          <button className="button-subtle" disabled={busy} onClick={() => void refreshVerifiedSession()} type="button">
+            {busy ? "Checking..." : "I have verified this email"}
+          </button>
+        </div>
       </div>
     </div>
   );
