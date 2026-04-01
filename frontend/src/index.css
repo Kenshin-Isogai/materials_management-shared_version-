@@ -54,3 +54,30 @@ body {
 .panel .overflow-x-auto > table.sticky-header thead th {
   background: rgba(255, 255, 255, 0.96);
 }
+
+/* ── Login page ── */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.login-card {
+  @apply rounded-2xl border border-black/5 bg-white/80 backdrop-blur-md;
+  box-shadow:
+    0 24px 64px rgba(29, 43, 58, 0.14),
+    0 4px 12px rgba(29, 43, 58, 0.06);
+  animation: fadeInUp 0.5s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.login-page-bg {
+  background:
+    radial-gradient(circle at 15% 10%, #f3d6b4 0%, transparent 42%),
+    radial-gradient(circle at 85% 90%, #b4e2d2 0%, transparent 34%),
+    #f4f2eb;
+}

@@ -2,6 +2,26 @@
 
 ### Changed
 
+- Redesigned the authentication UI from an inline header form to a dedicated `/login` page.
+  - created a new standalone `LoginPage.tsx` that renders outside `AppShell` as a full-screen login experience with premium glassmorphic card styling and entrance animation
+  - the login page shows Identity Platform email/password sign-in and sign-up when `VITE_IDENTITY_PLATFORM_API_KEY` is configured, and falls back to bearer-token input for localhost/non-IP environments
+  - removed the bulky inline login form from the `AppShell` header (~130 lines of form markup); the header now shows a compact user badge (name + role + sign out) when signed in or a simple "Sign in" link when not
+  - `AppShell` now redirects unauthenticated users to `/login` when Identity Platform is configured
+  - `App.tsx` routing restructured: `/login` renders outside the `AppShell` layout (no header/nav), all other routes remain inside `AppShell`
+  - removed the redundant "Sign in to load dashboard data" callout from `DashboardPage` since unauthenticated users are redirected to `/login`
+  - updated unit tests in `AppRouter.test.tsx` to reflect the new redirect-to-login behavior and form relocation
+  - updated E2E test `01-layout-and-users.spec.ts` to verify the login page instead of the old header form
+  - added `fadeInUp` animation keyframes and `.login-card` / `.login-page-bg` utility classes to `index.css`
+
+### Tests
+
+- Frontend unit tests: `npx vitest run` — 45 passed (12 test files)
+- Docker runtime: `.\start-app.ps1` — verified login page at `/login` and dashboard with compact header
+
+## 2026-04-02
+
+### Changed
+
 - Simplified the hosted auth and user-admin UX after the verified-email rollout.
   - the main header now hides the manual bearer-token fallback in hosted Identity Platform environments and keeps it only for localhost-style local/test use
   - anonymous dashboard visits now stop at explicit sign-in guidance instead of surfacing a confusing backend/database unavailable message
