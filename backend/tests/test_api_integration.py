@@ -1903,6 +1903,7 @@ def test_order_import_preview_and_import_accept_supplier_from_csv_rows(client):
             "supplier",
             "item_number",
             "quantity",
+            "purchase_order_number",
             "quotation_number",
             "issue_date",
             "quotation_document_url",
@@ -1916,6 +1917,7 @@ def test_order_import_preview_and_import_accept_supplier_from_csv_rows(client):
             "supplier": "SupplierRowOnly",
             "item_number": "API-ROW-SUPPLIER-ITEM",
             "quantity": "2",
+            "purchase_order_number": "PO-ROW-SUPPLIER-001",
             "quotation_number": "Q-ROW-SUPPLIER-001",
             "issue_date": "2026-02-21",
             "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-ROW-SUPPLIER-001",
@@ -2036,7 +2038,7 @@ def test_order_import_rejects_non_url_quotation_document_url(client):
     assert payload["error"]["code"] == "INVALID_DOCUMENT_URL"
     assert "quotation_document_url" in payload["error"]["message"]
 
-def test_order_import_rejects_duplicate_quotation_for_same_supplier(client):
+def test_order_import_blocks_locked_purchase_order_and_allows_explicit_unlock(client):
     client.post("/api/manufacturers", json={"name": "API-DUP-QUOTE-MFG"})
     client.post(
         "/api/items",
@@ -2053,6 +2055,7 @@ def test_order_import_rejects_duplicate_quotation_for_same_supplier(client):
         fieldnames=[
             "item_number",
             "quantity",
+            "purchase_order_number",
             "quotation_number",
             "issue_date",
             "order_date",
@@ -2065,6 +2068,7 @@ def test_order_import_rejects_duplicate_quotation_for_same_supplier(client):
         {
             "item_number": "API-DUP-QUOTE-ITEM",
             "quantity": "1",
+            "purchase_order_number": "PO-DUP-001",
             "quotation_number": "Q-DUP-001",
             "issue_date": "2026-02-21",
             "order_date": "2026-02-22",
@@ -2089,8 +2093,21 @@ def test_order_import_rejects_duplicate_quotation_for_same_supplier(client):
     assert second.status_code == 409
     payload = second.json()
     assert payload["status"] == "error"
-    assert payload["error"]["code"] == "DUPLICATE_QUOTATION_IMPORT"
-    assert payload["error"]["details"]["quotation_numbers"] == ["Q-DUP-001"]
+    assert payload["error"]["code"] == "PURCHASE_ORDER_IMPORT_LOCKED"
+    assert payload["error"]["details"]["purchase_order_numbers"] == ["PO-DUP-001"]
+
+    unlocked = client.post(
+        "/api/purchase-order-lines/import",
+        files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
+        data={
+            "supplier_name": "SupplierDup",
+            "unlock_purchase_orders": json.dumps(
+                [{"supplier_name": "SupplierDup", "purchase_order_number": "PO-DUP-001"}]
+            ),
+        },
+    )
+    assert unlocked.status_code == 200
+    assert unlocked.json()["data"]["status"] == "ok"
 
 
 def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotations(client):
@@ -2120,6 +2137,7 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
         fieldnames=[
             "item_number",
             "quantity",
+            "purchase_order_number",
             "quotation_number",
             "issue_date",
             "order_date",
@@ -2132,6 +2150,7 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
         {
             "item_number": "KM100",
             "quantity": "1",
+            "purchase_order_number": "PO-DUP-PREVIEW",
             "quotation_number": "Q-DUP-PREVIEW",
             "issue_date": "2026-02-21",
             "order_date": "2026-02-22",
@@ -2152,6 +2171,7 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
         fieldnames=[
             "item_number",
             "quantity",
+            "purchase_order_number",
             "quotation_number",
             "issue_date",
             "order_date",
@@ -2164,6 +2184,7 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
         {
             "item_number": "ThorLabs KM100",
             "quantity": "2",
+            "purchase_order_number": "PO-DUP-PREVIEW",
             "quotation_number": "Q-DUP-PREVIEW",
             "issue_date": "2026-02-21",
             "order_date": "2026-02-22",
@@ -2175,6 +2196,7 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
         {
             "item_number": "KM100 mount",
             "quantity": "1",
+            "purchase_order_number": "PO-REVIEW-PREVIEW",
             "quotation_number": "Q-REVIEW-PREVIEW",
             "issue_date": "2026-02-21",
             "order_date": "2026-02-22",
@@ -2186,6 +2208,7 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
         {
             "item_number": "NO-MATCH-XYZ",
             "quantity": "1",
+            "purchase_order_number": "PO-UNRESOLVED-PREVIEW",
             "quotation_number": "Q-UNRESOLVED-PREVIEW",
             "issue_date": "2026-02-21",
             "order_date": "2026-02-22",
@@ -2208,14 +2231,15 @@ def test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotati
     assert payload["summary"]["needs_review"] == 1
     assert payload["summary"]["unresolved"] == 1
     assert payload["can_auto_accept"] is False
-    assert payload["duplicate_quotation_numbers"] == ["Q-DUP-PREVIEW"]
+    assert payload["duplicate_quotation_numbers"] == []
+    assert payload["locked_purchase_orders"][0]["purchase_order_number"] == "PO-DUP-PREVIEW"
     assert payload["blocking_errors"]
 
     rows = payload["rows"]
     assert rows[0]["status"] == "exact"
     assert rows[0]["suggested_match"]["canonical_item_number"] == "KM100"
     assert rows[0]["suggested_match"]["units_per_order"] == 2
-    assert "Quotation already imported for this supplier." in rows[0]["warnings"]
+    assert "Purchase order import is locked for this supplier." in rows[0]["warnings"]
 
     assert rows[1]["status"] == "needs_review"
     assert rows[1]["suggested_match"]["canonical_item_number"] == "KM100"
@@ -2691,6 +2715,26 @@ def test_items_import_endpoint(client):
     rows = listing.json()["data"]
     assert len(rows) == 1
     assert rows[0]["item_number"] == "CSV-ITEM-001"
+
+
+def test_create_manufacturer_duplicate_returns_conflict(client):
+    first = client.post("/api/manufacturers", json={"name": "DUPLICATE-MFG"})
+    second = client.post("/api/manufacturers", json={"name": "DUPLICATE-MFG"})
+
+    assert first.status_code == 200
+    assert second.status_code == 409
+    error = second.json()["error"]
+    assert error["code"] == "MANUFACTURER_ALREADY_EXISTS"
+
+
+def test_create_supplier_duplicate_returns_conflict(client):
+    first = client.post("/api/suppliers", json={"name": "DUPLICATE-SUPPLIER"})
+    second = client.post("/api/suppliers", json={"name": "DUPLICATE-SUPPLIER"})
+
+    assert first.status_code == 200
+    assert second.status_code == 409
+    error = second.json()["error"]
+    assert error["code"] == "SUPPLIER_ALREADY_EXISTS"
 
 def test_items_import_endpoint_supports_alias_rows(client):
     output = StringIO()
@@ -3699,6 +3743,7 @@ def test_import_template_endpoints_return_header_only_bom_csv(client):
             "supplier",
             "item_number",
             "quantity",
+            "purchase_order_number",
             "quotation_number",
             "issue_date",
             "quotation_document_url",

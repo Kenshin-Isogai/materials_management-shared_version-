@@ -2,6 +2,62 @@
 
 ### Changed
 
+- Hardened DB target selection, CRUD conflict handling, and Items import failure behavior.
+  - backend DB initialization now forces Alembic to use the explicit `database_url` passed into `init_db(...)`, preventing startup/test migration drift from an unrelated ambient `DATABASE_URL`
+  - duplicate manufacturer/supplier creates now return controlled `409` API responses instead of bubbling raw integrity failures
+  - delete-time FK races on item / quotation / purchase-order removal now normalize to controlled domain conflicts instead of leaking raw DB errors
+  - Items CSV import jobs now use the same savepoint/error-finalization pattern as order import jobs, and the registered-history archive copy is written only after the DB commit succeeds
+
+### Tests
+
+- Backend compile check:
+  - `uv run --project backend python -m compileall backend/app/db.py backend/app/service.py backend/app/api.py backend/tests/test_db_migration.py backend/tests/test_service_transactions.py backend/tests/test_api_integration.py`
+- Backend targeted pytest against Docker test DB:
+  - `uv run --project backend python -m pytest backend/tests/test_db_migration.py backend/tests/test_service_transactions.py backend/tests/test_api_integration.py -q --import-mode=importlib -k "init_db_uses_explicit_database_url_even_when_env_differs or init_db_creates_users_and_orders_schema or item_import_job_tracks_undecodable_csv_failures or order_import_job_tracks_undecodable_csv_failures or create_manufacturer_duplicate_returns_conflict or create_supplier_duplicate_returns_conflict or items_import_endpoint or items_import_endpoint_archives_uploaded_csv_into_registered_month_folder or items_import_job_undo_and_redo_flow or concurrent_inventory_moves or concurrent_order_arrival or concurrent_reservation_release or concurrent_reservation_consume or concurrent_undo_only_one_compensation"`
+  - result: `16 passed`
+
+## 2026-04-02
+
+### Changed
+
+- Fixed purchase-order header follow-ups in the PO-number/lock rollout.
+  - migration `013_po_number_lock` now backfills stable `purchase_order_number` values for legacy purchase-order headers and leaves those pre-existing headers unlocked instead of silently treating them as freshly locked imports
+  - order-line updates that change `purchase_order_document_url` now safely update the current header metadata and can reattach the line to an existing supplier-matching header when the target document URL already belongs to that header
+  - added regression coverage for legacy PO-number backfill, current-header URL edits, and URL-based line reassignment
+
+### Tests
+
+- Backend targeted pytest against Docker test DB:
+  - `uv run --project backend python -m pytest backend/tests/test_db_migration.py::test_init_db_creates_users_and_orders_schema backend/tests/test_db_migration.py::test_purchase_order_number_migration_backfills_legacy_headers backend/tests/test_api_integration.py::test_order_import_blocks_locked_purchase_order_and_allows_explicit_unlock backend/tests/test_service_transactions.py::test_import_orders_reuses_purchase_order_without_document_url backend/tests/test_document_url_migration.py::test_order_import_job_undo_blocks_when_order_changed_after_import backend/tests/test_document_url_migration.py::test_update_order_allows_purchase_order_document_url_change_on_current_header backend/tests/test_document_url_migration.py::test_update_order_can_reassign_to_existing_purchase_order_by_document_url -q --import-mode=importlib`
+  - result: `7 passed`
+- Backend full pytest against Docker test DB:
+  - `uv run --project backend python -m pytest backend/tests -q --import-mode=importlib`
+  - result: `202 passed, 3 failed` (`test_admin_can_approve_and_reject_registration_requests`, `test_shared_secret_verifier_rejects_email_without_true_verified_claim`, `test_reject_registration_request_requires_reason_and_records_review_metadata`) - failures are outside the purchase-order changes
+
+## 2026-04-02
+
+### Changed
+
+- Added durable purchase-order import locking keyed by supplier + purchase-order number.
+  - `purchase_orders` now stores `purchase_order_number` plus default-on `import_locked`
+  - order import preview/import now blocks re-import against existing locked purchase orders and accepts explicit `unlock_purchase_orders` overrides for operator-approved replays
+  - multiple rows in the same import that share one supplier + purchase-order number reuse the same purchase-order header instead of rejecting the second and later lines
+  - the Orders page now shows PO number + lock state in the header list/details, supports checkbox-driven unlock during import preview, and allows manual lock toggling/editing from the PO detail panel
+  - legacy CSV rows that omit `purchase_order_number` fall back to `quotation_number` so older imports still resolve to a stable header identity
+
+### Tests
+
+- Backend targeted pytest against Docker test DB:
+  - `uv run --project backend python -m pytest backend/tests/test_db_migration.py::test_init_db_creates_users_and_orders_schema backend/tests/test_api_integration.py::test_orders_import_template_includes_supplier_column backend/tests/test_api_integration.py::test_order_import_preview_and_import_accept_supplier_from_csv_rows backend/tests/test_api_integration.py::test_order_import_requires_quotation_document_url backend/tests/test_api_integration.py::test_order_import_rejects_non_url_quotation_document_url backend/tests/test_api_integration.py::test_order_import_blocks_locked_purchase_order_and_allows_explicit_unlock backend/tests/test_api_integration.py::test_orders_import_preview_endpoint_classifies_matches_and_duplicate_quotations backend/tests/test_service_transactions.py::test_import_orders_resolves_alias_with_dash_variant_item_number backend/tests/test_service_transactions.py::test_import_orders_reuses_purchase_order_without_document_url backend/tests/test_service_transactions.py::test_merge_open_orders_rejects_different_purchase_orders backend/tests/test_document_url_migration.py -q --import-mode=importlib`
+  - result: `17 passed`
+- Frontend unit tests:
+  - `cd frontend && npx vitest run tests/OrdersPage.test.tsx`
+  - result: `8 passed`
+
+## 2026-04-02
+
+### Changed
+
 - Split purchase tracking from arrival operations in the purchasing UI.
   - `/arrival` now renders a dedicated Arrival page instead of aliasing the Orders page
   - added backend read model `GET /api/arrival-schedule` for open arrival monitoring, including `arrival_bucket` (`overdue`, `scheduled`, `no_eta`), `overdue_days`, and `days_until_expected`

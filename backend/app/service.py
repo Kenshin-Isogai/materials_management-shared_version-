@@ -1254,7 +1254,16 @@ def _get_or_create_manufacturer(conn: sqlite3.Connection, name: str) -> int:
     ).fetchone()
     if row:
         return int(row["manufacturer_id"])
-    cur = conn.execute("INSERT INTO manufacturers (name) VALUES (?)", (normalized,))
+    try:
+        cur = conn.execute("INSERT INTO manufacturers (name) VALUES (?)", (normalized,))
+    except sqlite3.IntegrityError:
+        existing = conn.execute(
+            "SELECT manufacturer_id FROM manufacturers WHERE name = ?",
+            (normalized,),
+        ).fetchone()
+        if existing is not None:
+            return int(existing["manufacturer_id"])
+        raise
     return int(cur.lastrowid)
 
 
@@ -1278,8 +1287,52 @@ def _get_or_create_supplier(conn: sqlite3.Connection, name: str) -> int:
             ),
             status_code=409,
         )
-    cur = conn.execute("INSERT INTO suppliers (name) VALUES (?)", (normalized,))
+    try:
+        cur = conn.execute("INSERT INTO suppliers (name) VALUES (?)", (normalized,))
+    except sqlite3.IntegrityError:
+        existing = conn.execute(
+            "SELECT supplier_id FROM suppliers WHERE name = ?",
+            (normalized,),
+        ).fetchone()
+        if existing is not None:
+            return int(existing["supplier_id"])
+        existing_casefold_rows = conn.execute(
+            "SELECT supplier_id FROM suppliers WHERE lower(name) = lower(?) ORDER BY supplier_id",
+            (normalized,),
+        ).fetchall()
+        if len(existing_casefold_rows) == 1:
+            return int(existing_casefold_rows[0]["supplier_id"])
+        if len(existing_casefold_rows) > 1:
+            raise AppError(
+                code="AMBIGUOUS_SUPPLIER_NAME",
+                message=(
+                    f"Multiple suppliers match '{normalized}' case-insensitively. "
+                    "Use supplier_id to disambiguate."
+                ),
+                status_code=409,
+            ) from None
+        raise
     return int(cur.lastrowid)
+
+
+def _raise_manufacturer_already_exists(name: str, *, exc: Exception | None = None) -> None:
+    raise AppError(
+        code="MANUFACTURER_ALREADY_EXISTS",
+        message=f"Manufacturer '{name}' already exists",
+        status_code=409,
+    ) from exc
+
+
+def _raise_supplier_already_exists(name: str, *, exc: Exception | None = None) -> None:
+    raise AppError(
+        code="SUPPLIER_ALREADY_EXISTS",
+        message=f"Supplier '{name}' already exists",
+        status_code=409,
+    ) from exc
+
+
+def _item_reference_label_for_delete(conn: sqlite3.Connection, item_id: int) -> str:
+    return _first_item_reference(conn, item_id) or "another record"
 
 
 def _resolve_supplier_id(
@@ -1686,6 +1739,17 @@ def _lock_transaction_state(conn: sqlite3.Connection, log_id: int) -> None:
     conn.execute("SELECT pg_advisory_xact_lock(?, ?)", (7104, int(log_id)))
 
 
+def _lock_purchase_order_number_state(
+    conn: sqlite3.Connection,
+    supplier_id: int,
+    purchase_order_number: str,
+) -> None:
+    conn.execute(
+        "SELECT pg_advisory_xact_lock(?, hashtext(?))",
+        (7105, f"{int(supplier_id)}:{str(purchase_order_number).strip().casefold()}"),
+    )
+
+
 def _lock_reservation_item_state(conn: sqlite3.Connection, reservation_id: int, item_id: int) -> None:
     _lock_reservation_state(conn, reservation_id)
     _lock_inventory_item_state(conn, item_id)
@@ -1890,14 +1954,14 @@ def _find_purchase_order_row(
     conn: sqlite3.Connection,
     *,
     supplier_id: int,
-    purchase_order_document_url: str | None,
+    purchase_order_number: str | None,
 ) -> dict[str, Any] | None:
-    if purchase_order_document_url is None:
+    if purchase_order_number is None:
         row = conn.execute(
             """
             SELECT purchase_order_id
             FROM purchase_orders
-            WHERE supplier_id = ? AND purchase_order_document_url IS NULL
+            WHERE supplier_id = ? AND purchase_order_number IS NULL
             ORDER BY purchase_order_id
             LIMIT 1
             """,
@@ -1908,10 +1972,31 @@ def _find_purchase_order_row(
             """
             SELECT purchase_order_id
             FROM purchase_orders
-            WHERE supplier_id = ? AND purchase_order_document_url = ?
+            WHERE supplier_id = ? AND purchase_order_number = ?
             """,
-            (supplier_id, purchase_order_document_url),
+            (supplier_id, purchase_order_number),
         ).fetchone()
+    if row is None:
+        return None
+    return _get_purchase_order_row_by_id(conn, int(row["purchase_order_id"]))
+
+
+def _find_purchase_order_row_by_document_url(
+    conn: sqlite3.Connection,
+    *,
+    supplier_id: int,
+    purchase_order_document_url: str | None,
+) -> dict[str, Any] | None:
+    if purchase_order_document_url is None:
+        return None
+    row = conn.execute(
+        """
+        SELECT purchase_order_id
+        FROM purchase_orders
+        WHERE supplier_id = ? AND purchase_order_document_url = ?
+        """,
+        (supplier_id, purchase_order_document_url),
+    ).fetchone()
     if row is None:
         return None
     return _get_purchase_order_row_by_id(conn, int(row["purchase_order_id"]))
@@ -1920,31 +2005,124 @@ def _find_purchase_order_row(
 def _create_purchase_order(
     conn: sqlite3.Connection,
     supplier_id: int,
+    purchase_order_number: str | None,
     purchase_order_document_url: str | None,
+    *,
+    import_locked: bool = True,
 ) -> int:
     cur = conn.execute(
         """
-        INSERT INTO purchase_orders (supplier_id, purchase_order_document_url)
-        VALUES (?, ?)
+        INSERT INTO purchase_orders (
+            supplier_id,
+            purchase_order_number,
+            purchase_order_document_url,
+            import_locked
+        )
+        VALUES (?, ?, ?, ?)
         """,
-        (supplier_id, purchase_order_document_url),
+        (supplier_id, purchase_order_number, purchase_order_document_url, bool(import_locked)),
     )
     return int(cur.lastrowid)
+
+
+def _set_purchase_order_document_url(
+    conn: sqlite3.Connection,
+    purchase_order_id: int,
+    purchase_order_document_url: str | None,
+) -> None:
+    conn.execute(
+        """
+        UPDATE purchase_orders
+        SET purchase_order_document_url = ?
+        WHERE purchase_order_id = ?
+        """,
+        (purchase_order_document_url, int(purchase_order_id)),
+    )
 
 
 def _get_or_create_purchase_order(
     conn: sqlite3.Connection,
     supplier_id: int,
+    purchase_order_number: str | None,
     purchase_order_document_url: str | None,
+    *,
+    current_purchase_order_id: int | None = None,
 ) -> int:
+    if purchase_order_number is not None:
+        _lock_purchase_order_number_state(conn, supplier_id, purchase_order_number)
     existing = _find_purchase_order_row(
+        conn,
+        supplier_id=supplier_id,
+        purchase_order_number=purchase_order_number,
+    )
+    if existing is not None:
+        existing_purchase_order_id = int(existing["purchase_order_id"])
+        is_current_purchase_order = (
+            current_purchase_order_id is not None
+            and existing_purchase_order_id == int(current_purchase_order_id)
+        )
+        current_document_url = existing.get("purchase_order_document_url")
+        if current_document_url == purchase_order_document_url:
+            return existing_purchase_order_id
+        if purchase_order_document_url is not None:
+            duplicate_document = _find_purchase_order_row_by_document_url(
+                conn,
+                supplier_id=supplier_id,
+                purchase_order_document_url=purchase_order_document_url,
+            )
+            if duplicate_document is not None and int(duplicate_document["purchase_order_id"]) != existing_purchase_order_id:
+                if is_current_purchase_order:
+                    return int(duplicate_document["purchase_order_id"])
+                raise AppError(
+                    code="PURCHASE_ORDER_ALREADY_EXISTS",
+                    message="Another purchase order already uses this document URL for the same supplier",
+                    status_code=409,
+                )
+        if current_document_url is not None and not is_current_purchase_order:
+            if purchase_order_document_url is None:
+                return existing_purchase_order_id
+            raise AppError(
+                code="PURCHASE_ORDER_DOCUMENT_URL_CONFLICT",
+                message=(
+                    "Purchase order number already exists for this supplier with a different document URL"
+                ),
+                status_code=409,
+            )
+        _set_purchase_order_document_url(
+            conn,
+            existing_purchase_order_id,
+            purchase_order_document_url,
+        )
+        return existing_purchase_order_id
+    duplicate_document = _find_purchase_order_row_by_document_url(
         conn,
         supplier_id=supplier_id,
         purchase_order_document_url=purchase_order_document_url,
     )
-    if existing is not None:
-        return int(existing["purchase_order_id"])
-    return _create_purchase_order(conn, supplier_id, purchase_order_document_url)
+    if duplicate_document is not None:
+        if current_purchase_order_id is not None:
+            return int(duplicate_document["purchase_order_id"])
+        raise AppError(
+            code="PURCHASE_ORDER_ALREADY_EXISTS",
+            message="Another purchase order already uses this document URL for the same supplier",
+            status_code=409,
+        )
+    if current_purchase_order_id is not None and purchase_order_number is None:
+        current_purchase_order = _get_purchase_order_row_by_id(conn, int(current_purchase_order_id))
+        if current_purchase_order is not None and int(current_purchase_order["supplier_id"]) == supplier_id:
+            _set_purchase_order_document_url(
+                conn,
+                int(current_purchase_order_id),
+                purchase_order_document_url,
+            )
+            return int(current_purchase_order_id)
+    return _create_purchase_order(
+        conn,
+        supplier_id,
+        purchase_order_number,
+        purchase_order_document_url,
+        import_locked=True,
+    )
 
 
 def _get_purchase_order_row_by_id(conn: sqlite3.Connection, purchase_order_id: int) -> dict[str, Any] | None:
@@ -1954,7 +2132,9 @@ def _get_purchase_order_row_by_id(conn: sqlite3.Connection, purchase_order_id: i
             po.purchase_order_id,
             po.supplier_id,
             s.name AS supplier_name,
-            po.purchase_order_document_url
+            po.purchase_order_number,
+            po.purchase_order_document_url,
+            po.import_locked
         FROM purchase_orders po
         JOIN suppliers s ON s.supplier_id = po.supplier_id
         WHERE po.purchase_order_id = ?
@@ -1962,6 +2142,40 @@ def _get_purchase_order_row_by_id(conn: sqlite3.Connection, purchase_order_id: i
         (purchase_order_id,),
     ).fetchone()
     return dict(row) if row is not None else None
+
+
+def _set_purchase_order_import_locked(
+    conn: sqlite3.Connection,
+    *,
+    supplier_id: int,
+    purchase_order_number: str,
+    import_locked: bool,
+) -> dict[str, Any]:
+    _lock_purchase_order_number_state(conn, supplier_id, purchase_order_number)
+    current = _find_purchase_order_row(
+        conn,
+        supplier_id=supplier_id,
+        purchase_order_number=purchase_order_number,
+    )
+    if current is None:
+        raise AppError(
+            code="PURCHASE_ORDER_NOT_FOUND",
+            message=(
+                "Purchase order not found for supplier "
+                f"{supplier_id} and purchase_order_number '{purchase_order_number}'"
+            ),
+            status_code=404,
+        )
+    conn.execute(
+        """
+        UPDATE purchase_orders
+        SET import_locked = ?
+        WHERE purchase_order_id = ?
+        """,
+        (bool(import_locked), int(current["purchase_order_id"])),
+    )
+    updated = _get_purchase_order_row_by_id(conn, int(current["purchase_order_id"]))
+    return updated if updated is not None else current
 
 
 def _delete_purchase_order_if_orphaned(conn: sqlite3.Connection, purchase_order_id: int | None) -> bool:
@@ -1973,7 +2187,10 @@ def _delete_purchase_order_if_orphaned(conn: sqlite3.Connection, purchase_order_
     ).fetchone()
     if int(remaining["c"] or 0) > 0:
         return False
-    conn.execute("DELETE FROM purchase_orders WHERE purchase_order_id = ?", (purchase_order_id,))
+    try:
+        conn.execute("DELETE FROM purchase_orders WHERE purchase_order_id = ?", (purchase_order_id,))
+    except sqlite3.IntegrityError:
+        return False
     return True
 
 
@@ -2057,6 +2274,7 @@ IMPORT_TEMPLATE_SPECS: dict[str, dict[str, Any]] = {
             "supplier",
             "item_number",
             "quantity",
+            "purchase_order_number",
             "quotation_number",
             "issue_date",
             "quotation_document_url",
@@ -3851,7 +4069,7 @@ def import_items_from_content_with_job(
     row_overrides: dict[str | int, Any] | None = None,
     archive_registered_csv: bool = True,
 ) -> dict[str, Any]:
-    source_text = content.decode("utf-8-sig")
+    source_text = _read_import_job_source_text(content)
     import_job_id = _record_import_job(
         conn,
         import_type="items",
@@ -3861,21 +4079,30 @@ def import_items_from_content_with_job(
         redo_of_job_id=redo_of_job_id,
         request_metadata={"row_overrides": row_overrides or None},
     )
-    rows = _load_csv_rows_from_content(content)
-    result = import_items_from_rows(
-        conn,
-        rows=rows,
-        continue_on_error=continue_on_error,
-        import_job_id=import_job_id,
-        row_overrides=row_overrides,
-    )
-    archive_info: dict[str, Any] | None = None
-    if archive_registered_csv and result["status"] != "error":
-        archive_info = _archive_imported_items_csv(content, source_name=source_name)
+    conn.execute("SAVEPOINT item_import_job")
+    try:
+        rows = _load_csv_rows_from_content(content)
+        result = import_items_from_rows(
+            conn,
+            rows=rows,
+            continue_on_error=continue_on_error,
+            import_job_id=import_job_id,
+            row_overrides=row_overrides,
+        )
+    except Exception:
+        conn.execute("ROLLBACK TO SAVEPOINT item_import_job")
+        conn.execute("RELEASE SAVEPOINT item_import_job")
+        _finalize_import_job(
+            conn,
+            import_job_id=import_job_id,
+            result={"status": "error", "processed": 0, "created_count": 0, "duplicate_count": 0, "failed_count": 1},
+        )
+        raise
+    conn.execute("RELEASE SAVEPOINT item_import_job")
     _finalize_import_job(conn, import_job_id=import_job_id, result=result)
     payload = {**result, "import_job_id": import_job_id}
-    if archive_info is not None:
-        payload["archive"] = archive_info
+    if archive_registered_csv and result["status"] != "error":
+        payload["archive_requested"] = True
     return payload
 
 
@@ -4386,7 +4613,15 @@ def delete_item(conn: sqlite3.Connection, item_id: int) -> None:
             message=f"Item cannot be deleted because it is referenced by {ref}",
             status_code=409,
         )
-    conn.execute("DELETE FROM items_master WHERE item_id = ?", (item_id,))
+    try:
+        conn.execute("DELETE FROM items_master WHERE item_id = ?", (item_id,))
+    except sqlite3.IntegrityError as exc:
+        ref = _item_reference_label_for_delete(conn, item_id)
+        raise AppError(
+            code="ITEM_REFERENCED",
+            message=f"Item cannot be deleted because it is referenced by {ref}",
+            status_code=409,
+        ) from exc
 
 
 def list_item_history(conn: sqlite3.Connection, item_id: int) -> list[dict[str, Any]]:
@@ -5755,7 +5990,9 @@ def list_orders(
             q.quotation_number,
             q.issue_date,
             q.quotation_document_url,
-            po.purchase_order_document_url
+            po.purchase_order_number,
+            po.purchase_order_document_url,
+            po.import_locked
         FROM orders o
         JOIN items_master im ON im.item_id = o.item_id
         JOIN purchase_orders po ON po.purchase_order_id = o.purchase_order_id
@@ -5821,7 +6058,9 @@ def list_arrival_schedule(
             q.quotation_number,
             q.issue_date,
             q.quotation_document_url,
-            po.purchase_order_document_url
+            po.purchase_order_number,
+            po.purchase_order_document_url,
+            po.import_locked
         FROM orders o
         JOIN items_master im ON im.item_id = o.item_id
         JOIN purchase_orders po ON po.purchase_order_id = o.purchase_order_id
@@ -5877,7 +6116,9 @@ def get_order(conn: sqlite3.Connection, order_id: int) -> dict[str, Any]:
             q.quotation_number,
             q.issue_date,
             q.quotation_document_url,
+            po.purchase_order_number,
             po.purchase_order_document_url,
+            po.import_locked,
             s.supplier_id,
             s.name AS supplier_name
         FROM orders o
@@ -6031,7 +6272,9 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
             purchase_order_id = _get_or_create_purchase_order(
                 conn,
                 int(current["supplier_id"]),
+                current.get("purchase_order_number"),
                 next_purchase_order_document_url,
+                current_purchase_order_id=int(current["purchase_order_id"]),
             )
             updates.append("purchase_order_id = ?")
             params.append(purchase_order_id)
@@ -6108,7 +6351,9 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
         split_purchase_order_id = _get_or_create_purchase_order(
             conn,
             int(current["supplier_id"]),
+            current.get("purchase_order_number"),
             next_purchase_order_document_url,
+            current_purchase_order_id=int(current["purchase_order_id"]),
         )
         split_updates.append("purchase_order_id = ?")
         split_params.append(split_purchase_order_id)
@@ -6312,6 +6557,32 @@ def _resolve_import_quotation_document_url(
     return _normalize_required_quotation_document_url(raw_value, row_index=row_index)
 
 
+def _normalize_optional_purchase_order_number(
+    value: Any,
+    field_name: str = "purchase_order_number",
+) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    return require_non_empty(text, field_name)
+
+
+def _normalize_required_purchase_order_number(
+    value: Any,
+    *,
+    field_name: str = "purchase_order_number",
+    code: str = "INVALID_CSV",
+) -> str:
+    normalized = _normalize_optional_purchase_order_number(value, field_name)
+    if normalized is not None:
+        return normalized
+    raise AppError(
+        code=code,
+        message=f"{field_name} is required",
+        status_code=422,
+    )
+
+
 def _order_import_duplicate_quotation_numbers(
     conn: sqlite3.Connection,
     supplier_id: int,
@@ -6507,6 +6778,97 @@ def _normalize_order_import_alias_saves(
         )
     return normalized
 
+
+def _normalize_order_import_unlock_purchase_orders(
+    conn: sqlite3.Connection,
+    unlock_purchase_orders: list[dict[str, Any]] | None,
+    *,
+    default_supplier_id: int | None = None,
+    default_supplier_name: str | None = None,
+) -> list[dict[str, Any]]:
+    normalized: list[dict[str, Any]] = []
+    unlock_payload = _require_json_array(
+        unlock_purchase_orders,
+        code="INVALID_ORDER_IMPORT_UNLOCK",
+        label="Order import unlock_purchase_orders",
+    )
+    for idx, raw_unlock in enumerate(unlock_payload, start=1):
+        if not isinstance(raw_unlock, dict):
+            raise AppError(
+                code="INVALID_ORDER_IMPORT_UNLOCK",
+                message=f"Unlock entry #{idx} must be an object",
+                status_code=422,
+            )
+        unexpected_fields = sorted(set(raw_unlock) - {"supplier_id", "supplier_name", "purchase_order_number"})
+        if unexpected_fields:
+            raise AppError(
+                code="INVALID_ORDER_IMPORT_UNLOCK",
+                message=f"Unlock entry #{idx} has unsupported field(s): {', '.join(unexpected_fields)}",
+                status_code=422,
+            )
+        supplier_id_value = raw_unlock.get("supplier_id")
+        supplier_id = int(supplier_id_value) if supplier_id_value not in (None, "") else default_supplier_id
+        supplier_name = str(raw_unlock.get("supplier_name") or "").strip() or default_supplier_name
+        supplier_context = _resolve_order_import_supplier_context(
+            conn,
+            supplier_id=supplier_id,
+            supplier_name=supplier_name,
+        )
+        resolved_supplier_id = supplier_context.get("supplier_id")
+        if resolved_supplier_id is None:
+            raise AppError(
+                code="INVALID_ORDER_IMPORT_UNLOCK",
+                message=f"Unlock entry #{idx} references a supplier that does not exist",
+                status_code=422,
+            )
+        normalized.append(
+            {
+                "supplier_id": int(resolved_supplier_id),
+                "supplier_name": str(supplier_context["supplier_name"]),
+                "purchase_order_number": _normalize_required_purchase_order_number(
+                    raw_unlock.get("purchase_order_number"),
+                    field_name=f"purchase_order_number (unlock entry #{idx})",
+                    code="INVALID_ORDER_IMPORT_UNLOCK",
+                ),
+            }
+        )
+    return normalized
+
+
+def _get_locked_purchase_orders_by_numbers(
+    conn: sqlite3.Connection,
+    supplier_id: int,
+    purchase_order_numbers: list[str],
+) -> list[dict[str, Any]]:
+    normalized_numbers = sorted(
+        {
+            str(purchase_order_number).strip()
+            for purchase_order_number in purchase_order_numbers
+            if str(purchase_order_number).strip()
+        }
+    )
+    if not normalized_numbers:
+        return []
+    placeholders = ",".join("?" for _ in normalized_numbers)
+    rows = conn.execute(
+        f"""
+        SELECT
+            po.purchase_order_id,
+            po.supplier_id,
+            s.name AS supplier_name,
+            po.purchase_order_number,
+            po.purchase_order_document_url,
+            po.import_locked
+        FROM purchase_orders po
+        JOIN suppliers s ON s.supplier_id = po.supplier_id
+        WHERE po.supplier_id = ?
+          AND po.import_locked = TRUE
+          AND po.purchase_order_number IN ({placeholders})
+        ORDER BY po.purchase_order_number
+        """,
+        (int(supplier_id), *normalized_numbers),
+    ).fetchall()
+    return _rows_to_dict(rows)
 
 def _apply_order_import_alias_saves(
     conn: sqlite3.Connection,
@@ -7075,6 +7437,10 @@ def preview_orders_import_from_rows(
             row.get("purchase_order_document_url"),
             f"purchase_order_document_url (row {row_number})",
         )
+        raw_purchase_order_number = _normalize_optional_purchase_order_number(
+            row.get("purchase_order_number"),
+            f"purchase_order_number (row {row_number})",
+        )
         order_date = normalize_optional_date(row.get("order_date"), f"order_date (row {row_number})")
         if order_date is None:
             order_date = normalized_default_date or today_jst()
@@ -7087,6 +7453,7 @@ def preview_orders_import_from_rows(
             str(row.get("quotation_number", "")),
             f"quotation_number (row {row_number})",
         )
+        purchase_order_number = raw_purchase_order_number or quotation_number
 
         top_candidates = _rank_order_style_preview_candidates(item_number, preview_candidates)
         best_candidate = top_candidates[0] if top_candidates else None
@@ -7107,6 +7474,7 @@ def preview_orders_import_from_rows(
             "expected_arrival": expected_arrival,
             "quotation_document_url": quotation_document_url,
             "purchase_order_document_url": purchase_order_document_url,
+            "purchase_order_number": purchase_order_number,
             "status": status,
             "confidence_score": int(best_candidate["confidence_score"]) if best_candidate else None,
             "suggested_match": suggested_match,
@@ -7125,7 +7493,8 @@ def preview_orders_import_from_rows(
 
     blocking_errors: list[str] = []
     duplicate_quotation_numbers: list[str] = []
-    duplicate_messages_seen: set[str] = set()
+    locked_purchase_orders: list[dict[str, Any]] = []
+    lock_messages_seen: set[str] = set()
     rows_by_supplier_id: dict[int, list[dict[str, Any]]] = {}
     for preview_row in preview_rows:
         supplier_row_id = preview_row.get("supplier_id")
@@ -7133,26 +7502,26 @@ def preview_orders_import_from_rows(
             continue
         rows_by_supplier_id.setdefault(int(supplier_row_id), []).append(preview_row)
     for duplicate_supplier_id, supplier_rows in rows_by_supplier_id.items():
-        supplier_duplicates = _order_import_duplicate_quotation_numbers(
+        supplier_locks = _get_locked_purchase_orders_by_numbers(
             conn,
             duplicate_supplier_id,
-            [str(row["quotation_number"]) for row in supplier_rows],
+            [str(row["purchase_order_number"]) for row in supplier_rows],
         )
-        if not supplier_duplicates:
+        if not supplier_locks:
             continue
-        duplicate_quotation_numbers.extend(supplier_duplicates)
-        duplicate_set = set(supplier_duplicates)
+        locked_purchase_orders.extend(supplier_locks)
+        duplicate_set = {str(lock_row["purchase_order_number"]) for lock_row in supplier_locks}
         supplier_name_value = str(supplier_rows[0]["supplier_name"])
         duplicate_message = (
-            f"Quotation already imported for supplier '{supplier_name_value}': "
-            + ", ".join(supplier_duplicates)
+            f"Purchase order import is locked for supplier '{supplier_name_value}': "
+            + ", ".join(sorted(duplicate_set))
         )
-        if duplicate_message not in duplicate_messages_seen:
+        if duplicate_message not in lock_messages_seen:
             blocking_errors.append(duplicate_message)
-            duplicate_messages_seen.add(duplicate_message)
+            lock_messages_seen.add(duplicate_message)
         for preview_row in supplier_rows:
-            if str(preview_row["quotation_number"]) in duplicate_set:
-                preview_row["warnings"].append("Quotation already imported for this supplier.")
+            if str(preview_row["purchase_order_number"]) in duplicate_set:
+                preview_row["warnings"].append("Purchase order import is locked for this supplier.")
 
     return {
         "source_name": source_name,
@@ -7164,6 +7533,7 @@ def preview_orders_import_from_rows(
         "summary": summary,
         "blocking_errors": blocking_errors,
         "duplicate_quotation_numbers": duplicate_quotation_numbers,
+        "locked_purchase_orders": locked_purchase_orders,
         "can_auto_accept": (
             not blocking_errors
             and summary["total_rows"] > 0
@@ -7236,6 +7606,10 @@ def _process_order_rows_for_import(
             row.get("purchase_order_document_url"),
             f"purchase_order_document_url (row {idx})",
         )
+        raw_purchase_order_number = _normalize_optional_purchase_order_number(
+            row.get("purchase_order_number"),
+            f"purchase_order_number (row {idx})",
+        )
         item_id, units_per_order = _resolve_order_item(conn, row_supplier_id, item_number)
         override = (row_overrides or {}).get(idx, {})
         override_item_id = override.get("item_id")
@@ -7276,18 +7650,20 @@ def _process_order_rows_for_import(
         order_date = normalize_optional_date(row.get("order_date"), f"order_date (row {idx})")
         if order_date is None:
             order_date = normalized_default_date or today_jst()
+        quotation_number = require_non_empty(
+            str(row.get("quotation_number", "")),
+            f"quotation_number (row {idx})",
+        )
         resolved.append(
             {
                 "item_id": item_id,
                 "supplier_id": row_supplier_id,
                 "supplier_name": row_supplier_name,
                 "row_number": idx,
-                "quotation_number": require_non_empty(
-                    str(row.get("quotation_number", "")),
-                    f"quotation_number (row {idx})",
-                ),
+                "quotation_number": quotation_number,
                 "issue_date": normalize_optional_date(row.get("issue_date"), f"issue_date (row {idx})"),
                 "quotation_document_url": quotation_document_url,
+                "purchase_order_number": raw_purchase_order_number or quotation_number,
                 "purchase_order_document_url": purchase_order_document_url,
                 "order_amount": ordered_quantity * units_per_order,
                 "ordered_quantity": ordered_quantity,
@@ -7313,11 +7689,18 @@ def import_orders_from_rows(
     missing_output_dir: str | Path | None = None,
     row_overrides: dict[str | int, Any] | None = None,
     alias_saves: list[dict[str, Any]] | None = None,
+    unlock_purchase_orders: list[dict[str, Any]] | None = None,
     import_job_id: int | None = None,
 ) -> dict[str, Any]:
     normalized_overrides = _normalize_order_import_overrides(row_overrides)
     normalized_alias_saves = _normalize_order_import_alias_saves(
         alias_saves,
+        default_supplier_name=supplier_name,
+    )
+    normalized_unlock_purchase_orders = _normalize_order_import_unlock_purchase_orders(
+        conn,
+        unlock_purchase_orders,
+        default_supplier_id=supplier_id,
         default_supplier_name=supplier_name,
     )
     _validate_import_override_rows(
@@ -7367,62 +7750,86 @@ def import_orders_from_rows(
             "rows": missing,
         }
 
+    unlocked_purchase_order_keys = {
+        (int(entry["supplier_id"]), str(entry["purchase_order_number"]))
+        for entry in normalized_unlock_purchase_orders
+    }
+    row_purchase_order_keys = {
+        (int(row["supplier_id"]), str(row["purchase_order_number"]))
+        for row in resolved
+    }
+    invalid_unlock_keys = unlocked_purchase_order_keys - row_purchase_order_keys
+    if invalid_unlock_keys:
+        raise AppError(
+            code="INVALID_ORDER_IMPORT_UNLOCK",
+            message="unlock_purchase_orders includes purchase orders that are not present in this import",
+            status_code=422,
+        )
+    for unlock_supplier_id, unlock_purchase_order_number in sorted(unlocked_purchase_order_keys):
+        _set_purchase_order_import_locked(
+            conn,
+            supplier_id=unlock_supplier_id,
+            purchase_order_number=unlock_purchase_order_number,
+            import_locked=False,
+        )
+
     duplicate_details: list[dict[str, Any]] = []
     duplicate_messages: list[str] = []
     rows_by_supplier_id: dict[int, list[dict[str, Any]]] = {}
     for row in resolved:
         rows_by_supplier_id.setdefault(int(row["supplier_id"]), []).append(row)
     for duplicate_supplier_id, supplier_rows in rows_by_supplier_id.items():
-        supplier_duplicates = _order_import_duplicate_quotation_numbers(
+        supplier_duplicates = _get_locked_purchase_orders_by_numbers(
             conn,
             duplicate_supplier_id,
-            [str(row["quotation_number"]) for row in supplier_rows],
+            [str(row["purchase_order_number"]) for row in supplier_rows],
         )
         if not supplier_duplicates:
             continue
-        duplicate_set = set(supplier_duplicates)
+        duplicate_set = {str(entry["purchase_order_number"]) for entry in supplier_duplicates}
         duplicate_details.extend(
             {
                 "supplier_id": duplicate_supplier_id,
                 "supplier_name": str(supplier_rows[0]["supplier_name"]),
-                "quotation_number": quotation_number,
+                "purchase_order_id": int(duplicate_row["purchase_order_id"]),
+                "purchase_order_number": str(duplicate_row["purchase_order_number"]),
             }
-            for quotation_number in supplier_duplicates
+            for duplicate_row in supplier_duplicates
         )
         duplicate_messages.append(
-            "Quotation already imported for supplier "
-            f"'{supplier_rows[0]['supplier_name']}': {', '.join(supplier_duplicates)}"
+            "Purchase order import is locked for supplier "
+            f"'{supplier_rows[0]['supplier_name']}': {', '.join(sorted(duplicate_set))}"
         )
         if import_job_id is not None:
             for row in resolved:
                 if int(row["supplier_id"]) != duplicate_supplier_id:
                     continue
-                if str(row["quotation_number"]) not in duplicate_set:
+                if str(row["purchase_order_number"]) not in duplicate_set:
                     continue
                 _record_import_job_effect(
                     conn,
                     import_job_id=import_job_id,
                     row_number=int(row["row_number"]),
                     status="duplicate",
-                    effect_type="order_duplicate_quotation",
+                    effect_type="order_locked_purchase_order",
                     item_id=int(row["item_id"]),
                     supplier_id=int(row["supplier_id"]),
                     supplier_name=str(row["supplier_name"]),
                     item_number=str(row.get("ordered_item_number") or ""),
                     message=(
-                        "Quotation already imported for this supplier: "
-                        f"{', '.join(supplier_duplicates)}"
+                        "Purchase order import is locked for this supplier: "
+                        f"{', '.join(sorted(duplicate_set))}"
                     ),
-                    code="DUPLICATE_QUOTATION_IMPORT",
+                    code="PURCHASE_ORDER_IMPORT_LOCKED",
                 )
     if duplicate_messages:
         raise AppError(
-            code="DUPLICATE_QUOTATION_IMPORT",
+            code="PURCHASE_ORDER_IMPORT_LOCKED",
             message="; ".join(duplicate_messages),
             status_code=409,
             details={
-                "quotation_numbers": [detail["quotation_number"] for detail in duplicate_details],
-                "quotation_numbers_by_supplier": duplicate_details,
+                "purchase_order_numbers": [detail["purchase_order_number"] for detail in duplicate_details],
+                "purchase_orders_by_supplier": duplicate_details,
             },
         )
 
@@ -7439,7 +7846,7 @@ def import_orders_from_rows(
     order_ids: list[int] = []
     quotation_ids_by_key: dict[tuple[int, str], int] = {}
     recorded_quotation_keys: set[tuple[int, str]] = set()
-    purchase_order_ids_by_key: dict[tuple[int, str | None], int] = {}
+    purchase_order_ids_by_key: dict[tuple[int, str], int] = {}
     for row in resolved:
         quotation_key = (int(row["supplier_id"]), str(row["quotation_number"]))
         quotation_id = quotation_ids_by_key.get(quotation_key)
@@ -7481,18 +7888,21 @@ def import_orders_from_rows(
                     )
                 recorded_quotation_keys.add(quotation_key)
         purchase_order_document_url = row["purchase_order_document_url"]
+        purchase_order_number = str(row["purchase_order_number"])
         purchase_order_before_state: dict[str, Any] | None = None
-        purchase_order_key = (int(row["supplier_id"]), purchase_order_document_url)
+        purchase_order_key = (int(row["supplier_id"]), purchase_order_number)
         purchase_order_id = purchase_order_ids_by_key.get(purchase_order_key, 0)
         if purchase_order_id == 0:
+            _lock_purchase_order_number_state(conn, int(row["supplier_id"]), purchase_order_number)
             purchase_order_before_state = _find_purchase_order_row(
                 conn,
                 supplier_id=int(row["supplier_id"]),
-                purchase_order_document_url=purchase_order_document_url,
+                purchase_order_number=purchase_order_number,
             )
             purchase_order_id = _get_or_create_purchase_order(
                 conn,
                 int(row["supplier_id"]),
+                purchase_order_number,
                 purchase_order_document_url,
             )
             purchase_order_ids_by_key[purchase_order_key] = purchase_order_id
@@ -7563,6 +7973,7 @@ def import_orders_from_rows(
                     "order_date": order_snapshot["order_date"],
                     "expected_arrival": order_snapshot["expected_arrival"],
                     "purchase_order_id": int(order_snapshot["purchase_order_id"]),
+                    "purchase_order_number": str(order_snapshot["purchase_order_number"]),
                     "status": str(order_snapshot["status"]),
                     "project_id": order_snapshot.get("project_id"),
                     "quotation_number": str(order_snapshot["quotation_number"]),
@@ -7642,6 +8053,7 @@ def import_orders_from_content(
     missing_output_dir: str | Path | None = None,
     row_overrides: dict[str | int, Any] | None = None,
     alias_saves: list[dict[str, Any]] | None = None,
+    unlock_purchase_orders: list[dict[str, Any]] | None = None,
     import_job_id: int | None = None,
 ) -> dict[str, Any]:
     rows = _load_csv_rows_from_content(content)
@@ -7655,6 +8067,7 @@ def import_orders_from_content(
         missing_output_dir=missing_output_dir,
         row_overrides=row_overrides,
         alias_saves=alias_saves,
+        unlock_purchase_orders=unlock_purchase_orders,
         import_job_id=import_job_id,
     )
 
@@ -7670,6 +8083,7 @@ def import_orders_from_content_with_job(
     missing_output_dir: str | Path | None = None,
     row_overrides: dict[str | int, Any] | None = None,
     alias_saves: list[dict[str, Any]] | None = None,
+    unlock_purchase_orders: list[dict[str, Any]] | None = None,
     redo_of_job_id: int | None = None,
 ) -> dict[str, Any]:
     source_text = _read_import_job_source_text(content)
@@ -7686,6 +8100,7 @@ def import_orders_from_content_with_job(
             "default_order_date": default_order_date,
             "row_overrides": row_overrides or None,
             "alias_saves": alias_saves or None,
+            "unlock_purchase_orders": unlock_purchase_orders or None,
         },
     )
     conn.execute("SAVEPOINT order_import_job")
@@ -7700,6 +8115,7 @@ def import_orders_from_content_with_job(
             missing_output_dir=missing_output_dir,
             row_overrides=row_overrides,
             alias_saves=alias_saves,
+            unlock_purchase_orders=unlock_purchase_orders,
             import_job_id=import_job_id,
         )
     except Exception:
@@ -8048,7 +8464,13 @@ def undo_orders_import_job(conn: sqlite3.Connection, import_job_id: int) -> dict
             if not _import_job_matches_state(
                 current_purchase_order,
                 after_state,
-                ("purchase_order_id", "supplier_id", "purchase_order_document_url"),
+                (
+                    "purchase_order_id",
+                    "supplier_id",
+                    "purchase_order_number",
+                    "purchase_order_document_url",
+                    "import_locked",
+                ),
             ):
                 _raise_import_undo_conflict(
                     f"Purchase order was modified after import; cannot safely undo row {row_number}",
@@ -8085,11 +8507,15 @@ def undo_orders_import_job(conn: sqlite3.Connection, import_job_id: int) -> dict
             conn.execute(
                 """
                 UPDATE purchase_orders
-                SET purchase_order_document_url = ?
+                SET purchase_order_number = ?,
+                    purchase_order_document_url = ?,
+                    import_locked = ?
                 WHERE purchase_order_id = ?
                 """,
                 (
+                    before_state.get("purchase_order_number"),
                     before_state.get("purchase_order_document_url"),
+                    bool(before_state.get("import_locked", True)),
                     purchase_order_id,
                 ),
             )
@@ -8218,6 +8644,7 @@ def redo_orders_import_job(conn: sqlite3.Connection, import_job_id: int) -> dict
         missing_output_dir=None,
         row_overrides=request_metadata.get("row_overrides"),
         alias_saves=request_metadata.get("alias_saves"),
+        unlock_purchase_orders=request_metadata.get("unlock_purchase_orders"),
         redo_of_job_id=import_job_id,
     )
     redo_job_id = int(result["import_job_id"])
@@ -8519,7 +8946,9 @@ def list_purchase_orders(
             po.purchase_order_id,
             po.supplier_id,
             s.name AS supplier_name,
+            po.purchase_order_number,
             po.purchase_order_document_url,
+            po.import_locked,
             COUNT(o.order_id) AS line_count,
             MIN(o.order_date) AS first_order_date,
             MAX(o.order_date) AS last_order_date
@@ -8527,7 +8956,13 @@ def list_purchase_orders(
         JOIN suppliers s ON s.supplier_id = po.supplier_id
         LEFT JOIN orders o ON o.purchase_order_id = po.purchase_order_id
         {where}
-        GROUP BY po.purchase_order_id, po.supplier_id, s.name, po.purchase_order_document_url
+        GROUP BY
+            po.purchase_order_id,
+            po.supplier_id,
+            s.name,
+            po.purchase_order_number,
+            po.purchase_order_document_url,
+            po.import_locked
         ORDER BY COALESCE(MAX(o.order_date), '0001-01-01') DESC, po.purchase_order_id DESC
     """
     return _paginate(conn, sql, tuple(params), page, per_page)
@@ -8584,38 +9019,66 @@ def update_purchase_order(conn: sqlite3.Connection, purchase_order_id: int, payl
         "PURCHASE_ORDER_NOT_FOUND",
         f"Purchase order with id {purchase_order_id} not found",
     )
+    current = _get_purchase_order_row_by_id(conn, purchase_order_id)
+    if current is None:
+        raise AppError(
+            code="PURCHASE_ORDER_NOT_FOUND",
+            message=f"Purchase order with id {purchase_order_id} not found",
+            status_code=404,
+        )
+    next_purchase_order_number = (
+        _normalize_required_purchase_order_number(
+            payload.get("purchase_order_number"),
+            field_name="purchase_order_number",
+            code="INVALID_PURCHASE_ORDER",
+        )
+        if "purchase_order_number" in payload
+        else current.get("purchase_order_number")
+    )
     next_document_url = (
         normalize_external_document_url(payload.get("purchase_order_document_url"), "purchase_order_document_url")
         if "purchase_order_document_url" in payload
-        else None
+        else current.get("purchase_order_document_url")
     )
-    if "purchase_order_document_url" in payload:
-        current = _get_purchase_order_row_by_id(conn, purchase_order_id)
-        if current is None:
-            raise AppError(
-                code="PURCHASE_ORDER_NOT_FOUND",
-                message=f"Purchase order with id {purchase_order_id} not found",
-                status_code=404,
-            )
-        duplicate = _find_purchase_order_row(
-            conn,
-            supplier_id=int(current["supplier_id"]),
-            purchase_order_document_url=next_document_url,
+    next_import_locked = (
+        bool(payload.get("import_locked"))
+        if "import_locked" in payload
+        else bool(current.get("import_locked"))
+    )
+    if next_purchase_order_number is not None:
+        _lock_purchase_order_number_state(conn, int(current["supplier_id"]), next_purchase_order_number)
+    duplicate_number = _find_purchase_order_row(
+        conn,
+        supplier_id=int(current["supplier_id"]),
+        purchase_order_number=next_purchase_order_number,
+    )
+    if duplicate_number is not None and int(duplicate_number["purchase_order_id"]) != purchase_order_id:
+        raise AppError(
+            code="PURCHASE_ORDER_ALREADY_EXISTS",
+            message="Another purchase order already uses this purchase order number for the same supplier",
+            status_code=409,
         )
-        if duplicate is not None and int(duplicate["purchase_order_id"]) != purchase_order_id:
-            raise AppError(
-                code="PURCHASE_ORDER_ALREADY_EXISTS",
-                message="Another purchase order already uses this document URL for the same supplier",
-                status_code=409,
-            )
-        conn.execute(
-            """
-            UPDATE purchase_orders
-            SET purchase_order_document_url = ?
-            WHERE purchase_order_id = ?
-            """,
-            (next_document_url, purchase_order_id),
+    duplicate_document = _find_purchase_order_row_by_document_url(
+        conn,
+        supplier_id=int(current["supplier_id"]),
+        purchase_order_document_url=next_document_url,
+    )
+    if duplicate_document is not None and int(duplicate_document["purchase_order_id"]) != purchase_order_id:
+        raise AppError(
+            code="PURCHASE_ORDER_ALREADY_EXISTS",
+            message="Another purchase order already uses this document URL for the same supplier",
+            status_code=409,
         )
+    conn.execute(
+        """
+        UPDATE purchase_orders
+        SET purchase_order_number = ?,
+            purchase_order_document_url = ?,
+            import_locked = ?
+        WHERE purchase_order_id = ?
+        """,
+        (next_purchase_order_number, next_document_url, next_import_locked, purchase_order_id),
+    )
     updated = _get_purchase_order_row_by_id(conn, purchase_order_id)
     return updated if updated is not None else {"purchase_order_id": purchase_order_id}
 
@@ -8653,7 +9116,14 @@ def delete_quotation(conn: sqlite3.Connection, quotation_id: int) -> dict[str, A
         (quotation_id,),
     ).fetchall()
     conn.execute("DELETE FROM orders WHERE quotation_id = ?", (quotation_id,))
-    conn.execute("DELETE FROM quotations WHERE quotation_id = ?", (quotation_id,))
+    try:
+        conn.execute("DELETE FROM quotations WHERE quotation_id = ?", (quotation_id,))
+    except sqlite3.IntegrityError as exc:
+        raise AppError(
+            code="QUOTATION_REFERENCED",
+            message="Quotation cannot be deleted because it is referenced by one or more orders",
+            status_code=409,
+        ) from exc
     deleted_purchase_orders = 0
     for purchase_order_row in linked_purchase_order_rows:
         if _delete_purchase_order_if_orphaned(conn, int(purchase_order_row["purchase_order_id"])):
@@ -8692,7 +9162,14 @@ def delete_purchase_order(conn: sqlite3.Connection, purchase_order_id: int) -> d
         (purchase_order_id,),
     ).fetchall()
     conn.execute("DELETE FROM orders WHERE purchase_order_id = ?", (purchase_order_id,))
-    conn.execute("DELETE FROM purchase_orders WHERE purchase_order_id = ?", (purchase_order_id,))
+    try:
+        conn.execute("DELETE FROM purchase_orders WHERE purchase_order_id = ?", (purchase_order_id,))
+    except sqlite3.IntegrityError as exc:
+        raise AppError(
+            code="PURCHASE_ORDER_REFERENCED",
+            message="Purchase order cannot be deleted because it is referenced by one or more lines",
+            status_code=409,
+        ) from exc
     deleted_quotations = 0
     for quotation_row in linked_quotation_rows:
         remaining = conn.execute(
@@ -13600,7 +14077,10 @@ def list_manufacturers(conn: sqlite3.Connection) -> list[dict[str, Any]]:
 
 def create_manufacturer(conn: sqlite3.Connection, name: str) -> dict[str, Any]:
     normalized = require_non_empty(name, "name")
-    cur = conn.execute("INSERT INTO manufacturers (name) VALUES (?)", (normalized,))
+    try:
+        cur = conn.execute("INSERT INTO manufacturers (name) VALUES (?)", (normalized,))
+    except sqlite3.IntegrityError as exc:
+        _raise_manufacturer_already_exists(normalized, exc=exc)
     return to_dict(
         conn.execute(
             "SELECT manufacturer_id, name FROM manufacturers WHERE manufacturer_id = ?",
@@ -13857,7 +14337,25 @@ def catalog_search(
 
 def create_supplier(conn: sqlite3.Connection, name: str) -> dict[str, Any]:
     normalized = require_non_empty(name, "name")
-    cur = conn.execute("INSERT INTO suppliers (name) VALUES (?)", (normalized,))
+    try:
+        cur = conn.execute("INSERT INTO suppliers (name) VALUES (?)", (normalized,))
+    except sqlite3.IntegrityError as exc:
+        exact = conn.execute("SELECT supplier_id FROM suppliers WHERE name = ?", (normalized,)).fetchone()
+        if exact is None:
+            casefold_rows = conn.execute(
+                "SELECT supplier_id FROM suppliers WHERE lower(name) = lower(?) ORDER BY supplier_id",
+                (normalized,),
+            ).fetchall()
+            if len(casefold_rows) > 1:
+                raise AppError(
+                    code="AMBIGUOUS_SUPPLIER_NAME",
+                    message=(
+                        f"Multiple suppliers match '{normalized}' case-insensitively. "
+                        "Use supplier_id to disambiguate."
+                    ),
+                    status_code=409,
+                ) from exc
+        _raise_supplier_already_exists(normalized, exc=exc)
     return to_dict(
         conn.execute(
             "SELECT supplier_id, name FROM suppliers WHERE supplier_id = ?",

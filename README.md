@@ -221,8 +221,9 @@ For targeted backend slices from the repo root, keep the same `TEST_DATABASE_URL
   - `POST /api/purchase-order-lines/import-preview`
   - classifies rows as `exact`, `high_confidence`, `needs_review`, or `unresolved`
   - requires `supplier` on every CSV row
-  - surfaces duplicate quotation conflicts before commit
-  - supports per-row canonical item correction plus optional supplier-alias save on final `POST /api/purchase-order-lines/import`
+  - the active template also includes `purchase_order_number`, which becomes the supplier-scoped PO header identity and duplicate-import lock key
+  - surfaces locked purchase-order conflicts before commit
+  - supports per-row canonical item correction, optional supplier-alias save, and explicit `unlock_purchase_orders` selections on final `POST /api/purchase-order-lines/import`
   - the Orders page can preview/import multiple CSV files in a single run
   - when orders still contain unresolved item numbers, the page exposes a downloadable missing-item CSV instead of routing into a dedicated Items resolver
   - `POST /api/reservations/import-preview`

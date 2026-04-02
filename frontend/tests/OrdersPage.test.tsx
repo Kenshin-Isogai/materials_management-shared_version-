@@ -50,7 +50,11 @@ function renderPage() {
 }
 
 function sectionByHeading(name: string) {
-  return screen.getByRole("heading", { name }).closest("section");
+  const sectionHeading =
+    screen
+      .getAllByRole("heading", { name })
+      .find((element) => element.tagName === "H2") ?? screen.getByRole("heading", { name });
+  return sectionHeading.closest("section");
 }
 
 describe("OrdersPage", () => {
@@ -70,6 +74,7 @@ describe("OrdersPage", () => {
           {
             order_id: 304,
             purchase_order_id: 41,
+            purchase_order_number: "PO-41",
             item_id: 1,
             quotation_id: 12,
             project_id: null,
@@ -90,6 +95,7 @@ describe("OrdersPage", () => {
           {
             order_id: 305,
             purchase_order_id: 41,
+            purchase_order_number: "PO-41",
             item_id: 2,
             quotation_id: 12,
             project_id: 9,
@@ -127,7 +133,9 @@ describe("OrdersPage", () => {
             purchase_order_id: 41,
             supplier_id: 3,
             supplier_name: "オーテックス",
+            purchase_order_number: "PO-41",
             purchase_order_document_url: "https://example.sharepoint.com/sites/procurement/po-41",
+            import_locked: true,
             line_count: 2,
             first_order_date: "2025-10-21",
             last_order_date: "2025-10-21",
@@ -281,7 +289,7 @@ describe("OrdersPage", () => {
       expect(within(purchaseOrdersSection as HTMLElement).getByText("Showing 1 / 1 purchase orders")).toBeTruthy();
     });
 
-    await user.click(within(purchaseOrdersSection as HTMLElement).getByRole("button", { name: /PO #41/ }));
+    await user.click(within(purchaseOrdersSection as HTMLElement).getByRole("button", { name: /PO-41/ }));
 
     const purchaseOrderDetailsSection = screen.getByRole("heading", { name: "Purchase Order Details" }).closest("section");
     expect(purchaseOrderDetailsSection).toBeTruthy();
@@ -311,6 +319,7 @@ describe("OrdersPage", () => {
           updated_order: {
             order_id: 304,
             purchase_order_id: 41,
+            purchase_order_number: "PO-41",
             item_id: 1,
             quotation_id: 12,
             project_id: null,
@@ -331,6 +340,7 @@ describe("OrdersPage", () => {
           created_order: {
             order_id: 401,
             purchase_order_id: 41,
+            purchase_order_number: "PO-41",
             item_id: 1,
             quotation_id: 12,
             project_id: null,
@@ -416,6 +426,7 @@ describe("OrdersPage", () => {
           updated_order: {
             order_id: 305,
             purchase_order_id: 41,
+            purchase_order_number: "PO-41",
             item_id: 2,
             quotation_id: 12,
             project_id: null,
@@ -436,6 +447,7 @@ describe("OrdersPage", () => {
           created_order: {
             order_id: 402,
             purchase_order_id: 41,
+            purchase_order_number: "PO-41",
             item_id: 2,
             quotation_id: 12,
             project_id: null,

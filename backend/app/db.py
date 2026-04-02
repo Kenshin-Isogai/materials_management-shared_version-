@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from collections.abc import Mapping as ABCMapping
 from datetime import date, datetime
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -110,8 +111,17 @@ def _build_alembic_config(database_url: str) -> Config:
 
 
 def run_migrations(database_url: str | None = None) -> None:
-    config = _build_alembic_config(_normalize_db_url(database_url))
-    command.upgrade(config, "head")
+    normalized = _normalize_db_url(database_url)
+    previous_database_url = os.environ.get("DATABASE_URL")
+    os.environ["DATABASE_URL"] = normalized
+    try:
+        config = _build_alembic_config(normalized)
+        command.upgrade(config, "head")
+    finally:
+        if previous_database_url is None:
+            os.environ.pop("DATABASE_URL", None)
+        else:
+            os.environ["DATABASE_URL"] = previous_database_url
 
 
 class DBRow(ABCMapping[str, Any]):

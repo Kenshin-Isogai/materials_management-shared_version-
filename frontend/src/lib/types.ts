@@ -127,6 +127,7 @@ export type Reservation = {
 export type PurchaseOrderLine = {
   order_id: number;
   purchase_order_id: number;
+  purchase_order_number?: string | null;
   item_id: number;
   quotation_id: number;
   project_id: number | null;
@@ -143,6 +144,7 @@ export type PurchaseOrderLine = {
   quotation_number: string;
   quotation_document_url?: string | null;
   purchase_order_document_url?: string | null;
+  import_locked?: boolean;
 };
 
 export type Order = PurchaseOrderLine;
@@ -157,7 +159,9 @@ export type PurchaseOrder = {
   purchase_order_id: number;
   supplier_id: number;
   supplier_name: string;
+  purchase_order_number?: string | null;
   purchase_order_document_url?: string | null;
+  import_locked?: boolean;
   line_count: number;
   first_order_date?: string | null;
   last_order_date?: string | null;

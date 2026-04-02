@@ -64,6 +64,7 @@ Last updated: 2026-04-02 (JST)
   - error: `status=error` with code/message/details
 - Request-size enforcement now rejects bodies larger than `MAX_UPLOAD_BYTES` with `413 REQUEST_TOO_LARGE`, aligning backend behavior with the first-rollout 32 MB upload ceiling.
 - Business rules are centralized in `backend/app/service.py` and shared by API and CLI.
+- DB initialization now treats the explicit `init_db(database_url=...)` argument as authoritative for Alembic runs, avoiding mismatches between startup/test target DBs and an unrelated ambient `DATABASE_URL`.
 - Requests now pass through Bearer-token identity resolution.
   - `Authorization: Bearer <JWT>` is the browser/API identity input
   - `JWT_VERIFIER=shared_secret` remains the local/test fixture path, while `JWT_VERIFIER=jwks` now supports deployed OIDC/JWKS verification
@@ -84,6 +85,8 @@ Last updated: 2026-04-02 (JST)
   - successful high-impact mutations and export/download endpoints now also emit dedicated `domain.audit` structured log events
   - `GET /api/health` now also exposes a repo-side `recovery_policy` summary describing the expected Cloud SQL backup/PITR contract, GCS retention/versioning contract, and post-restore validation checklist
   - `GET /api/health` now also exposes `mutation_integrity`, a DB-backed summary of reservation-allocation drift and undo-compensation anomalies for operator monitoring
+- supplier/manufacturer duplicate create attempts and late FK conflicts during item/quotation/purchase-order deletion now return controlled domain/API `409` errors instead of raw integrity failures
+- manual Items CSV import finalizes the import job and row-level DB changes before writing the registered archive copy, reducing DB/file divergence when a request fails during commit
 - Planning snapshot hot paths now batch project/requirement loads, assembly component expansion (including legacy assembly-only project requirements), and per-item inventory totals; item planning context further narrows expansion to the requested item.
 - Current auth posture:
   - capability metadata endpoint exists: `GET /api/auth/capabilities`
@@ -152,6 +155,8 @@ Last updated: 2026-04-02 (JST)
   - `quotation_document_url` is required for manual order CSV import
   - `purchase_order_document_url` is optional on orders
   - manual import reuses the same supplier-scoped purchase-order header when rows omit `purchase_order_document_url`, preventing duplicate header creation for one import/workflow
+  - legacy purchase-order headers are backfilled during migration with stable `LEGACY-PO-<purchase_order_id>` values and stay unlocked so pre-rollout data remains uniquely addressable and re-importable
+  - order-line document-URL edits now safely update the current header metadata and can reattach a line to another same-supplier header when that target document URL already exists
   - imported quotation/order document values are rendered as openable links in the Orders UI
 - Manual Orders CSV import is now DB-tracked through the shared import-job tables.
   - `POST /api/purchase-order-lines/import` returns `import_job_id`
@@ -356,7 +361,10 @@ Last updated: 2026-04-02 (JST)
 - Order import accepts common date formats with slash or flexible month/day (`YYYY/M/D`, `YYYY-MM-DD`) and normalizes to `YYYY-MM-DD`.
 - Fully empty CSV rows are ignored during order import to avoid false validation failures from trailing blank lines.
 - Missing-item registration now rejects unresolved `new_item` rows with all metadata blank, preventing accidental `UNKNOWN` placeholder item creation.
-- Manual and unregistered batch order imports reject duplicate quotation re-import for the same supplier when existing orders already reference that quotation.
+- Manual and unregistered batch order imports now use a durable purchase-order lock keyed by `(supplier_id, purchase_order_number)`.
+- Newly imported purchase-order headers default to `import_locked = true`; preview/import can surface those locked headers and operators can explicitly release them from the Orders UI.
+- Multiple rows in the same import that share the same supplier + purchase-order number reuse one purchase-order header instead of blocking the second and later rows.
+- `purchase_order_document_url` is now metadata only; purchase-order identity comes from `purchase_order_number` (with a legacy fallback to `quotation_number` when older CSVs omit it).
 - Missing-item batch registration is upload-only in the public API. Successful uploads are archived into `imports/items/registered/<YYYY-MM>/`, but the application no longer rescans server-resident item batch folders or rewrites archive files after processing.
 - Archived order CSVs and archived item-registration CSVs are read-only historical records. Order updates, quotation updates, merges, splits, and deletes now rely on database state and lineage tables instead of mutating those archived files.
 - `missing_items_registration.csv` uses `supplier` for alias-scope resolution, but `new_item` rows may also specify `manufacturer_name` (or `manufacturer`) and default to `UNKNOWN` when blank; the Items-page missing-order resolver now exposes both manufacturer and alias-supplier columns so it matches Bulk Item Entry for new-item registration.

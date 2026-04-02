@@ -937,6 +937,12 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
             row_overrides=_parse_optional_json_form(row_overrides, "row_overrides"),
         )
         conn.commit()
+        if bool(result.pop("archive_requested", False)) and result.get("status") != "error":
+            archive = service._archive_imported_items_csv(
+                content,
+                source_name=file.filename or "items_import.csv",
+            )
+            result["archive"] = archive
         if result.get("archive") and result["archive"].get("cleanup_unreg_file"):
             background_tasks.add_task(cleanup_unreg_file_with_retry, result["archive"]["cleanup_unreg_file"])
         return ok(_public_item_import_result(result))
@@ -1224,6 +1230,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         default_order_date: str | None = Form(default=None),
         row_overrides: str | None = Form(default=None),
         alias_saves: str | None = Form(default=None),
+        unlock_purchase_orders: str | None = Form(default=None),
         conn= db,
     ):
         content = await file.read()
@@ -1238,6 +1245,10 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
                 missing_output_dir=None,
                 row_overrides=_parse_optional_json_form(row_overrides, "row_overrides"),
                 alias_saves=_parse_optional_json_form(alias_saves, "alias_saves"),
+                unlock_purchase_orders=_parse_optional_json_form(
+                    unlock_purchase_orders,
+                    "unlock_purchase_orders",
+                ),
             )
         except Exception:
             conn.commit()

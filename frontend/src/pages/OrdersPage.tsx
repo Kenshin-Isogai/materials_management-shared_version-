@@ -125,6 +125,7 @@ type OrderImportPreviewRow = {
   supplier_id?: number | null;
   item_number: string;
   quantity: number;
+  purchase_order_number: string;
   quotation_number: string;
   issue_date: string | null;
   order_date: string;
@@ -140,6 +141,15 @@ type OrderImportPreviewRow = {
   source_name?: string;
   source_index?: number;
   preview_key?: string;
+};
+
+type LockedPurchaseOrderPreview = {
+  purchase_order_id: number;
+  supplier_id: number;
+  supplier_name: string;
+  purchase_order_number: string;
+  purchase_order_document_url: string | null;
+  import_locked: boolean;
 };
 
 type OrderImportPreview = {
@@ -163,6 +173,7 @@ type OrderImportPreview = {
   };
   blocking_errors: string[];
   duplicate_quotation_numbers: string[];
+  locked_purchase_orders?: LockedPurchaseOrderPreview[];
   can_auto_accept: boolean;
   rows: OrderImportPreviewRow[];
 };
@@ -189,10 +200,18 @@ function orderPreviewRowKey(row: OrderImportPreviewRow): string {
   return row.preview_key ?? `${row.source_name ?? "orders_import.csv"}:${row.row}`;
 }
 
+function purchaseOrderPreviewKey(value: {
+  supplier_id: number;
+  purchase_order_number: string;
+}): string {
+  return `${value.supplier_id}:${value.purchase_order_number}`;
+}
+
 function mergeOrderImportPreviews(previews: OrderImportPreview[]): OrderImportPreview {
   const rows: OrderImportPreviewRow[] = [];
   const blockingErrors: string[] = [];
   const duplicateQuotationNumbers = new Set<string>();
+  const lockedPurchaseOrders = new Map<string, LockedPurchaseOrderPreview>();
   const summary = {
     total_rows: 0,
     exact: 0,
@@ -209,6 +228,9 @@ function mergeOrderImportPreviews(previews: OrderImportPreview[]): OrderImportPr
     summary.unresolved += preview.summary.unresolved;
     blockingErrors.push(...preview.blocking_errors);
     preview.duplicate_quotation_numbers.forEach((value) => duplicateQuotationNumbers.add(value));
+    (preview.locked_purchase_orders ?? []).forEach((locked) => {
+      lockedPurchaseOrders.set(purchaseOrderPreviewKey(locked), locked);
+    });
     preview.rows.forEach((row) => {
       rows.push({
         ...row,
@@ -234,6 +256,7 @@ function mergeOrderImportPreviews(previews: OrderImportPreview[]): OrderImportPr
     summary,
     blocking_errors: blockingErrors,
     duplicate_quotation_numbers: Array.from(duplicateQuotationNumbers),
+    locked_purchase_orders: Array.from(lockedPurchaseOrders.values()),
     can_auto_accept:
       previews.length > 0 &&
       previews.every((preview) => preview.can_auto_accept),
@@ -323,6 +346,7 @@ export function OrdersPage() {
   const [previewSelections, setPreviewSelections] = useState<Record<string, CatalogSearchResult | null>>({});
   const [previewUnits, setPreviewUnits] = useState<Record<string, string>>({});
   const [previewAliasSaves, setPreviewAliasSaves] = useState<Record<string, boolean>>({});
+  const [previewUnlocks, setPreviewUnlocks] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(false);
   const [editingQuotationId, setEditingQuotationId] = useState<number | null>(null);
   const [editingQuotationDocumentUrl, setEditingQuotationDocumentUrl] = useState("");
@@ -344,7 +368,9 @@ export function OrdersPage() {
   const [selectedQuotationId, setSelectedQuotationId] = useState<number | null>(null);
   const [selectedPurchaseOrderId, setSelectedPurchaseOrderId] = useState<number | null>(null);
   const [editingPurchaseOrderId, setEditingPurchaseOrderId] = useState<number | null>(null);
+  const [editingPurchaseOrderNumber, setEditingPurchaseOrderNumber] = useState("");
   const [editingPurchaseOrderDocumentUrl, setEditingPurchaseOrderDocumentUrl] = useState("");
+  const [editingPurchaseOrderImportLocked, setEditingPurchaseOrderImportLocked] = useState(true);
   const orderDetailsRef = useRef<HTMLDivElement | null>(null);
   const quotationDetailsRef = useRef<HTMLDivElement | null>(null);
   const purchaseOrderDetailsRef = useRef<HTMLDivElement | null>(null);
@@ -466,6 +492,7 @@ export function OrdersPage() {
     return sortedPurchaseOrders.filter((row) =>
       [
         row.purchase_order_id,
+        row.purchase_order_number ?? "",
         row.supplier_name,
         row.purchase_order_document_url ?? "",
         row.first_order_date ?? "",
@@ -594,12 +621,14 @@ export function OrdersPage() {
     setPreviewSelections({});
     setPreviewUnits({});
     setPreviewAliasSaves({});
+    setPreviewUnlocks({});
   }
 
   function applyImportPreview(preview: OrderImportPreview) {
     const nextSelections: Record<string, CatalogSearchResult | null> = {};
     const nextUnits: Record<string, string> = {};
     const nextAliasSaves: Record<string, boolean> = {};
+    const nextUnlocks: Record<string, boolean> = {};
     for (const row of preview.rows) {
       const key = orderPreviewRowKey(row);
       nextSelections[key] = row.suggested_match
@@ -608,10 +637,14 @@ export function OrdersPage() {
       nextUnits[key] = String(row.suggested_match?.units_per_order ?? 1);
       nextAliasSaves[key] = false;
     }
+    for (const locked of preview.locked_purchase_orders ?? []) {
+      nextUnlocks[purchaseOrderPreviewKey(locked)] = false;
+    }
     setImportPreview(preview);
     setPreviewSelections(nextSelections);
     setPreviewUnits(nextUnits);
     setPreviewAliasSaves(nextAliasSaves);
+    setPreviewUnlocks(nextUnlocks);
   }
 
   function selectedPreviewMatch(row: OrderImportPreviewRow): CatalogSearchResult | null {
@@ -624,6 +657,23 @@ export function OrdersPage() {
 
   function previewUnitsValue(row: OrderImportPreviewRow): string {
     return previewUnits[orderPreviewRowKey(row)] ?? String(row.suggested_match?.units_per_order ?? 1);
+  }
+
+  function lockedPurchaseOrdersForSource(sourceIndex: number): LockedPurchaseOrderPreview[] {
+    if (!importPreview) return [];
+    const keys = new Set(
+      importPreview.rows
+        .filter((entry) => entry.source_index === sourceIndex)
+        .map((row) =>
+          purchaseOrderPreviewKey({
+            supplier_id: Number(row.supplier_id ?? 0),
+            purchase_order_number: row.purchase_order_number,
+          })
+        )
+    );
+    return (importPreview.locked_purchase_orders ?? []).filter((locked) =>
+      keys.has(purchaseOrderPreviewKey(locked))
+    );
   }
 
   function canOfferAliasSave(
@@ -683,8 +733,15 @@ export function OrdersPage() {
 
   async function confirmImportPreview() {
     if (!files.length || !importPreview) return;
-    if (importPreview.blocking_errors.length > 0) {
-      setMessage(importPreview.blocking_errors[0]);
+    const unresolvedLocks = (importPreview.locked_purchase_orders ?? []).filter(
+      (locked) => !previewUnlocks[purchaseOrderPreviewKey(locked)]
+    );
+    if (unresolvedLocks.length > 0) {
+      setMessage(
+        `Unlock locked purchase orders before import: ${unresolvedLocks
+          .map((locked) => locked.purchase_order_number)
+          .join(", ")}`
+      );
       return;
     }
 
@@ -751,6 +808,16 @@ export function OrdersPage() {
         }
         if (aliasSaves.length > 0) {
           form.append("alias_saves", JSON.stringify(aliasSaves));
+        }
+        const unlockPurchaseOrders = lockedPurchaseOrdersForSource(sourceIndex)
+          .filter((locked) => previewUnlocks[purchaseOrderPreviewKey(locked)])
+          .map((locked) => ({
+            supplier_id: locked.supplier_id,
+            supplier_name: locked.supplier_name,
+            purchase_order_number: locked.purchase_order_number,
+          }));
+        if (unlockPurchaseOrders.length > 0) {
+          form.append("unlock_purchase_orders", JSON.stringify(unlockPurchaseOrders));
         }
 
         const result = await apiSendForm<ImportResult>("/purchase-order-lines/import", form);
@@ -935,7 +1002,9 @@ export function OrdersPage() {
 
   function beginEditPurchaseOrder(row: PurchaseOrder) {
     setEditingPurchaseOrderId(row.purchase_order_id);
+    setEditingPurchaseOrderNumber(row.purchase_order_number ?? "");
     setEditingPurchaseOrderDocumentUrl(row.purchase_order_document_url ?? "");
+    setEditingPurchaseOrderImportLocked(row.import_locked ?? true);
   }
 
   async function savePurchaseOrderEdit(purchaseOrderId: number) {
@@ -944,7 +1013,9 @@ export function OrdersPage() {
       await apiSend(`/purchase-orders/${purchaseOrderId}`, {
         method: "PUT",
         body: JSON.stringify({
+          purchase_order_number: editingPurchaseOrderNumber.trim(),
           purchase_order_document_url: editingPurchaseOrderDocumentUrl.trim() || null,
+          import_locked: editingPurchaseOrderImportLocked,
         }),
       });
       setMessage(`Updated purchase order #${purchaseOrderId}.`);
@@ -986,7 +1057,7 @@ export function OrdersPage() {
           <p className="font-semibold text-slate-900">CSV Format</p>
           <p className="mt-1">
             Required columns: <code>supplier</code>, <code>item_number</code>, <code>quantity</code>,{" "}
-            <code>quotation_number</code>, <code>issue_date</code>
+            <code>purchase_order_number</code>, <code>quotation_number</code>, <code>issue_date</code>
           </p>
           <p>
             Required document column: <code>quotation_document_url</code>
@@ -1095,6 +1166,39 @@ export function OrdersPage() {
               </div>
             )}
 
+            {(importPreview.locked_purchase_orders ?? []).length > 0 && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                <p className="font-semibold">Locked purchase orders</p>
+                <div className="mt-2 space-y-2">
+                  {(importPreview.locked_purchase_orders ?? []).map((locked) => (
+                    <label
+                      key={purchaseOrderPreviewKey(locked)}
+                      className="flex items-start gap-2 rounded-lg border border-amber-200 bg-white/70 px-3 py-2"
+                    >
+                      <input
+                        checked={previewUnlocks[purchaseOrderPreviewKey(locked)] ?? false}
+                        onChange={(event) =>
+                          setPreviewUnlocks((prev) => ({
+                            ...prev,
+                            [purchaseOrderPreviewKey(locked)]: event.target.checked,
+                          }))
+                        }
+                        type="checkbox"
+                      />
+                      <span>
+                        <span className="font-medium">
+                          {locked.supplier_name} / {locked.purchase_order_number}
+                        </span>
+                        <span className="block text-xs text-amber-800">
+                          Check to unlock this purchase order and allow import.
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {unresolvedPreviewRows().length > 0 && (
               <div className="flex flex-wrap gap-2">
                 <button
@@ -1141,7 +1245,8 @@ export function OrdersPage() {
                           <div className="space-y-1">
                             <p className="font-semibold text-slate-900">{row.item_number}</p>
                             <p className="text-xs text-slate-500">
-                              {row.source_name ? `${row.source_name} | ` : ""}{row.supplier_name} | qty {row.quantity} | quotation {row.quotation_number}
+                              {row.source_name ? `${row.source_name} | ` : ""}
+                              {row.supplier_name} | PO {row.purchase_order_number} | qty {row.quantity} | quotation {row.quotation_number}
                             </p>
                             <p className="text-xs text-slate-500">
                               order {row.order_date}
@@ -1250,12 +1355,12 @@ export function OrdersPage() {
             </div>
 
             <div className="flex flex-wrap gap-2">
-              <button
-                className="button"
-                disabled={loading || importPreview.blocking_errors.length > 0}
-                onClick={() => void confirmImportPreview()}
-                type="button"
-              >
+                <button
+                  className="button"
+                  disabled={loading}
+                  onClick={() => void confirmImportPreview()}
+                  type="button"
+                >
                 Confirm Import
               </button>
               <button
@@ -1385,7 +1490,9 @@ export function OrdersPage() {
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <p className="font-semibold">Line #{row.order_id} · {row.canonical_item_number}</p>
-                        <p className="text-sm text-slate-600">{row.supplier_name} · PO #{row.purchase_order_id} · Quote {row.quotation_number}</p>
+                        <p className="text-sm text-slate-600">
+                          {row.supplier_name} · PO {row.purchase_order_number ?? `#${row.purchase_order_id}`} · Quote {row.quotation_number}
+                        </p>
                         <p className="text-xs text-slate-500">
                           Qty {row.order_amount} · ETA {row.expected_arrival ?? "-"} · {row.status}
                           {row.project_name ? ` · ${row.project_name}` : ""}
@@ -1471,7 +1578,9 @@ export function OrdersPage() {
                       </div>
                       <div>
                         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Purchase Order</p>
-                        <p className="mt-1 font-medium text-slate-900">#{selectedOrder.purchase_order_id}</p>
+                        <p className="mt-1 font-medium text-slate-900">
+                          {selectedOrder.purchase_order_number ?? "-"} (#{selectedOrder.purchase_order_id})
+                        </p>
                       </div>
                       <div>
                         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Expected Arrival</p>
@@ -1617,7 +1726,7 @@ export function OrdersPage() {
             {summaryMetric("Selected linked lines", purchaseOrderLines.length, "slate")}
           </div>
           <div className="mt-3">
-            <input className="input" value={purchaseOrderSearch} onChange={(event) => setPurchaseOrderSearch(event.target.value)} placeholder="Search by supplier, PO id, date, or document URL" />
+            <input className="input" value={purchaseOrderSearch} onChange={(event) => setPurchaseOrderSearch(event.target.value)} placeholder="Search by supplier, PO number, PO id, date, or document URL" />
           </div>
           <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
             {purchaseOrdersLoading && <p className="text-sm text-slate-500">Loading...</p>}
@@ -1630,7 +1739,11 @@ export function OrdersPage() {
                     <button key={row.purchase_order_id} type="button" onClick={() => openPurchaseOrderDetails(row.purchase_order_id)} className={`w-full rounded-2xl border px-4 py-3 text-left transition ${row.purchase_order_id === selectedPurchaseOrderId ? "border-emerald-400 bg-emerald-50" : "border-slate-200 bg-white hover:border-slate-300"}`}>
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <p className="font-semibold">PO #{row.purchase_order_id}</p>
+                          <p className="font-semibold">
+                            {row.purchase_order_number?.trim()
+                              ? `${row.purchase_order_number} (#${row.purchase_order_id})`
+                              : `PO #${row.purchase_order_id}`}
+                          </p>
                           <p className="text-sm text-slate-600">{row.supplier_name}</p>
                           <p className="text-xs text-slate-500">{row.first_order_date ?? "-"} to {row.last_order_date ?? "-"}</p>
                         </div>
@@ -1651,15 +1764,22 @@ export function OrdersPage() {
               <p className="text-sm text-slate-500">Select a purchase order to inspect header metadata and included lines.</p>
             ) : (
               <div className="space-y-3 text-sm">
-                <div className="grid gap-3 md:grid-cols-2">
+                <div className="grid gap-3 md:grid-cols-3">
                   {summaryMetric("PO ID", `#${selectedPurchaseOrder.purchase_order_id}`, "emerald")}
+                  {summaryMetric("PO Number", selectedPurchaseOrder.purchase_order_number ?? "-", "slate")}
                   {summaryMetric("Linked quotations", purchaseOrderQuotations.length, "slate")}
                 </div>
                 <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="grid gap-3 md:grid-cols-2">
+                  <div className="grid gap-3 md:grid-cols-3">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Supplier</p>
                       <p className="mt-1 font-medium text-slate-900">{selectedPurchaseOrder.supplier_name}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Import Lock</p>
+                      <p className="mt-1 font-medium text-slate-900">
+                        {selectedPurchaseOrder.import_locked ?? true ? "Locked" : "Unlocked"}
+                      </p>
                     </div>
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Document</p>
@@ -1678,8 +1798,27 @@ export function OrdersPage() {
                     <button className="button-subtle" onClick={() => deletePurchaseOrder(selectedPurchaseOrder.purchase_order_id)} disabled={loading}>Delete</button>
                   </div>
                   {editingPurchaseOrderId === selectedPurchaseOrder.purchase_order_id && (
-                    <div className="mt-3">
-                      <input className="input" value={editingPurchaseOrderDocumentUrl} onChange={(event) => setEditingPurchaseOrderDocumentUrl(event.target.value)} placeholder="https://..." />
+                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                      <input
+                        className="input"
+                        value={editingPurchaseOrderNumber}
+                        onChange={(event) => setEditingPurchaseOrderNumber(event.target.value)}
+                        placeholder="PO-2026-001"
+                      />
+                      <input
+                        className="input"
+                        value={editingPurchaseOrderDocumentUrl}
+                        onChange={(event) => setEditingPurchaseOrderDocumentUrl(event.target.value)}
+                        placeholder="https://..."
+                      />
+                      <label className="flex items-center gap-2 text-sm text-slate-700">
+                        <input
+                          checked={editingPurchaseOrderImportLocked}
+                          onChange={(event) => setEditingPurchaseOrderImportLocked(event.target.checked)}
+                          type="checkbox"
+                        />
+                        Keep import lock enabled
+                      </label>
                     </div>
                   )}
                 </div>
@@ -1692,7 +1831,9 @@ export function OrdersPage() {
                           <div className="flex items-start justify-between gap-3">
                             <div>
                               <p className="font-semibold">Line #{row.order_id} · {row.canonical_item_number}</p>
-                              <p className="text-sm text-slate-600">Quote {row.quotation_number} · Qty {row.order_amount} · ETA {row.expected_arrival ?? "-"}</p>
+                              <p className="text-sm text-slate-600">
+                                PO {row.purchase_order_number ?? "-"} · Quote {row.quotation_number} · Qty {row.order_amount} · ETA {row.expected_arrival ?? "-"}
+                              </p>
                             </div>
                             <button className="button-subtle" type="button" onClick={() => openOrderDetails(row.order_id)}>Line Details</button>
                           </div>

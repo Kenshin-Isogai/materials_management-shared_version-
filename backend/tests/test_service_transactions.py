@@ -40,6 +40,7 @@ def _make_orders_csv_bytes(rows: list[dict[str, str]]) -> bytes:
         fieldnames=[
             "item_number",
             "quantity",
+            "purchase_order_number",
             "quotation_number",
             "issue_date",
             "quotation_document_url",
@@ -97,6 +98,28 @@ def test_order_import_job_tracks_undecodable_csv_failures(conn):
     jobs, _ = service.list_order_import_jobs(conn)
     assert len(jobs) == 1
     assert jobs[0]["source_name"] == "broken-orders.csv"
+    assert jobs[0]["status"] == "error"
+    assert jobs[0]["failed_count"] == 1
+
+
+def test_item_import_job_tracks_undecodable_csv_failures(conn):
+    def _raise_decode_error(_content: bytes) -> str:
+        raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(service, "_decode_csv_bytes", _raise_decode_error)
+    with pytest.raises(UnicodeDecodeError):
+        service.import_items_from_content_with_job(
+            conn,
+            content=b"\xff",
+            source_name="broken-items.csv",
+        )
+    monkeypatch.undo()
+    conn.commit()
+
+    jobs, _ = service.list_items_import_jobs(conn)
+    assert len(jobs) == 1
+    assert jobs[0]["source_name"] == "broken-items.csv"
     assert jobs[0]["status"] == "error"
     assert jobs[0]["failed_count"] == 1
 
@@ -1279,6 +1302,7 @@ def test_import_orders_reuses_purchase_order_without_document_url(conn):
             {
                 "item_number": item["item_number"],
                 "quantity": "2",
+                "purchase_order_number": "PO-NO-PO-URL-REUSE-001",
                 "quotation_number": "Q-NO-PO-URL-001",
                 "issue_date": "2026-03-02",
                 "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-NO-PO-URL-001.pdf",
@@ -1289,6 +1313,7 @@ def test_import_orders_reuses_purchase_order_without_document_url(conn):
             {
                 "item_number": item["item_number"],
                 "quantity": "3",
+                "purchase_order_number": "PO-NO-PO-URL-REUSE-001",
                 "quotation_number": "Q-NO-PO-URL-002",
                 "issue_date": "2026-03-03",
                 "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-NO-PO-URL-002.pdf",
@@ -1771,6 +1796,7 @@ def test_merge_open_orders_rejects_different_purchase_orders(conn):
             {
                 "item_number": item["item_number"],
                 "quantity": "10",
+                "purchase_order_number": "PO-MERGE-PO-MISMATCH-001",
                 "quotation_number": "Q-MERGE-PO-MISMATCH-001",
                 "issue_date": "2026-06-01",
                 "order_date": "2026-06-01",
@@ -1781,6 +1807,7 @@ def test_merge_open_orders_rejects_different_purchase_orders(conn):
             {
                 "item_number": item["item_number"],
                 "quantity": "20",
+                "purchase_order_number": "PO-MERGE-PO-MISMATCH-002",
                 "quotation_number": "Q-MERGE-PO-MISMATCH-001",
                 "issue_date": "2026-06-01",
                 "order_date": "2026-06-01",

@@ -8,6 +8,7 @@ This document explains the implemented architecture of the Materials Management 
 
 - Backend targets PostgreSQL through a SQLAlchemy-managed engine and Alembic baseline migration.
 - The raw-SQL service layer is preserved behind a compatibility connection wrapper while the storage engine is PostgreSQL.
+- `init_db(database_url=...)` is the authoritative migration target; startup/test helpers should not rely on ambient `DATABASE_URL` overriding an explicit connection string.
 - Runtime mode is now explicit.
   - local/shared-server Docker mode: `APP_RUNTIME_TARGET=local`
   - Cloud Run mode: `APP_RUNTIME_TARGET=cloud_run` or implicit Cloud Run `K_SERVICE`
@@ -65,13 +66,18 @@ This document explains the implemented architecture of the Materials Management 
   - the Items page no longer exposes a dedicated missing-item resolver or batch-upload section
   - bulk alias entry now uses a dedicated alias upsert-by-supplier-name API instead of the older `register-missing` compatibility endpoints
   - the Orders page no longer exposes or depends on ZIP/PDF batch upload behavior
+  - item import jobs are finalized in the DB before the registered-history archive copy is written, so a failed request commit cannot leave a history archive behind without the matching DB mutation/import-job state
 - Manual Orders CSV import now uses external document URLs as the primary contract.
   - `supplier` is required on every imported order CSV row
   - `quotation_document_url` is required and validated as `https://...`
   - `purchase_order_document_url` is optional and also validated as `https://...`
-  - when `purchase_order_document_url` is omitted, import reuses one supplier-scoped purchase-order header within the import/database instead of creating duplicate header rows per line
+  - `purchase_order_number` is the canonical purchase-order header identity; the import lock key is `(supplier_id, purchase_order_number)`
+  - multiple rows for the same supplier + purchase-order number in a single import reuse one purchase-order header instead of blocking the second line
+  - `purchase_order_document_url` is descriptive metadata only and no longer determines purchase-order header identity
+  - migration backfill assigns stable `LEGACY-PO-<purchase_order_id>` numbers to legacy purchase-order headers and keeps those existing headers unlocked so earlier data stays uniquely addressable
+  - line-level document-URL edits still flow through the header model: changing a line's purchase-order document URL updates the current header metadata when appropriate or reattaches the line to an existing same-supplier header already using that URL
   - the Orders UI renders those values as openable document links instead of filesystem-style path text
-  - order import jobs now persist `request_metadata` so `supplier_id`, `supplier_name`, `default_order_date`, `row_overrides`, and `alias_saves` remain available for inspection and redo
+  - order import jobs now persist `request_metadata` so `supplier_id`, `supplier_name`, `default_order_date`, `row_overrides`, `alias_saves`, and `unlock_purchase_orders` remain available for inspection and redo
   - `POST /api/purchase-order-lines/import-jobs/{import_job_id}/undo` and `POST /api/purchase-order-lines/import-jobs/{import_job_id}/redo` now provide the same safety-first operator pattern already used by item imports
 - Generated artifact delivery for batch-produced missing-item register CSVs:
   - `GET /api/artifacts`, `GET /api/artifacts/{artifact_id}`, `GET /api/artifacts/{artifact_id}/download`
@@ -203,6 +209,7 @@ flowchart LR
 4. Reversible and inspectable bulk imports.
    Item imports store job and row-level effects (`import_jobs`, `import_job_effects`) so undo/redo can be state-checked and safe.
    Manual order CSV imports now also write `import_jobs` / `import_job_effects` records (`import_type='orders'`) so missing-item outcomes and created-order rows are inspectable without relying on folder state.
+   Duplicate supplier/manufacturer creation and delete-time FK races on core CRUD paths are normalized into domain `409` responses instead of bubbling raw database integrity errors.
    Order undo/redo now also snapshots quotation and supplier-alias side effects, and it refuses to undo when imported orders, quotations, or aliases no longer match the recorded post-import state.
    Backend pytest fixtures remap workspace import/export roots into per-test temporary directories so import-related tests cannot leak CSV artifacts into the real repository workspace.
 5. Migration-safe manual project assignment retention.
@@ -550,7 +557,11 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 - Missing-item registration now reuses the same core item/alias write path as the preview-first Items CSV import after normalizing the batch-specific CSV contract. Batch-only rules still apply first: unresolved `new_item` rows can be skipped, existing new-item rows remain no-op, and file staging/archive behavior stays specific to the batch workflow.
 - Registration inputs accept both `resolution_type` (`new_item`/`alias`) and legacy `row_type` (`item`/`alias`) to avoid mixed-template confusion; `row_type=item` is normalized to `resolution_type=new_item`.
 - Content/file-based missing-item registration uses the same `skip_unresolved` behavior as the uploaded batch path; there is no longer a server-root batch rescanning endpoint in the public API.
-- Manual and batch order imports reject quotations already imported for the same supplier (same `quotation_number` with existing orders), returning a conflict to avoid duplicate order ingestion.
+- Manual and batch order imports now default to a durable purchase-order lock keyed by `(supplier_id, purchase_order_number)`.
+  - purchase-order headers store `import_locked` and default newly imported headers to locked
+  - preview returns locked purchase-order conflicts before commit
+  - final import may explicitly clear selected locks through `unlock_purchase_orders`
+  - legacy CSV rows that omit `purchase_order_number` fall back to `quotation_number` so older imports still resolve to a stable header key
 - Per-file unregistered import must keep filesystem moves atomic: if any move fails, rollback already moved files for that CSV and return file-level error.
 - File collisions are handled by non-destructive renaming (`_1`, `_2`, ...).
 - Missing/unresolved PDF links are surfaced as warnings, not silent failures.

@@ -112,7 +112,9 @@ class QuotationUpdateRequest(BaseModel):
 
 
 class PurchaseOrderUpdateRequest(BaseModel):
+    purchase_order_number: str | None = None
     purchase_order_document_url: str | None = None
+    import_locked: bool | None = None
 
 
 class ArrivalRequest(BaseModel):

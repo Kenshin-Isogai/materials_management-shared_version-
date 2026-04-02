@@ -355,7 +355,11 @@ Stores purchase-order header metadata.
 |--------|------|-------------|-------------|
 | purchase_order_id | INTEGER | PK, AUTOINCREMENT | Internal header ID |
 | supplier_id | INTEGER | FK -> suppliers | Supplier reference |
+| purchase_order_number | TEXT | Nullable, nonblank when present | Supplier purchase-order number used as the import/header identity |
 | purchase_order_document_url | TEXT | | External purchase order document URL (for example SharePoint) |
+| import_locked | BOOLEAN | NOT NULL, default TRUE | Prevents duplicate re-import for the same supplier + purchase order number until manually released |
+
+**Unique Constraint:** `(supplier_id, purchase_order_number)` when `purchase_order_number` is not null
 
 ### **3.7 orders**
 
@@ -611,38 +615,39 @@ Maps raw category names to canonical category names for soft-merge behavior.
 2. Manual Purchase Order Lines UI first calls `POST /purchase-order-lines/import-preview`
    - classify each row as `exact`, `high_confidence`, `needs_review`, or `unresolved`
    - prefer direct item-number and supplier-alias matches before fuzzy ranking
-   - surface duplicate quotation conflicts before commit without creating a supplier during preview
-3. Preview confirmation may send optional per-row `row_overrides` (`item_id`, `units_per_order`)
-   plus optional `alias_saves` for reusable supplier-scoped ordered names
+   - surface locked purchase-order conflicts before commit without creating a supplier during preview
+3. Manual order-import CSVs should include `purchase_order_number`; legacy rows that omit it fall back to `quotation_number` as the effective purchase-order number during import
+4. Preview confirmation may send optional per-row `row_overrides` (`item_id`, `units_per_order`)
+   plus optional `alias_saves` for reusable supplier-scoped ordered names and optional `unlock_purchase_orders` selections for operator-approved re-import
    - preview-confirmation JSON fields are strict: malformed JSON, wrong top-level types, missing required keys, unsupported fields, and row numbers not present in the uploaded CSV must return `422`, never `5xx`
-4. System resolves each CSV `item_number`:
+5. System resolves each CSV `item_number`:
    - direct match in `items_master`, or
    - alias match in `supplier_item_aliases` (`ordered_item_number -> canonical_item_id`)
    - or preview-provided override item when confirmation selected a canonical target manually
-5. Quantity conversion:
+6. Quantity conversion:
    - direct match: `order_amount = quantity`
    - alias match: `order_amount = quantity * units_per_order`
    - preview override uses the selected `units_per_order` (default `1` when not specified)
-6. If unresolved items remain: generate `missing_items_registration.csv` into `imports/items/unregistered/` and return `status="missing_items"` (no orders inserted yet)
-7. User completes missing item resolution in the generated CSV (new item or alias).
-8. User processes the unregistered item CSV via the Items page, creating master data records.
-9. User re-runs order import with the same order CSV (the missing item is now resolvable).
-8. If all rows resolve, insert orders into `orders` and keep traceability fields
-   (`ordered_item_number`, `ordered_quantity`)
-   - Reject import when the same `(supplier, quotation_number)` already has existing orders
-     to prevent duplicate quotation re-import
-   - apply requested alias saves only after duplicate-quotation checks pass
-9. Normalize date fields to `YYYY-MM-DD`; reject invalid date strings
-10. For manual CSV import, `quotation_document_url` is required and must be a valid `https://...` URL
-11. `purchase_order_document_url` is optional and, when provided, must also be a valid `https://...` URL; it identifies the purchase-order header attached to imported lines
-12. Manual `POST /purchase-order-lines/import` creates an `import_jobs` row with `import_type='orders'` and records row-level `import_job_effects`
-   - created rows use `effect_type='order_created'`
-   - duplicate quotation rejection uses `effect_type='order_duplicate_quotation'`
-   - unresolved item output uses `effect_type='order_missing_item'`
-   - job status uses the shared import-job vocabulary (`ok`, `partial`, `error`), while the immediate import response may still return `status="missing_items"`
-13. Import-capable CSV workflows expose companion downloads:
-   - template CSV: header-only exact import columns, UTF-8 with BOM
-   - reference CSV: live canonical DB values relevant to that flow, generated on demand from current state
+7. If unresolved items remain: generate `missing_items_registration.csv` into `imports/items/unregistered/` and return `status="missing_items"` (no orders inserted yet)
+8. User completes missing item resolution in the generated CSV (new item or alias).
+9. User processes the unregistered item CSV via the Items page, creating master data records.
+10. User re-runs order import with the same order CSV (the missing item is now resolvable).
+11. If all rows resolve, insert/reuse quotation headers and purchase-order headers, then insert orders into `orders` and keep traceability fields
+    (`ordered_item_number`, `ordered_quantity`)
+    - rows that share the same `(supplier, purchase_order_number)` within one import reuse the same purchase-order header rather than blocking the second line
+    - reject import when an existing locked purchase order with the same `(supplier, purchase_order_number)` already exists, unless the operator explicitly selected that header in `unlock_purchase_orders`
+    - apply requested alias saves only after lock checks pass
+12. Normalize date fields to `YYYY-MM-DD`; reject invalid date strings
+13. For manual CSV import, `quotation_document_url` is required and must be a valid `https://...` URL
+14. `purchase_order_document_url` is optional and, when provided, must also be a valid `https://...` URL; it is descriptive metadata and does not determine purchase-order identity
+15. Manual `POST /purchase-order-lines/import` creates an `import_jobs` row with `import_type='orders'` and records row-level `import_job_effects`
+    - created rows use `effect_type='order_created'`
+    - locked purchase-order rejection uses `effect_type='order_purchase_order_locked'`
+    - unresolved item output uses `effect_type='order_missing_item'`
+    - job status uses the shared import-job vocabulary (`ok`, `partial`, `error`), while the immediate import response may still return `status="missing_items"`
+16. Import-capable CSV workflows expose companion downloads:
+    - template CSV: header-only exact import columns, UTF-8 with BOM
+    - reference CSV: live canonical DB values relevant to that flow, generated on demand from current state
 
 **Historical Unregistered Item Batch Procedure (removed from active API/UI path):**
 1. Process all `*.csv` accumulated in `imports/items/unregistered/` (`register_unregistered_item_csvs`)

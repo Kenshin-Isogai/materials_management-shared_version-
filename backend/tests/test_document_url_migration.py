@@ -13,6 +13,7 @@ def _make_orders_csv(rows: list[dict[str, str]]) -> bytes:
         fieldnames=[
             "item_number",
             "quantity",
+            "purchase_order_number",
             "quotation_number",
             "issue_date",
             "quotation_document_url",
@@ -442,3 +443,146 @@ def test_order_import_job_undo_blocks_when_order_changed_after_import(client):
     detail = client.get(f"/api/purchase-order-lines/import-jobs/{import_job_id}")
     assert detail.status_code == 200
     assert detail.json()["data"]["job"]["lifecycle_state"] == "active"
+
+
+def test_update_order_allows_purchase_order_document_url_change_on_current_header(client):
+    client.post("/api/manufacturers", json={"name": "API-PO-UPDATE-MFG"})
+    client.post(
+        "/api/items",
+        json={
+            "item_number": "API-PO-UPDATE-ITEM",
+            "manufacturer_name": "API-PO-UPDATE-MFG",
+            "category": "Lens",
+        },
+    )
+
+    imported = client.post(
+        "/api/purchase-order-lines/import",
+        files={
+            "file": (
+                "orders.csv",
+                _make_orders_csv(
+                    [
+                        {
+                            "item_number": "API-PO-UPDATE-ITEM",
+                            "quantity": "1",
+                            "purchase_order_number": "PO-UPDATE-URL-001",
+                            "quotation_number": "Q-UPDATE-URL-001",
+                            "issue_date": "2026-02-21",
+                            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-UPDATE-URL-001",
+                            "purchase_order_document_url": "https://example.sharepoint.com/sites/procurement/PO-UPDATE-URL-001",
+                            "order_date": "2026-02-22",
+                            "expected_arrival": "2026-03-01",
+                        }
+                    ]
+                ),
+                "text/csv",
+            )
+        },
+        data={"supplier_name": "SupplierPurchaseOrderUpdate"},
+    )
+    assert imported.status_code == 200
+    order_id = int(imported.json()["data"]["order_ids"][0])
+    before = client.get(f"/api/purchase-order-lines/{order_id}")
+    assert before.status_code == 200
+    before_order = before.json()["data"]
+
+    updated = client.put(
+        f"/api/purchase-order-lines/{order_id}",
+        json={
+            "purchase_order_document_url": "https://example.sharepoint.com/sites/procurement/PO-UPDATE-URL-UPDATED",
+        },
+    )
+
+    assert updated.status_code == 200
+    after_order = updated.json()["data"]
+    assert int(after_order["purchase_order_id"]) == int(before_order["purchase_order_id"])
+    assert after_order["purchase_order_document_url"] == "https://example.sharepoint.com/sites/procurement/PO-UPDATE-URL-UPDATED"
+
+    purchase_orders = client.get("/api/purchase-orders")
+    assert purchase_orders.status_code == 200
+    header = next(
+        row
+        for row in purchase_orders.json()["data"]
+        if int(row["purchase_order_id"]) == int(before_order["purchase_order_id"])
+    )
+    assert header["purchase_order_document_url"] == "https://example.sharepoint.com/sites/procurement/PO-UPDATE-URL-UPDATED"
+
+
+def test_update_order_can_reassign_to_existing_purchase_order_by_document_url(client):
+    client.post("/api/manufacturers", json={"name": "API-PO-REASSIGN-MFG"})
+    client.post(
+        "/api/items",
+        json={
+            "item_number": "API-PO-REASSIGN-ITEM",
+            "manufacturer_name": "API-PO-REASSIGN-MFG",
+            "category": "Lens",
+        },
+    )
+
+    imported = client.post(
+        "/api/purchase-order-lines/import",
+        files={
+            "file": (
+                "orders.csv",
+                _make_orders_csv(
+                    [
+                        {
+                            "item_number": "API-PO-REASSIGN-ITEM",
+                            "quantity": "1",
+                            "purchase_order_number": "PO-REASSIGN-001",
+                            "quotation_number": "Q-REASSIGN-001",
+                            "issue_date": "2026-02-21",
+                            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-REASSIGN-001",
+                            "purchase_order_document_url": "https://example.sharepoint.com/sites/procurement/PO-REASSIGN-001",
+                            "order_date": "2026-02-22",
+                            "expected_arrival": "2026-03-01",
+                        },
+                        {
+                            "item_number": "API-PO-REASSIGN-ITEM",
+                            "quantity": "2",
+                            "purchase_order_number": "PO-REASSIGN-002",
+                            "quotation_number": "Q-REASSIGN-002",
+                            "issue_date": "2026-02-22",
+                            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/Q-REASSIGN-002",
+                            "purchase_order_document_url": "https://example.sharepoint.com/sites/procurement/PO-REASSIGN-002",
+                            "order_date": "2026-02-23",
+                            "expected_arrival": "2026-03-02",
+                        },
+                    ]
+                ),
+                "text/csv",
+            )
+        },
+        data={"supplier_name": "SupplierPurchaseOrderReassign"},
+    )
+    assert imported.status_code == 200
+    first_order_id = int(imported.json()["data"]["order_ids"][0])
+    second_order_id = int(imported.json()["data"]["order_ids"][1])
+
+    first_before = client.get(f"/api/purchase-order-lines/{first_order_id}")
+    second_before = client.get(f"/api/purchase-order-lines/{second_order_id}")
+    assert first_before.status_code == 200
+    assert second_before.status_code == 200
+    first_header_id = int(first_before.json()["data"]["purchase_order_id"])
+    second_header_id = int(second_before.json()["data"]["purchase_order_id"])
+    assert first_header_id != second_header_id
+
+    updated = client.put(
+        f"/api/purchase-order-lines/{first_order_id}",
+        json={
+            "purchase_order_document_url": "https://example.sharepoint.com/sites/procurement/PO-REASSIGN-002",
+        },
+    )
+
+    assert updated.status_code == 200
+    after_order = updated.json()["data"]
+    assert int(after_order["purchase_order_id"]) == second_header_id
+    assert after_order["purchase_order_number"] == "PO-REASSIGN-002"
+    assert after_order["purchase_order_document_url"] == "https://example.sharepoint.com/sites/procurement/PO-REASSIGN-002"
+
+    purchase_orders = client.get("/api/purchase-orders")
+    assert purchase_orders.status_code == 200
+    purchase_order_ids = {int(row["purchase_order_id"]) for row in purchase_orders.json()["data"]}
+    assert second_header_id in purchase_order_ids
+    assert first_header_id not in purchase_order_ids
