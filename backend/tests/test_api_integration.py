@@ -1396,6 +1396,77 @@ def test_users_endpoint_can_include_inactive_rows(client):
     assert target["is_active"] is False
 
 
+def test_user_create_returns_conflict_for_duplicate_email(client):
+    first = client.post(
+        "/api/users",
+        json={
+            "username": "duplicate-email-a",
+            "display_name": "Duplicate Email A",
+            "email": "duplicate-email@example.test",
+            "external_subject": "sub-duplicate-email-a",
+            "identity_provider": "test-oidc",
+            "role": "viewer",
+            "is_active": True,
+        },
+    )
+    second = client.post(
+        "/api/users",
+        json={
+            "username": "duplicate-email-b",
+            "display_name": "Duplicate Email B",
+            "email": "duplicate-email@example.test",
+            "external_subject": "sub-duplicate-email-b",
+            "identity_provider": "test-oidc",
+            "role": "viewer",
+            "is_active": True,
+        },
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 409
+    assert second.json()["error"]["code"] == "EMAIL_ALREADY_EXISTS"
+
+
+def test_user_update_returns_conflict_for_duplicate_identity_subject(client):
+    first = client.post(
+        "/api/users",
+        json={
+            "username": "duplicate-identity-a",
+            "display_name": "Duplicate Identity A",
+            "email": "duplicate-identity-a@example.test",
+            "external_subject": "sub-duplicate-identity-a",
+            "identity_provider": "test-oidc",
+            "role": "viewer",
+            "is_active": True,
+        },
+    )
+    second = client.post(
+        "/api/users",
+        json={
+            "username": "duplicate-identity-b",
+            "display_name": "Duplicate Identity B",
+            "email": "duplicate-identity-b@example.test",
+            "external_subject": "sub-duplicate-identity-b",
+            "identity_provider": "test-oidc",
+            "role": "viewer",
+            "is_active": True,
+        },
+    )
+    second_user = second.json()["data"]
+    update = client.put(
+        f"/api/users/{second_user['user_id']}",
+        json={
+            "external_subject": "sub-duplicate-identity-a",
+            "identity_provider": "test-oidc",
+        },
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert update.status_code == 409
+    assert update.json()["error"]["code"] == "IDENTITY_ALREADY_EXISTS"
+
+
 def test_first_active_user_can_be_created_without_user_header_when_none_exist(database_url: str):
     _reset_database(database_url)
     init_db(database_url)
@@ -1578,6 +1649,124 @@ def test_reservation_partial_release_and_consume_endpoints(client):
     over_payload = over_release.json()
     assert over_payload["status"] == "error"
     assert over_payload["error"]["code"] == "INVALID_RESERVATION_QUANTITY"
+
+
+def test_reservation_release_undo_endpoint_restores_reservation_state(client):
+    manufacturer = client.post("/api/manufacturers", json={"name": "API-RES-UNDO-REL-MFG"}).json()["data"]
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-RES-UNDO-REL-001",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Lens",
+        },
+    ).json()["data"]
+
+    seed = client.post(
+        "/api/inventory/adjust",
+        json={
+            "item_id": item["item_id"],
+            "quantity_delta": 10,
+            "location": "STOCK",
+            "note": "seed",
+        },
+    )
+    assert seed.status_code == 200
+
+    reservation = client.post(
+        "/api/reservations",
+        json={
+            "item_id": item["item_id"],
+            "quantity": 6,
+            "purpose": "undo release API test",
+        },
+    )
+    assert reservation.status_code == 200
+    reservation_id = reservation.json()["data"]["reservation_id"]
+
+    release_response = client.post(
+        f"/api/reservations/{reservation_id}/release",
+        json={"quantity": 2, "note": "api undo release"},
+    )
+    assert release_response.status_code == 200
+
+    transactions = client.get(f"/api/transactions?item_id={item['item_id']}&page=1&per_page=20")
+    assert transactions.status_code == 200
+    release_log = next(
+        row for row in transactions.json()["data"] if str(row["batch_id"]).startswith(f"reservation-release-{reservation_id}-log-")
+    )
+
+    undo = client.post(f"/api/transactions/{release_log['log_id']}/undo", json={})
+    assert undo.status_code == 200
+    assert undo.json()["data"]["applied_quantity"] == 2
+
+    reservations = client.get(f"/api/reservations?item_id={item['item_id']}&page=1&per_page=20")
+    assert reservations.status_code == 200
+    restored = next(row for row in reservations.json()["data"] if row["reservation_id"] == reservation_id)
+    assert restored["status"] == "ACTIVE"
+    assert restored["quantity"] == 6
+
+
+def test_reservation_consume_undo_endpoint_restores_original_inventory_location(client):
+    manufacturer = client.post("/api/manufacturers", json={"name": "API-RES-UNDO-CON-MFG"}).json()["data"]
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-RES-UNDO-CON-001",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Mirror",
+        },
+    ).json()["data"]
+
+    seed = client.post(
+        "/api/inventory/adjust",
+        json={
+            "item_id": item["item_id"],
+            "quantity_delta": 5,
+            "location": "BENCH_A",
+            "note": "seed bench",
+        },
+    )
+    assert seed.status_code == 200
+
+    reservation = client.post(
+        "/api/reservations",
+        json={
+            "item_id": item["item_id"],
+            "quantity": 4,
+            "purpose": "undo consume API test",
+        },
+    )
+    assert reservation.status_code == 200
+    reservation_id = reservation.json()["data"]["reservation_id"]
+
+    consume_response = client.post(
+        f"/api/reservations/{reservation_id}/consume",
+        json={"quantity": 3, "note": "api undo consume"},
+    )
+    assert consume_response.status_code == 200
+
+    transactions = client.get(f"/api/transactions?item_id={item['item_id']}&page=1&per_page=20")
+    assert transactions.status_code == 200
+    consume_log = next(
+        row for row in transactions.json()["data"] if str(row["batch_id"]).startswith(f"reservation-consume-{reservation_id}-log-")
+    )
+
+    undo = client.post(f"/api/transactions/{consume_log['log_id']}/undo", json={})
+    assert undo.status_code == 200
+    assert undo.json()["data"]["applied_quantity"] == 3
+
+    reservations = client.get(f"/api/reservations?item_id={item['item_id']}&page=1&per_page=20")
+    assert reservations.status_code == 200
+    restored = next(row for row in reservations.json()["data"] if row["reservation_id"] == reservation_id)
+    assert restored["status"] == "ACTIVE"
+    assert restored["quantity"] == 4
+
+    inventory = client.get(f"/api/inventory?item_id={item['item_id']}&per_page=50")
+    assert inventory.status_code == 200
+    quantities = {row["location"]: row["quantity"] for row in inventory.json()["data"]}
+    assert quantities["BENCH_A"] == 5
+    assert "STOCK" not in quantities
 
 def test_order_import_returns_missing_item_details(client, database_url):
     output = StringIO()

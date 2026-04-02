@@ -3,11 +3,13 @@ from __future__ import annotations
 import csv
 from io import StringIO
 from pathlib import Path
+import threading
 
 import pytest
 
 from app.errors import AppError
 from app import service
+from app.db import get_connection
 
 FUTURE_TARGET_DATE = "2999-12-31"
 
@@ -408,6 +410,218 @@ def test_reservation_partial_consume_keeps_active(conn):
         (reservation["reservation_id"],),
     ).fetchone()
     assert int(active_alloc["qty"]) == 4
+
+
+def test_reservation_release_undo_restores_active_allocations(conn):
+    item = _create_basic_item(conn, item_number="ITEM-RES-UNDO-REL")
+    service.adjust_inventory(
+        conn,
+        item_id=item["item_id"],
+        quantity_delta=8,
+        location="STOCK",
+        note="seed",
+    )
+    reservation = service.create_reservation(
+        conn,
+        {
+            "item_id": item["item_id"],
+            "quantity": 5,
+            "purpose": "undo-release",
+        },
+    )
+    service.release_reservation(conn, reservation["reservation_id"], quantity=2)
+    release_log = conn.execute(
+        """
+        SELECT log_id
+        FROM transaction_log
+        WHERE batch_id LIKE ?
+        ORDER BY log_id DESC
+        LIMIT 1
+        """,
+        (f"reservation-release-{reservation['reservation_id']}-%",),
+    ).fetchone()
+
+    undo_result = service.undo_transaction(conn, int(release_log["log_id"]))
+    restored = service.get_reservation(conn, reservation["reservation_id"])
+    conn.commit()
+
+    assert undo_result["applied_quantity"] == 2
+    assert restored["status"] == "ACTIVE"
+    assert int(restored["quantity"]) == 5
+    active_alloc = conn.execute(
+        "SELECT COALESCE(SUM(quantity), 0) AS qty FROM reservation_allocations WHERE reservation_id = ? AND status = 'ACTIVE'",
+        (reservation["reservation_id"],),
+    ).fetchone()
+    assert int(active_alloc["qty"]) == 5
+
+
+def test_reservation_consume_undo_restores_original_location_and_allocation(conn):
+    item = _create_basic_item(conn, item_number="ITEM-RES-UNDO-CON")
+    service.adjust_inventory(
+        conn,
+        item_id=item["item_id"],
+        quantity_delta=4,
+        location="BENCH_A",
+        note="seed bench",
+    )
+    reservation = service.create_reservation(
+        conn,
+        {
+            "item_id": item["item_id"],
+            "quantity": 3,
+            "purpose": "undo-consume",
+        },
+    )
+    service.consume_reservation(conn, reservation["reservation_id"], quantity=2)
+    consume_log = conn.execute(
+        """
+        SELECT log_id
+        FROM transaction_log
+        WHERE batch_id LIKE ?
+        ORDER BY log_id DESC
+        LIMIT 1
+        """,
+        (f"reservation-consume-{reservation['reservation_id']}-%",),
+    ).fetchone()
+
+    undo_result = service.undo_transaction(conn, int(consume_log["log_id"]))
+    restored = service.get_reservation(conn, reservation["reservation_id"])
+    conn.commit()
+
+    assert undo_result["applied_quantity"] == 2
+    assert restored["status"] == "ACTIVE"
+    assert int(restored["quantity"]) == 3
+    assert _inventory_qty(conn, item["item_id"], "BENCH_A") == 4
+    assert _inventory_qty(conn, item["item_id"], "STOCK") == 0
+    active_alloc = conn.execute(
+        """
+        SELECT COALESCE(SUM(quantity), 0) AS qty
+        FROM reservation_allocations
+        WHERE reservation_id = ? AND status = 'ACTIVE' AND location = 'BENCH_A'
+        """,
+        (reservation["reservation_id"],),
+    ).fetchone()
+    assert int(active_alloc["qty"]) == 3
+
+
+def test_concurrent_reservations_do_not_overallocate(conn, database_url: str):
+    item = _create_basic_item(conn, item_number="ITEM-RES-CONCURRENT")
+    service.adjust_inventory(
+        conn,
+        item_id=item["item_id"],
+        quantity_delta=5,
+        location="STOCK",
+        note="seed concurrent reservation",
+    )
+    conn.commit()
+
+    start = threading.Barrier(3)
+    outcomes: list[tuple[str, str | int]] = []
+    outcomes_lock = threading.Lock()
+
+    def worker() -> None:
+        worker_conn = get_connection(database_url)
+        try:
+            start.wait(timeout=5)
+            try:
+                reservation = service.create_reservation(
+                    worker_conn,
+                    {
+                        "item_id": item["item_id"],
+                        "quantity": 4,
+                        "purpose": "concurrent reservation",
+                    },
+                )
+                worker_conn.commit()
+                outcome: tuple[str, str | int] = ("ok", int(reservation["reservation_id"]))
+            except AppError as exc:
+                worker_conn.rollback()
+                outcome = ("error", exc.code)
+            with outcomes_lock:
+                outcomes.append(outcome)
+        finally:
+            worker_conn.close()
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    start.wait(timeout=5)
+    for thread in threads:
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+
+    assert len(outcomes) == 2
+    assert sum(1 for status, _ in outcomes if status == "ok") == 1
+    assert sum(1 for status, detail in outcomes if status == "error" and detail == "INSUFFICIENT_STOCK") == 1
+
+    check_conn = get_connection(database_url)
+    try:
+        reservations = check_conn.execute(
+            "SELECT COALESCE(SUM(quantity), 0) AS qty FROM reservations WHERE item_id = ? AND status = 'ACTIVE'",
+            (item["item_id"],),
+        ).fetchone()
+        allocations = check_conn.execute(
+            "SELECT COALESCE(SUM(quantity), 0) AS qty FROM reservation_allocations WHERE item_id = ? AND status = 'ACTIVE'",
+            (item["item_id"],),
+        ).fetchone()
+        assert int(reservations["qty"]) == 4
+        assert int(allocations["qty"]) == 4
+    finally:
+        check_conn.close()
+
+
+def test_concurrent_inventory_adjust_creates_single_row_with_combined_quantity(conn, database_url: str):
+    item = _create_basic_item(conn, item_number="ITEM-INV-CONCURRENT")
+    conn.commit()
+
+    start = threading.Barrier(3)
+    errors: list[str] = []
+    errors_lock = threading.Lock()
+
+    def worker() -> None:
+        worker_conn = get_connection(database_url)
+        try:
+            start.wait(timeout=5)
+            try:
+                service.adjust_inventory(
+                    worker_conn,
+                    item_id=item["item_id"],
+                    quantity_delta=1,
+                    location="BENCH_CONCURRENT",
+                    note="concurrent adjust",
+                )
+                worker_conn.commit()
+            except Exception as exc:  # noqa: BLE001
+                worker_conn.rollback()
+                with errors_lock:
+                    errors.append(exc.__class__.__name__)
+        finally:
+            worker_conn.close()
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    start.wait(timeout=5)
+    for thread in threads:
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+
+    assert errors == []
+
+    check_conn = get_connection(database_url)
+    try:
+        row = check_conn.execute(
+            """
+            SELECT COUNT(*) AS row_count, COALESCE(SUM(quantity), 0) AS total_qty
+            FROM inventory_ledger
+            WHERE item_id = ? AND location = ?
+            """,
+            (item["item_id"], "BENCH_CONCURRENT"),
+        ).fetchone()
+        assert int(row["row_count"]) == 1
+        assert int(row["total_qty"]) == 2
+    finally:
+        check_conn.close()
 
 def test_reservation_partial_quantity_cannot_exceed_remaining(conn):
     item = _create_basic_item(conn, item_number="ITEM-RES-PART-ERR")

@@ -1,6 +1,6 @@
 # Source Current State
 
-Last updated: 2026-03-29 (JST)
+Last updated: 2026-04-02 (JST)
 
 ## 1. System Snapshot
 
@@ -88,6 +88,7 @@ Last updated: 2026-03-29 (JST)
   - capability metadata endpoint exists: `GET /api/auth/capabilities`
   - bearer-token verification is pluggable and currently fixture-friendly through the shared-secret verifier
   - user rows now carry OIDC mapping fields: `email`, `external_subject`, `identity_provider`, `hosted_domain`
+  - duplicate username/email/external-identity conflicts in user create/update flows now return controlled `409` domain errors instead of bubbling raw DB integrity failures
 
 ### 3.2 Data Model
 
@@ -110,6 +111,8 @@ Last updated: 2026-03-29 (JST)
 - Active reserved quantities are tracked via per-location rows in `reservation_allocations`.
 - Partial/full release updates allocation states without changing `inventory_ledger` quantities.
 - Partial/full consume decrements physical inventory at allocated locations and transitions allocation states.
+- Inventory and reservation mutation paths now use PostgreSQL advisory transaction locks keyed by item/reservation to reduce concurrent oversubscription and conflicting first-row inserts.
+- Reservation release/consume logs now retain event identity so `undo_transaction` can restore released/consumed allocation state and the original inventory location for reservation-originated consumes.
 - Reservation release/consume now supports:
   - full action (status transition to `RELEASED` / `CONSUMED`)
   - partial action (status remains `ACTIVE`, reservation quantity decreases)
@@ -355,12 +358,20 @@ Last updated: 2026-03-29 (JST)
 - Order import alias resolution also normalizes item-number variants (NFKC, dash variants like `-`/`−`, and whitespace removal) before final alias lookup to prevent false missing-items caused by visually similar SKU text.
 - Backend test fixtures now isolate workspace import/export roots under per-test temporary directories, preventing API/order-import test runs from creating stray CSV artifacts inside the repository `imports/items/unregistered/` folder.
 - Frontend Playwright runs now use an isolated Docker Compose project via `run-e2e.ps1`, with a separate `8088` ingress and `down -v` teardown so E2E-created DB rows and runtime import/artifact files do not persist into the normal local UI environment.
+- The isolated Playwright runtime now self-bootstraps authenticated flows as well.
+  - `run-e2e.ps1` temporarily launches the stack with `AUTH_MODE=oidc_enforced` / `RBAC_MODE=rbac_enforced`
+  - the script generates a local HS256 JWT fixture, exports `PLAYWRIGHT_E2E_BEARER_TOKEN`, and creates the initial `e2e.admin` user through the bootstrap-allowed first-user API path
+  - auth-sensitive browser specs can therefore validate real `/users`, `/reserve`, and `/history` write flows without depending on the shared local stack posture
 
 ## 6. Quality State
 
-- Backend tests: `178 passed` via `uv run python -m pytest` (latest run on 2026-03-25).
-- Frontend tests: `29 passed` via `node .\node_modules\vitest\vitest.mjs run` (latest run on 2026-03-25).
-- Frontend production build: success via `node .\node_modules\vite\bin\vite.js build` (latest run on 2026-03-25).
+- Backend full-suite baseline: `178 passed` via `uv run python -m pytest` (latest full-suite run on 2026-03-25).
+- Backend targeted regression runs on 2026-04-02:
+  - `9 passed, 166 deselected` for duplicate-user conflict and reservation undo/API coverage
+  - `4 passed, 61 deselected` for concurrency-focused reservation/inventory service tests
+- Frontend unit tests: `45 passed` via `npx vitest run` (latest run on 2026-04-02).
+- Frontend isolated Playwright auth/reservation E2E: `2 passed` via `.\run-e2e.ps1 08-auth-reservations.spec.ts` (latest run on 2026-04-02).
+- Frontend production build: success via `npm run build` (latest run on 2026-04-02).
 
 ## 7. Known Directional Gaps (intentional for current phase)
 

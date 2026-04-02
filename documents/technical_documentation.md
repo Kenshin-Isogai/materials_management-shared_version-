@@ -37,6 +37,7 @@ This document explains the implemented architecture of the Materials Management 
   - Identity Platform / Google-signed ID tokens require `JWT_SIGNING_ALGORITHMS=RS256` instead of the local fixture default
   - `/api/users*` is admin-only, normal mutations/exports/imports are operator scope, and authenticated reads default to viewer scope
   - supported persisted user roles are constrained to `admin`, `operator`, and `viewer` on both create and update flows
+  - duplicate username/email/OIDC identity collisions in admin user CRUD are normalized into domain `409` errors instead of raw database failures
   - bootstrap exception: `POST /api/users` is allowed without Bearer auth only while the system has zero active users
 - Frontend user administration at `/users` page.
   - admins manage `username`, display name, role, active state, and OIDC mapping fields
@@ -574,6 +575,8 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
   - `available = inventory_ledger.on_hand - active_allocations`
 - Consume acts on physical inventory locations referenced by active allocations, preserving location traceability.
 - Release changes allocation status only (no inventory delta).
+- Inventory and reservation mutations now serialize on PostgreSQL advisory transaction locks keyed by item/reservation so concurrent requests cannot over-allocate the same inventory snapshot.
+- Reservation release/consume transaction logs now include event-specific identifiers so undo can restore both reservation allocation state and the original consumed location.
 
 ### 6) Import job undo/redo safety
 
@@ -631,7 +634,12 @@ End-to-End tests are implemented using Playwright to verify the full-stack behav
   .\run-e2e.ps1
   ```
 - **Runtime Isolation**: `run-e2e.ps1` starts a dedicated Docker Compose project using the normal compose file with `NGINX_HOST_PORT=8088`, bootstraps an `e2e.admin` user in Playwright global setup, then always tears the project down with `down -v` so PostgreSQL and appdata artifacts do not leak into the normal local stack.
+- **Authenticated E2E posture**: `run-e2e.ps1` now also supports auth-sensitive flows without relying on the shared local stack defaults.
+  - the wrapper temporarily sets `AUTH_MODE=oidc_enforced`, `RBAC_MODE=rbac_enforced`, local OIDC/shared-secret fixture env vars, and a frontend API key placeholder for the isolated Compose project
+  - it generates a valid HS256 bearer token, exports `PLAYWRIGHT_E2E_BEARER_TOKEN`, and creates the initial `e2e.admin` row through the first-user bootstrap path before the spec runs
+  - this keeps `/users`, `/reserve`, and `/history` E2E coverage close to production auth semantics while staying self-contained for local CI/manual runs
 - **Stateful Tests**: Tests in `05-users-crud.spec.ts`, `06-projects-crud.spec.ts`, and `07-items-orders-csv-crud.spec.ts` still perform real mutations, but they now target the isolated E2E runtime instead of the default shared local stack. The specs retain API cleanup hooks as a secondary safety net.
+- **High-risk regression coverage**: backend tests now include explicit concurrency cases for reservation allocation and first-row inventory creation, plus API/service regression cases for duplicate-user conflicts and reservation release/consume undo semantics.
 - **Reporting**: Playwright HTML reports can be viewed after a failure using `npx playwright show-report`.
 
 ## Recommended update workflow
