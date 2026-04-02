@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+from datetime import datetime, timedelta
 import importlib
 import json
 import os
@@ -2492,6 +2493,94 @@ def test_orders_endpoint_filters_by_item_id(client):
     rows = response.json()["data"]
     assert len(rows) == 1
     assert rows[0]["item_id"] == item_a["item_id"]
+
+
+def test_arrival_schedule_endpoint_classifies_open_lines(client):
+    client.post("/api/manufacturers", json={"name": "API-ARRIVAL-SCHED-MFG"})
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-ARRIVAL-SCHED-ITEM",
+            "manufacturer_name": "API-ARRIVAL-SCHED-MFG",
+            "category": "Lens",
+        },
+    ).json()["data"]
+
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "item_number",
+            "quantity",
+            "quotation_number",
+            "issue_date",
+            "order_date",
+            "expected_arrival",
+            "quotation_document_url",
+        ],
+    )
+    writer.writeheader()
+    writer.writerow(
+        {
+            "item_number": item["item_number"],
+            "quantity": "2",
+            "quotation_number": "Q-API-ARRIVAL-SCHED-001",
+            "issue_date": "2026-03-01",
+            "order_date": "2026-03-02",
+            "expected_arrival": overdue_date,
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
+        }
+    )
+    writer.writerow(
+        {
+            "item_number": item["item_number"],
+            "quantity": "3",
+            "quotation_number": "Q-API-ARRIVAL-SCHED-002",
+            "issue_date": "2026-03-01",
+            "order_date": "2026-03-02",
+            "expected_arrival": scheduled_date,
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
+        }
+    )
+    writer.writerow(
+        {
+            "item_number": item["item_number"],
+            "quantity": "1",
+            "quotation_number": "Q-API-ARRIVAL-SCHED-003",
+            "issue_date": "2026-03-01",
+            "order_date": "2026-03-02",
+            "expected_arrival": "",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
+        }
+    )
+    imported = client.post(
+        "/api/purchase-order-lines/import",
+        files={"file": ("arrival-schedule.csv", output.getvalue().encode("utf-8"), "text/csv")},
+        data={"supplier_name": "ApiArrivalScheduleSupplier"},
+    )
+    assert imported.status_code == 200
+
+    response = client.get("/api/arrival-schedule", params={"per_page": 50})
+    assert response.status_code == 200
+    rows = response.json()["data"]
+    assert len(rows) == 3
+    bucket_by_quote = {row["quotation_number"]: row["arrival_bucket"] for row in rows}
+    assert bucket_by_quote["Q-API-ARRIVAL-SCHED-001"] == "overdue"
+    assert bucket_by_quote["Q-API-ARRIVAL-SCHED-002"] == "scheduled"
+    assert bucket_by_quote["Q-API-ARRIVAL-SCHED-003"] == "no_eta"
+
+    overdue = client.get("/api/arrival-schedule", params={"bucket": "overdue", "per_page": 50})
+    assert overdue.status_code == 200
+    overdue_rows = overdue.json()["data"]
+    assert len(overdue_rows) == 1
+    assert overdue_rows[0]["quotation_number"] == "Q-API-ARRIVAL-SCHED-001"
+    assert overdue_rows[0]["overdue_days"] == 2
+
+
+def test_arrival_schedule_endpoint_rejects_invalid_bucket(client):
+    response = client.get("/api/arrival-schedule", params={"bucket": "late"})
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "INVALID_ARRIVAL_BUCKET"
 
 
 def test_order_import_accepts_slash_date_format(client):
@@ -5521,3 +5610,6 @@ def test_purchase_candidates_endpoints_flow(client):
     )
     assert from_bom.status_code == 200
     assert from_bom.json()["data"]["created_count"] == 2
+    today = datetime.strptime(today_jst(), "%Y-%m-%d").date()
+    overdue_date = (today - timedelta(days=2)).isoformat()
+    scheduled_date = (today + timedelta(days=8)).isoformat()

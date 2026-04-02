@@ -5768,6 +5768,104 @@ def list_orders(
     return _paginate(conn, sql, tuple(params), page, per_page)
 
 
+def list_arrival_schedule(
+    conn: sqlite3.Connection,
+    *,
+    supplier: str | None = None,
+    item_id: int | None = None,
+    project_id: int | None = None,
+    bucket: str | None = None,
+    page: int = 1,
+    per_page: int = 50,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    valid_buckets = {"overdue", "scheduled", "no_eta"}
+    normalized_bucket = bucket.strip().lower() if bucket else None
+    if normalized_bucket and normalized_bucket not in valid_buckets:
+        raise AppError(
+            code="INVALID_ARRIVAL_BUCKET",
+            message="bucket must be one of overdue, scheduled, or no_eta",
+            status_code=422,
+        )
+
+    clauses = ["o.status = 'Ordered'"]
+    params: list[Any] = []
+    if supplier:
+        clauses.append("s.name = ?")
+        params.append(supplier)
+    if item_id is not None:
+        clauses.append("o.item_id = ?")
+        params.append(int(item_id))
+    if project_id is not None:
+        clauses.append("o.project_id = ?")
+        params.append(int(project_id))
+    if normalized_bucket == "overdue":
+        clauses.append("o.expected_arrival IS NOT NULL")
+        clauses.append("date(o.expected_arrival) < date(?)")
+        params.append(today_jst())
+    elif normalized_bucket == "scheduled":
+        clauses.append("o.expected_arrival IS NOT NULL")
+        clauses.append("date(o.expected_arrival) >= date(?)")
+        params.append(today_jst())
+    elif normalized_bucket == "no_eta":
+        clauses.append("o.expected_arrival IS NULL")
+
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    sql = f"""
+        SELECT
+            o.*,
+            im.item_number AS canonical_item_number,
+            p.name AS project_name,
+            s.supplier_id,
+            s.name AS supplier_name,
+            q.quotation_number,
+            q.issue_date,
+            q.quotation_document_url,
+            po.purchase_order_document_url
+        FROM orders o
+        JOIN items_master im ON im.item_id = o.item_id
+        JOIN purchase_orders po ON po.purchase_order_id = o.purchase_order_id
+        JOIN suppliers s ON s.supplier_id = po.supplier_id
+        LEFT JOIN quotations q ON q.quotation_id = o.quotation_id
+        LEFT JOIN projects p ON p.project_id = o.project_id
+        {where}
+        ORDER BY
+            CASE
+                WHEN o.expected_arrival IS NULL THEN 2
+                WHEN date(o.expected_arrival) < date('{today_jst()}') THEN 0
+                ELSE 1
+            END,
+            o.expected_arrival ASC,
+            o.order_date DESC,
+            o.order_id DESC
+    """
+    rows, pagination = _paginate(conn, sql, tuple(params), page, per_page)
+    today = datetime.strptime(today_jst(), "%Y-%m-%d").date()
+    enriched: list[dict[str, Any]] = []
+    for row in rows:
+        expected_arrival = row.get("expected_arrival")
+        arrival_bucket = "no_eta"
+        overdue_days: int | None = None
+        days_until_expected: int | None = None
+        if expected_arrival:
+            eta_date = datetime.strptime(str(expected_arrival), "%Y-%m-%d").date()
+            days_delta = (eta_date - today).days
+            days_until_expected = days_delta
+            if days_delta < 0:
+                arrival_bucket = "overdue"
+                overdue_days = abs(days_delta)
+            else:
+                arrival_bucket = "scheduled"
+        enriched.append(
+            {
+                **row,
+                "arrival_bucket": arrival_bucket,
+                "overdue_days": overdue_days,
+                "days_until_expected": days_until_expected,
+            }
+        )
+    return enriched, pagination
+
+
 def get_order(conn: sqlite3.Connection, order_id: int) -> dict[str, Any]:
     row = conn.execute(
         """

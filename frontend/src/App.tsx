@@ -6,6 +6,7 @@ import {
   RouterProvider,
 } from "react-router-dom";
 import { AppShell } from "./components/AppShell";
+import { ArrivalPage } from "./pages/ArrivalPage";
 import { BomPage } from "./pages/BomPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { HistoryPage } from "./pages/HistoryPage";
@@ -35,7 +36,7 @@ export const appRoutes = createRoutesFromElements(
       <Route path="/dashboard" element={<Navigate to="/" replace />} />
       <Route path="/search" element={<ItemsPage />} />
       <Route path="/location" element={<LocationsPage />} />
-      <Route path="/arrival" element={<OrdersPage />} />
+      <Route path="/arrival" element={<ArrivalPage />} />
       <Route path="/movements" element={<InventoryPage />} />
       <Route path="/reserve" element={<ReservationsPage />} />
       <Route path="/items" element={<ItemsPage />} />

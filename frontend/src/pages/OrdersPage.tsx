@@ -974,9 +974,9 @@ export function OrdersPage() {
   return (
     <div className="space-y-6">
       <section>
-        <h1 className="font-display text-3xl font-bold">Orders</h1>
+        <h1 className="font-display text-3xl font-bold">Purchase Orders</h1>
         <p className="mt-1 text-sm text-slate-600">
-          Purchase-order-line CSV import, missing-item workflow, and arrival processing.
+          Purchase-order-line import, quotation and PO header management, and line-level purchasing traceability.
         </p>
       </section>
 
@@ -1351,7 +1351,7 @@ export function OrdersPage() {
       <section className="panel p-4">
         <div className="mb-3">
           <h2 className="font-display text-lg font-semibold">Purchase Order Lines</h2>
-          <p className="mt-1 text-sm text-slate-500">Line-level ETA, arrival, split, and project assignment.</p>
+          <p className="mt-1 text-sm text-slate-500">Line-level ETA, split, linked document traceability, and project assignment.</p>
         </div>
         <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
           {summaryMetric("Total lines", ordersData?.length ?? 0, "amber")}

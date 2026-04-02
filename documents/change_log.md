@@ -2,6 +2,26 @@
 
 ### Changed
 
+- Split purchase tracking from arrival operations in the purchasing UI.
+  - `/arrival` now renders a dedicated Arrival page instead of aliasing the Orders page
+  - added backend read model `GET /api/arrival-schedule` for open arrival monitoring, including `arrival_bucket` (`overdue`, `scheduled`, `no_eta`), `overdue_days`, and `days_until_expected`
+  - the Arrival page now focuses on overdue / scheduled / no-ETA open lines and supports full or partial arrival processing from a dedicated detail pane
+  - the Orders page remains the purchasing ledger for purchase-order lines, quotations, and purchase-order headers, with copy updated to reflect that responsibility split
+
+### Tests
+
+- Frontend build:
+  - `npm run build`
+- Backend compile check:
+  - `uv run --project backend python -m compileall backend/app/api.py backend/app/service.py`
+- Backend targeted API pytest:
+  - `uv run --project backend python -m pytest backend/tests/test_api_integration.py -q --import-mode=importlib -k "arrival_schedule_endpoint"`
+  - result: skipped in the current environment because the DB-backed pytest session was not available
+
+## 2026-04-02
+
+### Changed
+
 - Tightened the Identity Platform onboarding flow for newly created and not-yet-approved users.
   - successful `/login` and `/verify-email` flows now land on `/registration` first, so users without an approved app-user mapping do not briefly land on the mostly empty dashboard
   - forced verification refresh now only calls Identity Toolkit account lookup when refreshed token claims are still missing/stale, and retries token refresh once when the first refreshed ID token still carries a stale `email_verified=false` claim

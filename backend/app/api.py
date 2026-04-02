@@ -1163,6 +1163,27 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         )
         return ok(data, pagination)
 
+    @app.get("/api/arrival-schedule")
+    def get_arrival_schedule(
+        supplier: str | None = None,
+        item_id: int | None = None,
+        project_id: int | None = None,
+        bucket: str | None = None,
+        page: int = 1,
+        per_page: int = 50,
+        conn= db,
+    ):
+        data, pagination = service.list_arrival_schedule(
+            conn,
+            supplier=supplier,
+            item_id=item_id,
+            project_id=project_id,
+            bucket=bucket,
+            page=page,
+            per_page=per_page,
+        )
+        return ok(data, pagination)
+
     @app.get("/api/purchase-order-lines/import-template")
     def get_orders_import_template():
         filename, content = service.get_import_template_csv("orders")

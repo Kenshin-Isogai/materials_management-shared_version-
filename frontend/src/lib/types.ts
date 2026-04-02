@@ -147,6 +147,12 @@ export type PurchaseOrderLine = {
 
 export type Order = PurchaseOrderLine;
 
+export type ArrivalScheduleEntry = PurchaseOrderLine & {
+  arrival_bucket: "overdue" | "scheduled" | "no_eta";
+  overdue_days: number | null;
+  days_until_expected: number | null;
+};
+
 export type PurchaseOrder = {
   purchase_order_id: number;
   supplier_id: number;
