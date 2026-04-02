@@ -640,6 +640,12 @@ End-to-End tests are implemented using Playwright to verify the full-stack behav
   - this keeps `/users`, `/reserve`, and `/history` E2E coverage close to production auth semantics while staying self-contained for local CI/manual runs
 - **Stateful Tests**: Tests in `05-users-crud.spec.ts`, `06-projects-crud.spec.ts`, and `07-items-orders-csv-crud.spec.ts` still perform real mutations, but they now target the isolated E2E runtime instead of the default shared local stack. The specs retain API cleanup hooks as a secondary safety net.
 - **High-risk regression coverage**: backend tests now include explicit concurrency cases for reservation allocation and first-row inventory creation, plus API/service regression cases for duplicate-user conflicts and reservation release/consume undo semantics.
+- **Write-path serialization**: inventory mutation is item-locked, reservation mutation is reservation-then-item locked, order arrival is order-then-item locked, and undo is transaction-id locked. This keeps the main stock/reservation/undo paths from double-applying under concurrent requests while avoiding the earlier reservation/inventory deadlock ordering issue.
+- **Operational monitoring**: `/api/health` now includes a `mutation_integrity` block backed by DB queries. It is intended as an operator-facing early-warning surface for:
+  - `ACTIVE` reservations whose quantity no longer matches active allocation rows
+  - terminal reservations (`RELEASED` / `CONSUMED`) that still have active allocations
+  - allocation rows whose `item_id` no longer matches the parent reservation
+  - duplicate compensating undo logs or originals marked undone without a matching compensation row
 - **Reporting**: Playwright HTML reports can be viewed after a failure using `npx playwright show-report`.
 
 ## Recommended update workflow

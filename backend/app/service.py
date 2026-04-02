@@ -1678,8 +1678,21 @@ def _lock_reservation_state(conn: sqlite3.Connection, reservation_id: int) -> No
     conn.execute("SELECT pg_advisory_xact_lock(?, ?)", (7102, int(reservation_id)))
 
 
+def _lock_order_state(conn: sqlite3.Connection, order_id: int) -> None:
+    conn.execute("SELECT pg_advisory_xact_lock(?, ?)", (7103, int(order_id)))
+
+
+def _lock_transaction_state(conn: sqlite3.Connection, log_id: int) -> None:
+    conn.execute("SELECT pg_advisory_xact_lock(?, ?)", (7104, int(log_id)))
+
+
 def _lock_reservation_item_state(conn: sqlite3.Connection, reservation_id: int, item_id: int) -> None:
     _lock_reservation_state(conn, reservation_id)
+    _lock_inventory_item_state(conn, item_id)
+
+
+def _lock_order_item_state(conn: sqlite3.Connection, order_id: int, item_id: int) -> None:
+    _lock_order_state(conn, order_id)
     _lock_inventory_item_state(conn, item_id)
 
 
@@ -8262,6 +8275,8 @@ def process_order_arrival(
     quantity: int | None = None,
 ) -> dict[str, Any]:
     order = get_order(conn, order_id)
+    _lock_order_item_state(conn, order_id, int(order["item_id"]))
+    order = get_order(conn, order_id)
     if order["status"] == "Arrived":
         raise AppError(
             code="ORDER_ALREADY_ARRIVED",
@@ -12910,6 +12925,7 @@ def _undo_reservation_consume(
 
 
 def undo_transaction(conn: sqlite3.Connection, log_id: int, note: str | None = None) -> dict[str, Any]:
+    _lock_transaction_state(conn, log_id)
     original = get_transaction(conn, log_id)
     if int(original["is_undone"]) == 1:
         raise AppError(
@@ -13114,6 +13130,100 @@ def undo_transaction(conn: sqlite3.Connection, log_id: int, note: str | None = N
         (log_id,),
     )
     return {"original_log_id": log_id, "undo_log": undo_log, "applied_quantity": applied_qty}
+
+
+def get_operational_integrity_summary(conn: sqlite3.Connection) -> dict[str, Any]:
+    checked_at = now_jst_iso()
+    active_reservation_mismatch_row = conn.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM (
+            SELECT
+                r.reservation_id
+            FROM reservations r
+            LEFT JOIN (
+                SELECT reservation_id, COALESCE(SUM(quantity), 0) AS active_quantity
+                FROM reservation_allocations
+                WHERE status = 'ACTIVE'
+                GROUP BY reservation_id
+            ) active ON active.reservation_id = r.reservation_id
+            WHERE r.status = 'ACTIVE'
+              AND COALESCE(active.active_quantity, 0) <> r.quantity
+        ) mismatches
+        """
+    ).fetchone()
+    terminal_reservation_active_alloc_row = conn.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM (
+            SELECT
+                r.reservation_id
+            FROM reservations r
+            JOIN reservation_allocations ra ON ra.reservation_id = r.reservation_id
+            WHERE r.status IN ('RELEASED', 'CONSUMED')
+              AND ra.status = 'ACTIVE'
+            GROUP BY r.reservation_id
+        ) leaked
+        """
+    ).fetchone()
+    allocation_item_mismatch_row = conn.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM reservation_allocations ra
+        JOIN reservations r ON r.reservation_id = ra.reservation_id
+        WHERE ra.item_id <> r.item_id
+        """
+    ).fetchone()
+    duplicate_undo_row = conn.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM (
+            SELECT undo_of_log_id
+            FROM transaction_log
+            WHERE undo_of_log_id IS NOT NULL
+            GROUP BY undo_of_log_id
+            HAVING COUNT(*) > 1
+        ) duplicates
+        """
+    ).fetchone()
+    marked_undone_without_compensation_row = conn.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM transaction_log original
+        WHERE original.is_undone = 1
+          AND NOT EXISTS (
+              SELECT 1
+              FROM transaction_log undo_log
+              WHERE undo_log.undo_of_log_id = original.log_id
+          )
+        """
+    ).fetchone()
+    pending_undo_age_row = conn.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM transaction_log original
+        WHERE original.is_undone = 0
+          AND EXISTS (
+              SELECT 1
+              FROM transaction_log undo_log
+              WHERE undo_log.undo_of_log_id = original.log_id
+          )
+        """
+    ).fetchone()
+    checks = {
+        "active_reservation_quantity_mismatches": int(active_reservation_mismatch_row["count"] or 0),
+        "terminal_reservations_with_active_allocations": int(terminal_reservation_active_alloc_row["count"] or 0),
+        "reservation_allocation_item_mismatches": int(allocation_item_mismatch_row["count"] or 0),
+        "duplicate_undo_logs": int(duplicate_undo_row["count"] or 0),
+        "marked_undone_without_compensating_log": int(marked_undone_without_compensation_row["count"] or 0),
+        "compensating_log_without_marked_original": int(pending_undo_age_row["count"] or 0),
+    }
+    ok = all(count == 0 for count in checks.values())
+    return {
+        "ok": ok,
+        "checked_at": checked_at,
+        "checks": checks,
+    }
 
 
 def dashboard_summary(conn: sqlite3.Connection, low_stock_threshold: int = 5) -> dict[str, Any]:

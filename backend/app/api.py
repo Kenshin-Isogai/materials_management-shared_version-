@@ -175,6 +175,39 @@ def _db_ready(database_url: str | None) -> tuple[bool, str | None]:
             conn.close()
 
 
+def _get_mutation_integrity_summary(database_url: str | None) -> dict[str, Any]:
+    ready, error_code = _db_ready(database_url)
+    if not ready:
+        return {
+            "available": False,
+            "ok": False,
+            "error_code": error_code,
+        }
+    conn = None
+    try:
+        conn = get_connection(database_url)
+        summary = service.get_operational_integrity_summary(conn)
+        return {
+            "available": True,
+            **summary,
+        }
+    except Exception as exc:
+        _log_event(
+            logging.WARNING,
+            "Operational integrity summary failed",
+            error_type=exc.__class__.__name__,
+            error_message=str(exc),
+        )
+        return {
+            "available": False,
+            "ok": False,
+            "error_code": "INTEGRITY_CHECK_UNAVAILABLE",
+        }
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def ok(data: Any, pagination: dict[str, Any] | None = None) -> dict[str, Any]:
     payload: dict[str, Any] = {"status": "ok", "data": data}
     if pagination is not None:
@@ -641,6 +674,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
     def healthcheck():
         storage_summary = storage.get_storage_backend_summary()
         recovery_policy = get_recovery_policy_summary()
+        mutation_integrity = _get_mutation_integrity_summary(app.state.database_url)
         return ok(
             {
                 "healthy": True,
@@ -676,6 +710,7 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
                 },
                 "storage": storage_summary,
                 "recovery_policy": recovery_policy,
+                "mutation_integrity": mutation_integrity,
                 "public_urls": {
                     "backend_public_base_url": BACKEND_PUBLIC_BASE_URL or None,
                     "frontend_public_base_url": FRONTEND_PUBLIC_BASE_URL or None,

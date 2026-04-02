@@ -83,6 +83,7 @@ Last updated: 2026-04-02 (JST)
   - request logs now emit request IDs, latency, status code, auth mode, and startup/shutdown events; JSON output is enabled by `STRUCTURED_LOGGING`
   - successful high-impact mutations and export/download endpoints now also emit dedicated `domain.audit` structured log events
   - `GET /api/health` now also exposes a repo-side `recovery_policy` summary describing the expected Cloud SQL backup/PITR contract, GCS retention/versioning contract, and post-restore validation checklist
+  - `GET /api/health` now also exposes `mutation_integrity`, a DB-backed summary of reservation-allocation drift and undo-compensation anomalies for operator monitoring
 - Planning snapshot hot paths now batch project/requirement loads, assembly component expansion (including legacy assembly-only project requirements), and per-item inventory totals; item planning context further narrows expansion to the requested item.
 - Current auth posture:
   - capability metadata endpoint exists: `GET /api/auth/capabilities`
@@ -112,6 +113,7 @@ Last updated: 2026-04-02 (JST)
 - Partial/full release updates allocation states without changing `inventory_ledger` quantities.
 - Partial/full consume decrements physical inventory at allocated locations and transitions allocation states.
 - Inventory and reservation mutation paths now use PostgreSQL advisory transaction locks keyed by item/reservation to reduce concurrent oversubscription and conflicting first-row inserts.
+- Order arrival now also locks the target order plus item state, and undo now locks the target transaction id, so duplicate concurrent arrival/undo requests serialize instead of applying twice.
 - Reservation release/consume logs now retain event identity so `undo_transaction` can restore released/consumed allocation state and the original inventory location for reservation-originated consumes.
 - Reservation release/consume now supports:
   - full action (status transition to `RELEASED` / `CONSUMED`)
@@ -369,6 +371,8 @@ Last updated: 2026-04-02 (JST)
 - Backend targeted regression runs on 2026-04-02:
   - `9 passed, 166 deselected` for duplicate-user conflict and reservation undo/API coverage
   - `4 passed, 61 deselected` for concurrency-focused reservation/inventory service tests
+  - `8 passed, 63 deselected` for expanded concurrency coverage across move/arrival/release/consume/undo plus integrity-summary service checks
+  - `6 passed` for exact-node API regression coverage of health integrity summary, duplicate-user conflicts, and reservation undo endpoints
 - Frontend unit tests: `45 passed` via `npx vitest run` (latest run on 2026-04-02).
 - Frontend isolated Playwright auth/reservation E2E: `2 passed` via `.\run-e2e.ps1 08-auth-reservations.spec.ts` (latest run on 2026-04-02).
 - Frontend production build: success via `npm run build` (latest run on 2026-04-02).

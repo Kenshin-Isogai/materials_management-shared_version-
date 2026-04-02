@@ -2,6 +2,28 @@
 
 ### Changed
 
+- Added product-hardening coverage for the remaining high-risk write paths and observability.
+  - `process_order_arrival` now takes an order+item advisory lock so the same order cannot be arrived twice concurrently
+  - `undo_transaction` now takes a transaction-scoped advisory lock so the same log cannot be undone twice under concurrent requests
+  - `/api/health` now exposes `mutation_integrity`, a DB-backed summary that flags reservation-allocation drift and duplicate/missing undo-compensation states
+  - added service-level concurrency regression coverage for `MOVE`, `ARRIVAL`, reservation `RELEASE`, reservation `CONSUME`, and `UNDO`
+  - added health-endpoint regression coverage proving the new integrity summary is clean in normal state and flips red when reservation-allocation drift is injected
+
+### Tests
+
+- Backend targeted service pytest against Docker test DB:
+  - `uv run --project backend python -m pytest backend/tests/test_service_transactions.py -q --import-mode=importlib -k "concurrent_inventory_adjust or concurrent_inventory_moves or concurrent_order_arrival or concurrent_reservations or concurrent_reservation_release or concurrent_reservation_consume or concurrent_undo_only_one_compensation or operational_integrity_summary_detects_reservation_allocation_mismatch"`
+  - result: `8 passed, 63 deselected`
+- Backend targeted API pytest against Docker test DB:
+  - `uv run --project backend python -m pytest --import-mode=importlib -q backend/tests/test_api_integration.py::test_health_endpoint backend/tests/test_api_integration.py::test_health_endpoint_reports_mutation_integrity_anomalies backend/tests/test_api_integration.py::test_user_create_returns_conflict_for_duplicate_email backend/tests/test_api_integration.py::test_user_update_returns_conflict_for_duplicate_identity_subject backend/tests/test_api_integration.py::test_reservation_release_undo_endpoint_restores_reservation_state backend/tests/test_api_integration.py::test_reservation_consume_undo_endpoint_restores_original_inventory_location`
+  - result: `6 passed`
+- Backend compile check:
+  - `uv run --project backend python -m compileall backend/app/service.py backend/app/api.py backend/tests/test_service_transactions.py backend/tests/test_api_integration.py`
+
+## 2026-04-02
+
+### Changed
+
 - Raised the assurance bar around auth, reservation undo, and concurrent inventory mutation flows.
   - user create/update now map duplicate username, email, and external-identity collisions into controlled `409` domain errors instead of leaking raw DB integrity failures as `500`
   - reservation release/consume transaction logs now carry event-specific identifiers so undo can target the exact reservation event

@@ -119,6 +119,53 @@ def test_health_endpoint(client):
     assert payload["data"]["storage"]["retention_days"]["staging"] == 7
     assert payload["data"]["storage"]["retention_days"]["exports"] == 30
     assert payload["data"]["storage"]["retention_days"]["artifacts"] == 90
+    assert payload["data"]["mutation_integrity"]["available"] is True
+    assert payload["data"]["mutation_integrity"]["ok"] is True
+    assert payload["data"]["mutation_integrity"]["checks"]["active_reservation_quantity_mismatches"] == 0
+
+
+def test_health_endpoint_reports_mutation_integrity_anomalies(client):
+    conn = get_connection(client.app.state.database_url)
+    try:
+        manufacturer = service.create_manufacturer(conn, "HEALTH-INTEGRITY-MFG")
+        item = service.create_item(
+            conn,
+            {
+                "item_number": "HEALTH-INTEGRITY-ITEM-001",
+                "manufacturer_id": manufacturer["manufacturer_id"],
+                "category": "Lens",
+            },
+        )
+        service.adjust_inventory(
+            conn,
+            item_id=item["item_id"],
+            quantity_delta=5,
+            location="STOCK",
+            note="health integrity seed",
+        )
+        reservation = service.create_reservation(
+            conn,
+            {
+                "item_id": item["item_id"],
+                "quantity": 4,
+                "purpose": "health integrity mismatch",
+            },
+        )
+        conn.execute(
+            "UPDATE reservation_allocations SET quantity = 1 WHERE reservation_id = ? AND status = 'ACTIVE'",
+            (reservation["reservation_id"],),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    response = client.get("/api/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["data"]["mutation_integrity"]["available"] is True
+    assert payload["data"]["mutation_integrity"]["ok"] is False
+    assert payload["data"]["mutation_integrity"]["checks"]["active_reservation_quantity_mismatches"] == 1
     assert payload["data"]["storage"]["retention_days"]["archives"] is None
     assert payload["data"]["storage"]["versioning_policy_required"] is True
     assert payload["data"]["storage"]["restore_strategy"] == "restore_to_recovery_prefix_then_validate"

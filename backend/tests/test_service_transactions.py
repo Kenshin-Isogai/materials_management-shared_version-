@@ -623,6 +623,345 @@ def test_concurrent_inventory_adjust_creates_single_row_with_combined_quantity(c
     finally:
         check_conn.close()
 
+
+def test_concurrent_inventory_moves_do_not_overspend_source(conn, database_url: str):
+    item = _create_basic_item(conn, item_number="ITEM-MOVE-CONCURRENT")
+    service.adjust_inventory(
+        conn,
+        item_id=item["item_id"],
+        quantity_delta=5,
+        location="STOCK",
+        note="seed concurrent move",
+    )
+    conn.commit()
+
+    start = threading.Barrier(3)
+    outcomes: list[tuple[str, str | int]] = []
+    outcomes_lock = threading.Lock()
+
+    def worker() -> None:
+        worker_conn = get_connection(database_url)
+        try:
+            start.wait(timeout=5)
+            try:
+                moved = service.move_inventory(
+                    worker_conn,
+                    item_id=item["item_id"],
+                    quantity=4,
+                    from_location="STOCK",
+                    to_location="BENCH_MOVE",
+                    note="concurrent move",
+                )
+                worker_conn.commit()
+                outcome: tuple[str, str | int] = ("ok", int(moved["log_id"]))
+            except AppError as exc:
+                worker_conn.rollback()
+                outcome = ("error", exc.code)
+            with outcomes_lock:
+                outcomes.append(outcome)
+        finally:
+            worker_conn.close()
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    start.wait(timeout=5)
+    for thread in threads:
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+
+    assert len(outcomes) == 2
+    assert sum(1 for status, _ in outcomes if status == "ok") == 1
+    assert sum(1 for status, detail in outcomes if status == "error" and detail == "INSUFFICIENT_STOCK") == 1
+
+    check_conn = get_connection(database_url)
+    try:
+        assert _inventory_qty(check_conn, item["item_id"], "STOCK") == 1
+        assert _inventory_qty(check_conn, item["item_id"], "BENCH_MOVE") == 4
+    finally:
+        check_conn.close()
+
+
+def test_concurrent_order_arrival_is_applied_once(conn, database_url: str):
+    item = _create_basic_item(conn, item_number="ITEM-ARRIVE-CONCURRENT")
+    import_result = service.import_orders_from_content(
+        conn,
+        supplier_name="SupplierConcurrentArrival",
+        content=(
+            "item_number,quantity,quotation_number,issue_date,order_date,expected_arrival,quotation_document_url\n"
+            f"{item['item_number']},3,Q-ARRIVE-CONCURRENT-001,2026-04-01,2026-04-01,2026-04-10,https://example.sharepoint.com/sites/procurement/Q-ARRIVE-CONCURRENT-001.pdf\n"
+        ).encode("utf-8"),
+        source_name="arrival_concurrent.csv",
+    )
+    order_id = int(import_result["order_ids"][0])
+    conn.commit()
+
+    start = threading.Barrier(3)
+    outcomes: list[tuple[str, str | int]] = []
+    outcomes_lock = threading.Lock()
+
+    def worker() -> None:
+        worker_conn = get_connection(database_url)
+        try:
+            start.wait(timeout=5)
+            try:
+                result = service.process_order_arrival(worker_conn, order_id=order_id)
+                worker_conn.commit()
+                outcome: tuple[str, str | int] = ("ok", int(result["arrived_quantity"]))
+            except AppError as exc:
+                worker_conn.rollback()
+                outcome = ("error", exc.code)
+            with outcomes_lock:
+                outcomes.append(outcome)
+        finally:
+            worker_conn.close()
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    start.wait(timeout=5)
+    for thread in threads:
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+
+    assert len(outcomes) == 2
+    assert sum(1 for status, _ in outcomes if status == "ok") == 1
+    assert sum(1 for status, detail in outcomes if status == "error" and detail == "ORDER_ALREADY_ARRIVED") == 1
+
+    check_conn = get_connection(database_url)
+    try:
+        order = service.get_order(check_conn, order_id)
+        assert order["status"] == "Arrived"
+        assert _inventory_qty(check_conn, item["item_id"], "STOCK") == 3
+        arrival_logs = check_conn.execute(
+            "SELECT COUNT(*) AS count FROM transaction_log WHERE batch_id = ?",
+            (f"arrival-{order_id}",),
+        ).fetchone()
+        assert int(arrival_logs["count"]) == 1
+    finally:
+        check_conn.close()
+
+
+def test_concurrent_reservation_release_only_one_full_release_applies(conn, database_url: str):
+    item = _create_basic_item(conn, item_number="ITEM-REL-CONCURRENT")
+    service.adjust_inventory(
+        conn,
+        item_id=item["item_id"],
+        quantity_delta=6,
+        location="STOCK",
+        note="seed concurrent release",
+    )
+    reservation = service.create_reservation(
+        conn,
+        {
+            "item_id": item["item_id"],
+            "quantity": 4,
+            "purpose": "concurrent release",
+        },
+    )
+    conn.commit()
+
+    start = threading.Barrier(3)
+    outcomes: list[tuple[str, str]] = []
+    outcomes_lock = threading.Lock()
+
+    def worker() -> None:
+        worker_conn = get_connection(database_url)
+        try:
+            start.wait(timeout=5)
+            try:
+                service.release_reservation(worker_conn, reservation["reservation_id"], quantity=4)
+                worker_conn.commit()
+                outcome = ("ok", "released")
+            except AppError as exc:
+                worker_conn.rollback()
+                outcome = ("error", exc.code)
+            with outcomes_lock:
+                outcomes.append(outcome)
+        finally:
+            worker_conn.close()
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    start.wait(timeout=5)
+    for thread in threads:
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+
+    assert len(outcomes) == 2
+    assert sum(1 for status, _ in outcomes if status == "ok") == 1
+    assert sum(1 for status, detail in outcomes if status == "error" and detail == "RESERVATION_NOT_ACTIVE") == 1
+
+    check_conn = get_connection(database_url)
+    try:
+        restored = service.get_reservation(check_conn, reservation["reservation_id"])
+        assert restored["status"] == "RELEASED"
+        active_alloc = check_conn.execute(
+            """
+            SELECT COALESCE(SUM(quantity), 0) AS qty
+            FROM reservation_allocations
+            WHERE reservation_id = ? AND status = 'ACTIVE'
+            """,
+            (reservation["reservation_id"],),
+        ).fetchone()
+        assert int(active_alloc["qty"]) == 0
+    finally:
+        check_conn.close()
+
+
+def test_concurrent_reservation_consume_only_one_full_consume_applies(conn, database_url: str):
+    item = _create_basic_item(conn, item_number="ITEM-CONSUME-CONCURRENT")
+    service.adjust_inventory(
+        conn,
+        item_id=item["item_id"],
+        quantity_delta=6,
+        location="STOCK",
+        note="seed concurrent consume",
+    )
+    reservation = service.create_reservation(
+        conn,
+        {
+            "item_id": item["item_id"],
+            "quantity": 4,
+            "purpose": "concurrent consume",
+        },
+    )
+    conn.commit()
+
+    start = threading.Barrier(3)
+    outcomes: list[tuple[str, str]] = []
+    outcomes_lock = threading.Lock()
+
+    def worker() -> None:
+        worker_conn = get_connection(database_url)
+        try:
+            start.wait(timeout=5)
+            try:
+                service.consume_reservation(worker_conn, reservation["reservation_id"], quantity=4)
+                worker_conn.commit()
+                outcome = ("ok", "consumed")
+            except AppError as exc:
+                worker_conn.rollback()
+                outcome = ("error", exc.code)
+            with outcomes_lock:
+                outcomes.append(outcome)
+        finally:
+            worker_conn.close()
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    start.wait(timeout=5)
+    for thread in threads:
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+
+    assert len(outcomes) == 2
+    assert sum(1 for status, _ in outcomes if status == "ok") == 1
+    assert sum(1 for status, detail in outcomes if status == "error" and detail == "RESERVATION_NOT_ACTIVE") == 1
+
+    check_conn = get_connection(database_url)
+    try:
+        consumed = service.get_reservation(check_conn, reservation["reservation_id"])
+        assert consumed["status"] == "CONSUMED"
+        assert _inventory_qty(check_conn, item["item_id"], "STOCK") == 2
+    finally:
+        check_conn.close()
+
+
+def test_concurrent_undo_only_one_compensation_applies(conn, database_url: str):
+    item = _create_basic_item(conn, item_number="ITEM-UNDO-CONCURRENT")
+    service.adjust_inventory(
+        conn,
+        item_id=item["item_id"],
+        quantity_delta=6,
+        location="STOCK",
+        note="seed undo concurrent",
+    )
+    move_log = service.move_inventory(
+        conn,
+        item_id=item["item_id"],
+        quantity=4,
+        from_location="STOCK",
+        to_location="BENCH_UNDO",
+        note="undo concurrency target",
+    )
+    conn.commit()
+
+    start = threading.Barrier(3)
+    outcomes: list[tuple[str, str | int]] = []
+    outcomes_lock = threading.Lock()
+
+    def worker() -> None:
+        worker_conn = get_connection(database_url)
+        try:
+            start.wait(timeout=5)
+            try:
+                result = service.undo_transaction(worker_conn, move_log["log_id"])
+                worker_conn.commit()
+                outcome: tuple[str, str | int] = ("ok", int(result["applied_quantity"]))
+            except AppError as exc:
+                worker_conn.rollback()
+                outcome = ("error", exc.code)
+            with outcomes_lock:
+                outcomes.append(outcome)
+        finally:
+            worker_conn.close()
+
+    threads = [threading.Thread(target=worker) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    start.wait(timeout=5)
+    for thread in threads:
+        thread.join(timeout=10)
+        assert not thread.is_alive()
+
+    assert len(outcomes) == 2
+    assert sum(1 for status, _ in outcomes if status == "ok") == 1
+    assert sum(1 for status, detail in outcomes if status == "error" and detail == "ALREADY_UNDONE") == 1
+
+    check_conn = get_connection(database_url)
+    try:
+        assert _inventory_qty(check_conn, item["item_id"], "STOCK") == 6
+        assert _inventory_qty(check_conn, item["item_id"], "BENCH_UNDO") == 0
+        undo_rows = check_conn.execute(
+            "SELECT COUNT(*) AS count FROM transaction_log WHERE undo_of_log_id = ?",
+            (move_log["log_id"],),
+        ).fetchone()
+        assert int(undo_rows["count"]) == 1
+    finally:
+        check_conn.close()
+
+
+def test_operational_integrity_summary_detects_reservation_allocation_mismatch(conn):
+    item = _create_basic_item(conn, item_number="ITEM-INTEGRITY-SUMMARY")
+    service.adjust_inventory(
+        conn,
+        item_id=item["item_id"],
+        quantity_delta=5,
+        location="STOCK",
+        note="seed integrity summary",
+    )
+    reservation = service.create_reservation(
+        conn,
+        {
+            "item_id": item["item_id"],
+            "quantity": 4,
+            "purpose": "integrity summary",
+        },
+    )
+    conn.execute(
+        "UPDATE reservation_allocations SET quantity = 2 WHERE reservation_id = ? AND status = 'ACTIVE'",
+        (reservation["reservation_id"],),
+    )
+
+    summary = service.get_operational_integrity_summary(conn)
+
+    assert summary["ok"] is False
+    assert summary["checks"]["active_reservation_quantity_mismatches"] == 1
+    assert summary["checks"]["duplicate_undo_logs"] == 0
+
 def test_reservation_partial_quantity_cannot_exceed_remaining(conn):
     item = _create_basic_item(conn, item_number="ITEM-RES-PART-ERR")
     service.adjust_inventory(
