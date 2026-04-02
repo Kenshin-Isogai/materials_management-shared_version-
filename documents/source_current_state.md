@@ -65,6 +65,7 @@ Last updated: 2026-04-02 (JST)
 - Request-size enforcement now rejects bodies larger than `MAX_UPLOAD_BYTES` with `413 REQUEST_TOO_LARGE`, aligning backend behavior with the first-rollout 32 MB upload ceiling.
 - Business rules are centralized in `backend/app/service.py` and shared by API and CLI.
 - DB initialization now treats the explicit `init_db(database_url=...)` argument as authoritative for Alembic runs, avoiding mismatches between startup/test target DBs and an unrelated ambient `DATABASE_URL`.
+- direct Alembic CLI runs now also prefer the ambient `DATABASE_URL` over `backend/alembic.ini`'s localhost fallback, keeping Cloud Run migration jobs on the configured Cloud SQL target.
 - Requests now pass through Bearer-token identity resolution.
   - `Authorization: Bearer <JWT>` is the browser/API identity input
   - `JWT_VERIFIER=shared_secret` remains the local/test fixture path, while `JWT_VERIFIER=jwks` now supports deployed OIDC/JWKS verification

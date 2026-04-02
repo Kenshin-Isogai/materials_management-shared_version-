@@ -2,6 +2,19 @@
 
 ### Changed
 
+- Fixed Cloud Run migration job DB target selection.
+  - `backend/alembic/env.py` now prefers `DATABASE_URL` over `backend/alembic.ini`'s localhost fallback, so `uv run alembic upgrade head` inside the Cloud Run migration job uses the Secret Manager Cloud SQL connection string instead of trying `127.0.0.1:5432`
+  - added non-DB regression coverage that exercises the Alembic env script with both values present and proves the environment-provided URL wins
+
+### Tests
+
+- Backend targeted pytest:
+  - `uv run --project backend python -m pytest backend/tests/test_runtime_config.py -q --import-mode=importlib`
+
+## 2026-04-02
+
+### Changed
+
 - Hardened DB target selection, CRUD conflict handling, and Items import failure behavior.
   - backend DB initialization now forces Alembic to use the explicit `database_url` passed into `init_db(...)`, preventing startup/test migration drift from an unrelated ambient `DATABASE_URL`
   - duplicate manufacturer/supplier creates now return controlled `409` API responses instead of bubbling raw integrity failures

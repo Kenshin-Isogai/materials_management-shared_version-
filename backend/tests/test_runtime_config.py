@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import os
+import sys
 import tempfile
+import types
+from contextlib import nullcontext
 from pathlib import Path
 
 import app.config as config_module
@@ -143,3 +147,57 @@ def test_runtime_config_honors_explicit_pool_and_cors_settings():
         os.environ.clear()
         os.environ.update(original_env)
         _reload_config()
+
+
+def test_alembic_env_prefers_database_url_env_over_ini(monkeypatch):
+    migration_env_path = Path(__file__).resolve().parents[1] / "alembic" / "env.py"
+    captured: dict[str, object] = {}
+
+    class _Config:
+        config_file_name = None
+
+        @staticmethod
+        def get_main_option(name: str) -> str:
+            if name == "sqlalchemy.url":
+                return "postgresql+psycopg://fallback:fallback@127.0.0.1:5432/materials_db"
+            return ""
+
+    fake_context = types.SimpleNamespace(
+        config=_Config(),
+        is_offline_mode=lambda: True,
+        configure=lambda **kwargs: captured.update(kwargs),
+        begin_transaction=lambda: nullcontext(),
+        run_migrations=lambda: captured.setdefault("ran_migrations", True),
+    )
+    fake_alembic = types.ModuleType("alembic")
+    fake_alembic.context = fake_context
+    fake_sqlalchemy = types.ModuleType("sqlalchemy")
+    fake_sqlalchemy.create_engine = lambda *args, **kwargs: None
+    fake_sqlalchemy.pool = types.SimpleNamespace(NullPool=object())
+
+    monkeypatch.setenv(
+        "DATABASE_URL",
+        "postgresql+psycopg://cloudrun:secret@/materials_db?host=/cloudsql/project:region:instance",
+    )
+    previous_alembic = sys.modules.get("alembic")
+    previous_sqlalchemy = sys.modules.get("sqlalchemy")
+    sys.modules["alembic"] = fake_alembic
+    sys.modules["sqlalchemy"] = fake_sqlalchemy
+
+    try:
+        spec = importlib.util.spec_from_file_location("test_alembic_env_module", migration_env_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    finally:
+        if previous_alembic is None:
+            sys.modules.pop("alembic", None)
+        else:
+            sys.modules["alembic"] = previous_alembic
+        if previous_sqlalchemy is None:
+            sys.modules.pop("sqlalchemy", None)
+        else:
+            sys.modules["sqlalchemy"] = previous_sqlalchemy
+
+    assert captured["url"] == os.environ["DATABASE_URL"]
+    assert captured["ran_migrations"] is True

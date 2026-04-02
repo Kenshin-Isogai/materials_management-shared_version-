@@ -15,7 +15,7 @@ target_metadata = None
 
 
 def _sqlalchemy_url() -> str:
-    return config.get_main_option("sqlalchemy.url") or os.getenv("DATABASE_URL")
+    return os.getenv("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
 
 
 def run_migrations_offline() -> None:

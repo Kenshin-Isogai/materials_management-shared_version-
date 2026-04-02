@@ -9,6 +9,7 @@ This document explains the implemented architecture of the Materials Management 
 - Backend targets PostgreSQL through a SQLAlchemy-managed engine and Alembic baseline migration.
 - The raw-SQL service layer is preserved behind a compatibility connection wrapper while the storage engine is PostgreSQL.
 - `init_db(database_url=...)` is the authoritative migration target; startup/test helpers should not rely on ambient `DATABASE_URL` overriding an explicit connection string.
+- Alembic CLI execution now also prefers `DATABASE_URL` over the fallback `backend/alembic.ini` localhost URL, so Cloud Run migration jobs use Secret Manager-provided Cloud SQL connection strings instead of accidentally targeting `127.0.0.1`.
 - Runtime mode is now explicit.
   - local/shared-server Docker mode: `APP_RUNTIME_TARGET=local`
   - Cloud Run mode: `APP_RUNTIME_TARGET=cloud_run` or implicit Cloud Run `K_SERVICE`
