@@ -2,6 +2,46 @@
 
 ### Changed
 
+- Raised the assurance bar around auth, reservation undo, and concurrent inventory mutation flows.
+  - user create/update now map duplicate username, email, and external-identity collisions into controlled `409` domain errors instead of leaking raw DB integrity failures as `500`
+  - reservation release/consume transaction logs now carry event-specific identifiers so undo can target the exact reservation event
+  - undo of reservation-originated consume now restores both the original inventory location and the reservation allocation state instead of falling back to `STOCK`
+  - reservation and inventory mutation flows now use consistent advisory-lock ordering plus atomic inventory upsert/update behavior to reduce concurrent over-allocation, duplicate first-row insert races, and reservation/inventory deadlock risk
+- Strengthened automated validation for the same high-risk paths.
+  - added backend concurrency regression coverage for simultaneous reservation allocation and concurrent first-row inventory adjustment
+  - added API integration coverage for duplicate-user conflicts plus reservation release/consume undo behavior
+  - added an isolated Playwright spec covering duplicate-email handling in `/users` and reservation consume-then-undo behavior through `/reserve` and `/history`
+  - `run-e2e.ps1` now bootstraps an isolated auth-enforced stack for Playwright by generating a test JWT, setting OIDC/shared-secret env vars for the temporary Compose project, and creating the initial `e2e.admin` user automatically
+
+### Tests
+
+- Backend targeted pytest against Docker test DB:
+  - `uv run --project backend python -m pytest backend/tests/test_service_transactions.py -q --import-mode=importlib -k "concurrent_reservations or concurrent_inventory_adjust or reservation_release_undo or reservation_consume_undo"`
+  - `uv run --project backend python -m pytest backend/tests/test_api_integration.py -q --import-mode=importlib -k "duplicate_email or duplicate_identity_subject or reservation_release_undo_endpoint or reservation_consume_undo_endpoint"`
+- Isolated Playwright E2E:
+  - `.\run-e2e.ps1 08-auth-reservations.spec.ts`
+
+## 2026-04-02
+
+### Changed
+
+- Hardened reservation undo and inventory concurrency handling after backend review.
+  - reservation release and consume logs now carry event-specific identifiers so undo can target the exact reservation event instead of failing on release logs or restoring consumed stock to the wrong location
+  - undo of reservation-originated consume now restores both inventory at the original allocation location and the reservation's active allocation state
+  - inventory and reservation mutation paths now use PostgreSQL advisory transaction locks plus atomic inventory upsert/update behavior to reduce concurrent over-allocation and duplicate first-row insert races
+- Normalized admin user identity conflicts into domain errors.
+  - duplicate username, case-insensitive email, and `(identity_provider, external_subject)` collisions in user create/update flows now return controlled `409` responses instead of bubbling raw DB integrity failures
+  - added backend regression coverage for duplicate-user API conflicts and reservation release/consume undo behavior
+
+### Tests
+
+- Backend compile check: `uv run --project backend python -m compileall backend/app/service.py backend/app/api.py backend/tests/test_service_transactions.py backend/tests/test_api_integration.py`
+- Targeted backend pytest selection attempted with `PYTHONPATH=backend`, but the current environment skipped DB-backed tests because `TEST_DATABASE_URL` / `DATABASE_URL` was not available in the test session
+
+## 2026-04-02
+
+### Changed
+
 - Redesigned the authentication UI from an inline header form to a dedicated `/login` page.
   - created a new standalone `LoginPage.tsx` that renders outside `AppShell` as a full-screen login experience with premium glassmorphic card styling and entrance animation
   - the login page shows Identity Platform email/password sign-in and sign-up when `VITE_IDENTITY_PLATFORM_API_KEY` is configured, and falls back to bearer-token input for localhost/non-IP environments

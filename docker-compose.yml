@@ -32,6 +32,13 @@ services:
       DB_POOL_TIMEOUT: ${DB_POOL_TIMEOUT:-30}
       DB_POOL_RECYCLE_SECONDS: ${DB_POOL_RECYCLE_SECONDS:-0}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost,http://127.0.0.1}
+      AUTH_MODE: ${AUTH_MODE:-none}
+      RBAC_MODE: ${RBAC_MODE:-none}
+      JWT_SHARED_SECRET: ${JWT_SHARED_SECRET:-}
+      JWT_SIGNING_ALGORITHMS: ${JWT_SIGNING_ALGORITHMS:-HS256}
+      OIDC_PROVIDER: ${OIDC_PROVIDER:-oidc}
+      OIDC_EXPECTED_ISSUER: ${OIDC_EXPECTED_ISSUER:-}
+      OIDC_EXPECTED_AUDIENCE: ${OIDC_EXPECTED_AUDIENCE:-}
     volumes:
       - appdata:${APP_DATA_ROOT:-/app/data}
     depends_on:
@@ -48,6 +55,7 @@ services:
       context: ./frontend
       args:
         VITE_API_BASE: /api
+        VITE_IDENTITY_PLATFORM_API_KEY: ${VITE_IDENTITY_PLATFORM_API_KEY:-}
     restart: unless-stopped
     depends_on:
       backend:

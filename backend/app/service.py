@@ -11,7 +11,7 @@ import unicodedata
 from pathlib import Path
 import shutil
 import sqlite3
-from typing import Any, Iterable
+from typing import Any, Iterable, NoReturn
 from uuid import uuid4
 
 from .config import (
@@ -917,35 +917,44 @@ def create_user(conn: sqlite3.Connection, data: dict[str, Any]) -> dict[str, Any
     role = _require_valid_role(raw_role)
     is_active = bool(data.get("is_active", True))
     created_at = now_jst_iso()
-    cursor = conn.execute(
-        """
-        INSERT INTO users (
-            username,
-            display_name,
-            email,
-            external_subject,
-            identity_provider,
-            hosted_domain,
-            role,
-            is_active,
-            created_at,
-            updated_at
+    try:
+        cursor = conn.execute(
+            """
+            INSERT INTO users (
+                username,
+                display_name,
+                email,
+                external_subject,
+                identity_provider,
+                hosted_domain,
+                role,
+                is_active,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                username,
+                display_name,
+                email,
+                external_subject,
+                identity_provider,
+                hosted_domain,
+                role,
+                is_active,
+                created_at,
+                created_at,
+            ),
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            username,
-            display_name,
-            email,
-            external_subject,
-            identity_provider,
-            hosted_domain,
-            role,
-            is_active,
-            created_at,
-            created_at,
-        ),
-    )
+    except sqlite3.IntegrityError as exc:
+        _raise_user_identity_conflict(
+            exc,
+            username=username,
+            email=email,
+            identity_provider=identity_provider,
+            external_subject=external_subject,
+        )
     return get_user(conn, int(cursor.lastrowid))
 
 
@@ -956,34 +965,43 @@ def update_user(conn: sqlite3.Connection, user_id: int, data: dict[str, Any]) ->
     email, external_subject, identity_provider, hosted_domain = _normalize_user_identity_fields(data, existing=existing)
     role = _require_valid_role(str(data.get("role", existing["role"])))
     is_active = bool(data.get("is_active", existing["is_active"]))
-    conn.execute(
-        """
-        UPDATE users
-        SET
-            username = ?,
-            display_name = ?,
-            email = ?,
-            external_subject = ?,
-            identity_provider = ?,
-            hosted_domain = ?,
-            role = ?,
-            is_active = ?,
-            updated_at = ?
-        WHERE user_id = ?
-        """,
-        (
-            username,
-            display_name,
-            email,
-            external_subject,
-            identity_provider,
-            hosted_domain,
-            role,
-            is_active,
-            now_jst_iso(),
-            user_id,
-        ),
-    )
+    try:
+        conn.execute(
+            """
+            UPDATE users
+            SET
+                username = ?,
+                display_name = ?,
+                email = ?,
+                external_subject = ?,
+                identity_provider = ?,
+                hosted_domain = ?,
+                role = ?,
+                is_active = ?,
+                updated_at = ?
+            WHERE user_id = ?
+            """,
+            (
+                username,
+                display_name,
+                email,
+                external_subject,
+                identity_provider,
+                hosted_domain,
+                role,
+                is_active,
+                now_jst_iso(),
+                user_id,
+            ),
+        )
+    except sqlite3.IntegrityError as exc:
+        _raise_user_identity_conflict(
+            exc,
+            username=username,
+            email=email,
+            identity_provider=identity_provider,
+            external_subject=external_subject,
+        )
     return get_user(conn, user_id)
 
 
@@ -1048,6 +1066,46 @@ def _ensure_hosted_domain_matches(user: dict[str, Any], hosted_domain: str | Non
                 "username": user.get("username"),
             },
         )
+
+
+def _raise_user_identity_conflict(
+    exc: sqlite3.IntegrityError,
+    *,
+    username: str,
+    email: str | None,
+    identity_provider: str | None,
+    external_subject: str | None,
+) -> NoReturn:
+    message = str(exc).lower()
+    if "idx_users_username" in message or "users_username_key" in message or "(username)" in message:
+        raise AppError(
+            code="USERNAME_ALREADY_EXISTS",
+            message="Username is already in use",
+            status_code=409,
+            details={"username": username},
+        ) from exc
+    if "idx_users_email_ci" in message or "lower(email" in message:
+        raise AppError(
+            code="EMAIL_ALREADY_EXISTS",
+            message="Email is already mapped to another user",
+            status_code=409,
+            details={"email": email},
+        ) from exc
+    if "idx_users_external_identity" in message or "(identity_provider, external_subject)" in message:
+        raise AppError(
+            code="IDENTITY_ALREADY_EXISTS",
+            message="Identity subject is already mapped to another user",
+            status_code=409,
+            details={
+                "identity_provider": identity_provider,
+                "external_subject": external_subject,
+            },
+        ) from exc
+    raise AppError(
+        code="USER_IDENTITY_CONFLICT",
+        message="User identity fields conflict with an existing user",
+        status_code=409,
+    ) from exc
 
 
 def _require_json_object(
@@ -1612,6 +1670,19 @@ def _get_projected_available_inventory(
     return available_now + pending_arrivals
 
 
+def _lock_inventory_item_state(conn: sqlite3.Connection, item_id: int) -> None:
+    conn.execute("SELECT pg_advisory_xact_lock(?, ?)", (7101, int(item_id)))
+
+
+def _lock_reservation_state(conn: sqlite3.Connection, reservation_id: int) -> None:
+    conn.execute("SELECT pg_advisory_xact_lock(?, ?)", (7102, int(reservation_id)))
+
+
+def _lock_reservation_item_state(conn: sqlite3.Connection, reservation_id: int, item_id: int) -> None:
+    _lock_reservation_state(conn, reservation_id)
+    _lock_inventory_item_state(conn, item_id)
+
+
 def _normalize_future_target_date(target_date: str | None, *, field_name: str = "target_date") -> str | None:
     normalized = normalize_optional_date(target_date, field_name)
     if normalized is not None and normalized < today_jst():
@@ -1630,9 +1701,34 @@ def _apply_inventory_delta(
     delta: int,
 ) -> int:
     normalized_location = require_non_empty(location, "location")
-    current = _get_inventory_quantity(conn, item_id, normalized_location)
-    updated = current + int(delta)
-    if updated < 0:
+    normalized_delta = int(delta)
+    timestamp = now_jst_iso()
+    if normalized_delta > 0:
+        row = conn.execute(
+            """
+            INSERT INTO inventory_ledger (item_id, location, quantity, last_updated)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT (item_id, location)
+            DO UPDATE SET
+                quantity = inventory_ledger.quantity + EXCLUDED.quantity,
+                last_updated = EXCLUDED.last_updated
+            RETURNING quantity
+            """,
+            (item_id, normalized_location, normalized_delta, timestamp),
+        ).fetchone()
+        return int(row["quantity"]) if row is not None else normalized_delta
+
+    row = conn.execute(
+        """
+        UPDATE inventory_ledger
+        SET quantity = quantity + ?, last_updated = ?
+        WHERE item_id = ? AND location = ? AND quantity + ? >= 0
+        RETURNING quantity
+        """,
+        (normalized_delta, timestamp, item_id, normalized_location, normalized_delta),
+    ).fetchone()
+    if row is None:
+        current = _get_inventory_quantity(conn, item_id, normalized_location)
         raise AppError(
             code="INSUFFICIENT_STOCK",
             message=f"Not enough inventory at {normalized_location}",
@@ -1644,27 +1740,11 @@ def _apply_inventory_delta(
                 "available": current,
             },
         )
+    updated = int(row["quantity"] or 0)
     if updated == 0:
         conn.execute(
-            "DELETE FROM inventory_ledger WHERE item_id = ? AND location = ?",
+            "DELETE FROM inventory_ledger WHERE item_id = ? AND location = ? AND quantity = 0",
             (item_id, normalized_location),
-        )
-    elif current == 0:
-        conn.execute(
-            """
-            INSERT INTO inventory_ledger (item_id, location, quantity, last_updated)
-            VALUES (?, ?, ?, ?)
-            """,
-            (item_id, normalized_location, updated, now_jst_iso()),
-        )
-    else:
-        conn.execute(
-            """
-            UPDATE inventory_ledger
-            SET quantity = ?, last_updated = ?
-            WHERE item_id = ? AND location = ?
-            """,
-            (updated, now_jst_iso(), item_id, normalized_location),
         )
     return updated
 
@@ -1708,6 +1788,33 @@ def _log_transaction(
         ),
     )
     return get_transaction(conn, int(cur.lastrowid))
+
+
+_RESERVATION_CREATE_BATCH_RE = re.compile(r"^reservation-(\d+)$")
+_RESERVATION_RELEASE_BATCH_RE = re.compile(r"^reservation-release-(\d+)-log-(\d+)$")
+_RESERVATION_CONSUME_BATCH_RE = re.compile(r"^reservation-consume-(\d+)-log-(\d+)$")
+
+
+def _set_transaction_batch_id(conn: sqlite3.Connection, log_id: int, batch_id: str) -> None:
+    conn.execute("UPDATE transaction_log SET batch_id = ? WHERE log_id = ?", (batch_id, log_id))
+
+
+def _append_reservation_tx_marker(note: str | None, log_id: int) -> str:
+    base = str(note or "").rstrip()
+    marker = f"[[tx:{int(log_id)}]]"
+    return f"{base} {marker}".strip() if base else marker
+
+
+def _remove_reservation_tx_marker(note: str | None, log_id: int) -> str | None:
+    if note is None:
+        return None
+    cleaned = re.sub(rf"\s*\[\[tx:{int(log_id)}]]$", "", str(note)).strip()
+    return cleaned or None
+
+
+def _reservation_event_note(override_note: str | None, existing_note: Any, log_id: int) -> str:
+    base_note = override_note if override_note is not None else _remove_reservation_tx_marker(existing_note, log_id)
+    return _append_reservation_tx_marker(None if base_note is None else str(base_note), log_id)
 
 
 def _get_or_create_quotation(
@@ -4498,6 +4605,7 @@ def move_inventory(
         "ITEM_NOT_FOUND",
         f"Item with id {item_id} not found",
     )
+    _lock_inventory_item_state(conn, item_id)
     _apply_inventory_delta(conn, item_id, from_location, -int(quantity))
     _apply_inventory_delta(conn, item_id, to_location, int(quantity))
     return _log_transaction(
@@ -4530,6 +4638,7 @@ def consume_inventory(
         "ITEM_NOT_FOUND",
         f"Item with id {item_id} not found",
     )
+    _lock_inventory_item_state(conn, item_id)
     _apply_inventory_delta(conn, item_id, from_location, -int(quantity))
     return _log_transaction(
         conn,
@@ -4566,6 +4675,7 @@ def adjust_inventory(
         "ITEM_NOT_FOUND",
         f"Item with id {item_id} not found",
     )
+    _lock_inventory_item_state(conn, item_id)
     _apply_inventory_delta(conn, item_id, location, int(quantity_delta))
     from_location = None if quantity_delta > 0 else location
     to_location = location if quantity_delta > 0 else None
@@ -8559,6 +8669,7 @@ def create_reservation(conn: sqlite3.Connection, payload: dict[str, Any]) -> dic
         "ITEM_NOT_FOUND",
         f"Item with id {item_id} not found",
     )
+    _lock_inventory_item_state(conn, item_id)
     available_rows = _list_item_available_inventory(conn, item_id)
     total_available = sum(qty for _, qty in available_rows)
     if total_available < quantity:
@@ -8662,6 +8773,8 @@ def release_reservation(
     note: str | None = None,
 ) -> dict[str, Any]:
     reservation = get_reservation(conn, reservation_id)
+    _lock_reservation_item_state(conn, reservation_id, int(reservation["item_id"]))
+    reservation = get_reservation(conn, reservation_id)
     if reservation["status"] != "ACTIVE":
         raise AppError(
             code="RESERVATION_NOT_ACTIVE",
@@ -8684,7 +8797,7 @@ def release_reservation(
     item_id = int(reservation["item_id"])
     allocations = conn.execute(
         """
-        SELECT allocation_id, quantity
+        SELECT allocation_id, location, quantity, note
         FROM reservation_allocations
         WHERE reservation_id = ? AND status = 'ACTIVE'
         ORDER BY allocation_id
@@ -8703,6 +8816,22 @@ def release_reservation(
                 "active_allocation_quantity": allocatable_quantity,
             },
         )
+    log = _log_transaction(
+        conn,
+        operation_type="RESERVE",
+        item_id=item_id,
+        quantity=release_quantity,
+        from_location=None,
+        to_location=None,
+        note=note or (
+            f"release reservation {reservation_id}"
+            if reserved_quantity == release_quantity
+            else f"partial release reservation {reservation_id} ({release_quantity}/{reserved_quantity})"
+        ),
+        batch_id=f"reservation-release-{reservation_id}",
+    )
+    log_id = int(log["log_id"])
+    _set_transaction_batch_id(conn, log_id, f"reservation-release-{reservation_id}-log-{log_id}")
     remaining_to_release = release_quantity
     for alloc in allocations:
         if remaining_to_release <= 0:
@@ -8710,14 +8839,15 @@ def release_reservation(
         alloc_qty = int(alloc["quantity"])
         consume_alloc = min(alloc_qty, remaining_to_release)
         left_qty = alloc_qty - consume_alloc
+        allocation_note = _reservation_event_note(note, alloc["note"], log_id)
         if left_qty == 0:
             conn.execute(
                 """
                 UPDATE reservation_allocations
-                SET status = 'RELEASED', released_at = ?, note = COALESCE(?, note)
+                SET status = 'RELEASED', released_at = ?, note = ?
                 WHERE allocation_id = ?
                 """,
-                (now_jst_iso(), note, int(alloc["allocation_id"])),
+                (log["timestamp"], allocation_note, int(alloc["allocation_id"])),
             )
         else:
             conn.execute(
@@ -8729,11 +8859,17 @@ def release_reservation(
                 INSERT INTO reservation_allocations (
                     reservation_id, item_id, location, quantity, status, created_at, released_at, note
                 )
-                SELECT reservation_id, item_id, location, ?, 'RELEASED', ?, ?, COALESCE(?, note)
+                SELECT reservation_id, item_id, location, ?, 'RELEASED', ?, ?, ?
                 FROM reservation_allocations
                 WHERE allocation_id = ?
                 """,
-                (consume_alloc, now_jst_iso(), now_jst_iso(), note, int(alloc["allocation_id"])),
+                (
+                    consume_alloc,
+                    log["timestamp"],
+                    log["timestamp"],
+                    allocation_note,
+                    int(alloc["allocation_id"]),
+                ),
             )
         remaining_to_release -= consume_alloc
 
@@ -8745,7 +8881,7 @@ def release_reservation(
             SET status = 'RELEASED', released_at = ?
             WHERE reservation_id = ?
             """,
-            (now_jst_iso(), reservation_id),
+            (log["timestamp"], reservation_id),
         )
     else:
         conn.execute(
@@ -8756,22 +8892,6 @@ def release_reservation(
             """,
             (remaining, reservation_id),
         )
-
-    log_note = note or (
-        f"release reservation {reservation_id}"
-        if remaining == 0
-        else f"partial release reservation {reservation_id} ({release_quantity}/{reserved_quantity})"
-    )
-    _log_transaction(
-        conn,
-        operation_type="RESERVE",
-        item_id=item_id,
-        quantity=release_quantity,
-        from_location=None,
-        to_location=None,
-        note=log_note,
-        batch_id=f"reservation-release-{reservation_id}",
-    )
     return get_reservation(conn, reservation_id)
 
 
@@ -8782,6 +8902,8 @@ def consume_reservation(
     quantity: int | None = None,
     note: str | None = None,
 ) -> dict[str, Any]:
+    reservation = get_reservation(conn, reservation_id)
+    _lock_reservation_item_state(conn, reservation_id, int(reservation["item_id"]))
     reservation = get_reservation(conn, reservation_id)
     if reservation["status"] != "ACTIVE":
         raise AppError(
@@ -8805,7 +8927,7 @@ def consume_reservation(
     item_id = int(reservation["item_id"])
     allocations = conn.execute(
         """
-        SELECT allocation_id, location, quantity
+        SELECT allocation_id, location, quantity, note
         FROM reservation_allocations
         WHERE reservation_id = ? AND status = 'ACTIVE'
         ORDER BY allocation_id
@@ -8824,6 +8946,22 @@ def consume_reservation(
                 "active_allocation_quantity": allocatable_quantity,
             },
         )
+    log = _log_transaction(
+        conn,
+        operation_type="CONSUME",
+        item_id=item_id,
+        quantity=consume_quantity,
+        from_location=None,
+        to_location=None,
+        note=note or (
+            f"consume reservation {reservation_id}"
+            if reserved_quantity == consume_quantity
+            else f"partial consume reservation {reservation_id} ({consume_quantity}/{reserved_quantity})"
+        ),
+        batch_id=f"reservation-consume-{reservation_id}",
+    )
+    log_id = int(log["log_id"])
+    _set_transaction_batch_id(conn, log_id, f"reservation-consume-{reservation_id}-log-{log_id}")
     remaining_to_consume = consume_quantity
     for alloc in allocations:
         if remaining_to_consume <= 0:
@@ -8832,14 +8970,15 @@ def consume_reservation(
         use_qty = min(alloc_qty, remaining_to_consume)
         _apply_inventory_delta(conn, item_id, str(alloc["location"]), -use_qty)
         left_qty = alloc_qty - use_qty
+        allocation_note = _reservation_event_note(note, alloc["note"], log_id)
         if left_qty == 0:
             conn.execute(
                 """
                 UPDATE reservation_allocations
-                SET status = 'CONSUMED', released_at = ?, note = COALESCE(?, note)
+                SET status = 'CONSUMED', released_at = ?, note = ?
                 WHERE allocation_id = ?
                 """,
-                (now_jst_iso(), note, int(alloc["allocation_id"])),
+                (log["timestamp"], allocation_note, int(alloc["allocation_id"])),
             )
         else:
             conn.execute(
@@ -8851,11 +8990,17 @@ def consume_reservation(
                 INSERT INTO reservation_allocations (
                     reservation_id, item_id, location, quantity, status, created_at, released_at, note
                 )
-                SELECT reservation_id, item_id, location, ?, 'CONSUMED', ?, ?, COALESCE(?, note)
+                SELECT reservation_id, item_id, location, ?, 'CONSUMED', ?, ?, ?
                 FROM reservation_allocations
                 WHERE allocation_id = ?
                 """,
-                (use_qty, now_jst_iso(), now_jst_iso(), note, int(alloc["allocation_id"])),
+                (
+                    use_qty,
+                    log["timestamp"],
+                    log["timestamp"],
+                    allocation_note,
+                    int(alloc["allocation_id"]),
+                ),
             )
         remaining_to_consume -= use_qty
 
@@ -8867,7 +9012,7 @@ def consume_reservation(
             SET status = 'CONSUMED', released_at = ?
             WHERE reservation_id = ?
             """,
-            (now_jst_iso(), reservation_id),
+            (log["timestamp"], reservation_id),
         )
     else:
         conn.execute(
@@ -8878,22 +9023,6 @@ def consume_reservation(
             """,
             (remaining, reservation_id),
         )
-
-    log_note = note or (
-        f"consume reservation {reservation_id}"
-        if remaining == 0
-        else f"partial consume reservation {reservation_id} ({consume_quantity}/{reserved_quantity})"
-    )
-    _log_transaction(
-        conn,
-        operation_type="CONSUME",
-        item_id=item_id,
-        quantity=consume_quantity,
-        from_location=None,
-        to_location=None,
-        note=log_note,
-        batch_id=f"reservation-consume-{reservation_id}",
-    )
     return get_reservation(conn, reservation_id)
 
 
@@ -12611,6 +12740,175 @@ def get_transaction(conn: sqlite3.Connection, log_id: int) -> dict[str, Any]:
     return dict(row)
 
 
+def _find_reservation_transaction_context(batch_id: Any) -> tuple[str | None, int | None, int | None]:
+    normalized = str(batch_id or "").strip()
+    match = _RESERVATION_RELEASE_BATCH_RE.match(normalized)
+    if match:
+        return "release", int(match.group(1)), int(match.group(2))
+    match = _RESERVATION_CONSUME_BATCH_RE.match(normalized)
+    if match:
+        return "consume", int(match.group(1)), int(match.group(2))
+    match = _RESERVATION_CREATE_BATCH_RE.match(normalized)
+    if match:
+        return "create", int(match.group(1)), None
+    return None, None, None
+
+
+def _get_reservation_undo_rows(
+    conn: sqlite3.Connection,
+    *,
+    reservation_id: int,
+    target_status: str,
+    log_id: int,
+) -> list[dict[str, Any]]:
+    marker = f"%[[tx:{int(log_id)}]]"
+    rows = conn.execute(
+        """
+        SELECT allocation_id, location, quantity, note
+        FROM reservation_allocations
+        WHERE reservation_id = ? AND status = ? AND note LIKE ?
+        ORDER BY allocation_id
+        """,
+        (reservation_id, target_status, marker),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _restore_reservation_allocation_rows(
+    conn: sqlite3.Connection,
+    *,
+    reservation_id: int,
+    rows: list[dict[str, Any]],
+    log_id: int,
+) -> None:
+    for row in rows:
+        active_row = conn.execute(
+            """
+            SELECT allocation_id, quantity
+            FROM reservation_allocations
+            WHERE reservation_id = ? AND status = 'ACTIVE' AND location = ?
+            ORDER BY allocation_id
+            LIMIT 1
+            """,
+            (reservation_id, str(row["location"])),
+        ).fetchone()
+        if active_row is not None:
+            conn.execute(
+                "UPDATE reservation_allocations SET quantity = ? WHERE allocation_id = ?",
+                (int(active_row["quantity"]) + int(row["quantity"]), int(active_row["allocation_id"])),
+            )
+            conn.execute("DELETE FROM reservation_allocations WHERE allocation_id = ?", (int(row["allocation_id"]),))
+            continue
+        conn.execute(
+            """
+            UPDATE reservation_allocations
+            SET status = 'ACTIVE', released_at = NULL, note = ?
+            WHERE allocation_id = ?
+            """,
+            (_remove_reservation_tx_marker(row.get("note"), log_id), int(row["allocation_id"])),
+        )
+
+
+def _undo_reservation_release(
+    conn: sqlite3.Connection,
+    *,
+    reservation_id: int,
+    log_id: int,
+    item_id: int,
+    qty: int,
+    undo_note: str,
+) -> dict[str, Any]:
+    _lock_reservation_item_state(conn, reservation_id, item_id)
+    reservation = get_reservation(conn, reservation_id)
+    if reservation["status"] == "CONSUMED":
+        raise AppError(
+            code="UNDO_NOT_POSSIBLE",
+            message="Reservation was consumed after this release and cannot be safely undone",
+            status_code=409,
+        )
+    released_rows = _get_reservation_undo_rows(
+        conn,
+        reservation_id=reservation_id,
+        target_status="RELEASED",
+        log_id=log_id,
+    )
+    released_qty = sum(int(row["quantity"]) for row in released_rows)
+    if released_qty != qty:
+        raise AppError(
+            code="UNDO_NOT_POSSIBLE",
+            message="Reservation release state no longer matches the transaction being undone",
+            status_code=409,
+        )
+    _restore_reservation_allocation_rows(conn, reservation_id=reservation_id, rows=released_rows, log_id=log_id)
+    conn.execute(
+        """
+        UPDATE reservations
+        SET quantity = ?, status = 'ACTIVE', released_at = NULL
+        WHERE reservation_id = ?
+        """,
+        (int(reservation["quantity"]) + qty, reservation_id),
+    )
+    return _log_transaction(
+        conn,
+        operation_type="RESERVE",
+        item_id=item_id,
+        quantity=qty,
+        from_location=None,
+        to_location=None,
+        note=undo_note,
+        batch_id=f"undo-{log_id}",
+        undo_of_log_id=log_id,
+    )
+
+
+def _undo_reservation_consume(
+    conn: sqlite3.Connection,
+    *,
+    reservation_id: int,
+    log_id: int,
+    item_id: int,
+    qty: int,
+    undo_note: str,
+) -> dict[str, Any]:
+    _lock_reservation_item_state(conn, reservation_id, item_id)
+    reservation = get_reservation(conn, reservation_id)
+    consumed_rows = _get_reservation_undo_rows(
+        conn,
+        reservation_id=reservation_id,
+        target_status="CONSUMED",
+        log_id=log_id,
+    )
+    consumed_qty = sum(int(row["quantity"]) for row in consumed_rows)
+    if consumed_qty != qty:
+        raise AppError(
+            code="UNDO_NOT_POSSIBLE",
+            message="Reservation consume state no longer matches the transaction being undone",
+            status_code=409,
+        )
+    for row in consumed_rows:
+        _apply_inventory_delta(conn, item_id, str(row["location"]), int(row["quantity"]))
+    _restore_reservation_allocation_rows(conn, reservation_id=reservation_id, rows=consumed_rows, log_id=log_id)
+    conn.execute(
+        """
+        UPDATE reservations
+        SET quantity = ?, status = 'ACTIVE', released_at = NULL
+        WHERE reservation_id = ?
+        """,
+        (int(reservation["quantity"]) + qty, reservation_id),
+    )
+    return _log_transaction(
+        conn,
+        operation_type="CONSUME",
+        item_id=item_id,
+        quantity=qty,
+        from_location=None,
+        to_location=None,
+        note=undo_note,
+        batch_id=f"undo-{log_id}",
+        undo_of_log_id=log_id,
+    )
+
+
 def undo_transaction(conn: sqlite3.Connection, log_id: int, note: str | None = None) -> dict[str, Any]:
     original = get_transaction(conn, log_id)
     if int(original["is_undone"]) == 1:
@@ -12624,8 +12922,10 @@ def undo_transaction(conn: sqlite3.Connection, log_id: int, note: str | None = N
     qty = int(original["quantity"])
     applied_qty = qty
     undo_note = note or f"undo log_id={log_id}"
+    reservation_action, reservation_id, reservation_log_id = _find_reservation_transaction_context(original.get("batch_id"))
 
     if op_type == "MOVE":
+        _lock_inventory_item_state(conn, item_id)
         available = _get_inventory_quantity(conn, item_id, original["to_location"])
         if available <= 0:
             raise AppError(
@@ -12648,6 +12948,7 @@ def undo_transaction(conn: sqlite3.Connection, log_id: int, note: str | None = N
             undo_of_log_id=log_id,
         )
     elif op_type == "ARRIVAL":
+        _lock_inventory_item_state(conn, item_id)
         available = _get_inventory_quantity(conn, item_id, "STOCK")
         if available <= 0:
             raise AppError(
@@ -12668,7 +12969,17 @@ def undo_transaction(conn: sqlite3.Connection, log_id: int, note: str | None = N
             batch_id=f"undo-{log_id}",
             undo_of_log_id=log_id,
         )
+    elif op_type == "CONSUME" and reservation_action == "consume" and reservation_id is not None and reservation_log_id is not None:
+        undo_log = _undo_reservation_consume(
+            conn,
+            reservation_id=reservation_id,
+            log_id=reservation_log_id,
+            item_id=item_id,
+            qty=qty,
+            undo_note=undo_note,
+        )
     elif op_type == "CONSUME":
+        _lock_inventory_item_state(conn, item_id)
         target = original["from_location"] or "STOCK"
         _apply_inventory_delta(conn, item_id, target, qty)
         undo_log = _log_transaction(
@@ -12683,6 +12994,7 @@ def undo_transaction(conn: sqlite3.Connection, log_id: int, note: str | None = N
             undo_of_log_id=log_id,
         )
     elif op_type == "ADJUST":
+        _lock_inventory_item_state(conn, item_id)
         if original["to_location"] and not original["from_location"]:
             available = _get_inventory_quantity(conn, item_id, original["to_location"])
             if available <= 0:
@@ -12739,19 +13051,23 @@ def undo_transaction(conn: sqlite3.Connection, log_id: int, note: str | None = N
                 batch_id=f"undo-{log_id}",
                 undo_of_log_id=log_id,
             )
+    elif op_type == "RESERVE" and reservation_action == "release" and reservation_id is not None and reservation_log_id is not None:
+        undo_log = _undo_reservation_release(
+            conn,
+            reservation_id=reservation_id,
+            log_id=reservation_log_id,
+            item_id=item_id,
+            qty=qty,
+            undo_note=undo_note,
+        )
     elif op_type == "RESERVE":
-        reservation_id: int | None = None
-        batch_id = str(original["batch_id"] or "")
-        if batch_id.startswith("reservation-"):
-            tail = batch_id.removeprefix("reservation-")
-            if tail.isdigit():
-                reservation_id = int(tail)
-        if reservation_id is None:
+        if reservation_action != "create" or reservation_id is None:
             raise AppError(
                 code="UNDO_NOT_POSSIBLE",
                 message="Unable to resolve reservation for RESERVE undo",
                 status_code=409,
             )
+        _lock_reservation_item_state(conn, reservation_id, item_id)
         reservation = get_reservation(conn, reservation_id)
         if reservation["status"] != "ACTIVE":
             raise AppError(
