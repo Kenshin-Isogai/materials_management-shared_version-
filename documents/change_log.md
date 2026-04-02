@@ -8,6 +8,7 @@
   - `/api/health` now exposes `mutation_integrity`, a DB-backed summary that flags reservation-allocation drift and duplicate/missing undo-compensation states
   - added service-level concurrency regression coverage for `MOVE`, `ARRIVAL`, reservation `RELEASE`, reservation `CONSUME`, and `UNDO`
   - added health-endpoint regression coverage proving the new integrity summary is clean in normal state and flips red when reservation-allocation drift is injected
+  - the GCP rollout docs now include placeholder-based examples for GitHub Environment variables, GitHub secrets, and Secret Manager `DATABASE_URL` values so operators can reconstruct the expected formats even after the UIs stop showing saved secret contents
 
 ### Tests
 

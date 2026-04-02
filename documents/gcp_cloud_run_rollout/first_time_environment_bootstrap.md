@@ -97,6 +97,10 @@ For a brand-new environment:
 - leave `BACKEND_URL` empty
 - leave `FRONTEND_URL` empty
 
+If you need a reminder of the exact value format after secrets have already been entered once, check the example sections in:
+
+- [github_actions_environment_setup.md](C:/Users/IsogaiKenshin/Documents/Yaqumo/applications/materials_menagement(shared_version)/documents/gcp_cloud_run_rollout/github_actions_environment_setup.md)
+
 ## Step 4: Run backend-only GitHub Actions deployment
 
 Workflow inputs:
