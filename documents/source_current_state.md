@@ -314,6 +314,12 @@ Last updated: 2026-04-02 (JST)
   - `Purchase Order Lines` remains the operational pane for ETA, arrival, split, delete, and manual project assignment
   - `Quotations` lists quotation headers with linked-line counts and header-level edit/delete actions
   - `Purchase Orders` lists purchase-order headers with linked-line counts and header-level edit/delete actions
+- Arrival page is now a dedicated route backed by `/api/arrival-schedule` instead of reusing the Orders page.
+  - the page monitors only open (`Ordered`) lines
+  - rows are classified into `overdue`, `scheduled`, and `no_eta`
+  - users can switch between timeline and calendar views for ETA-based arrival inspection
+  - operators can process full arrival and partial arrival directly from the arrival detail pane
+  - Orders and Arrival are now separate user questions: purchase traceability vs. incoming-schedule operations
 - Orders page loads all pages of the purchase-order-lines, quotations, and purchase-orders APIs for this screen so header counts remain correct even when older linked rows fall outside the first API page.
 - Orders page mutation flows (manual import, arrival processing, line edits, quotation edits, purchase-order edits) revalidate purchase-order-lines, quotations, and purchase-orders datasets together to avoid stale header/line counts.
 - The line pane now uses dense card rows plus a side detail panel instead of a long single-column field stack, reducing vertical scroll cost when each line carries many attributes.

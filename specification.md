@@ -925,8 +925,8 @@ All management pages handling CRUD operations (Items, Orders, Reservations, etc.
 | Planning | Sequential project netting, start-date shortage analysis, convert uncovered rows into RFQ batches |
 | RFQ | Project-dedicated RFQ batches, quote refinement, order linking |
 | Purchase Candidates | Secondary persistent shortage list for BOM / ad-hoc pre-PO tracking |
-| Orders | Bulk import orders, download generated missing-item CSV outputs, alias CSV import, **orders/quotations management** |
-| Arrival | Process arrivals, partial deliveries (supports bulk resolution) |
+| Orders | Bulk import orders, download generated missing-item CSV outputs, alias CSV import, **purchase-order-line / quotation / PO-header management** |
+| Arrival | **Open-arrival monitoring by ETA, overdue / no-ETA follow-up, and full or partial arrival processing** |
 | Movements | Single/batch movements, all operation types, CSV import (`operation_type,item_id,quantity,from_location,to_location,location,note`) |
 | Reserve | Reservation management, BOM batch reservation, CSV import (`item_id` or `assembly`, `quantity`, optional `assembly_quantity/purpose/deadline/note/project_id`) |
 | BOM | Preview-first reconciliation, gap analysis, reserve available, optional date-aware projection |
@@ -1050,6 +1050,7 @@ Base URL: `http://localhost:8000/api`
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/purchase-order-lines` | List purchase-order lines (supports `?status=`, `?supplier=`, `?item_id=`, `?project_id=`) |
+| GET | `/arrival-schedule` | List open purchase-order lines for arrival operations with `arrival_bucket`, overdue-day metadata, and the same `supplier` / `item_id` / `project_id` filter shape used by arrival monitoring UI. Supports optional `?bucket=overdue|scheduled|no_eta`. |
 | GET | `/purchase-order-lines/import-template` | Download header-only purchase-order-line import template CSV (UTF-8 with BOM) |
 | GET | `/purchase-order-lines/import-reference` | Download live purchase-order-line reference CSV; optional `?supplier_name=` remains available for alias lookup narrowing |
 | POST | `/purchase-order-lines/import-preview` | Preview purchase-order-line CSV reconciliation from uploaded CSV content; each row must carry `supplier` |
