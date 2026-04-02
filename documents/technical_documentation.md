@@ -795,7 +795,7 @@ End-to-End tests are implemented using Playwright to verify the full-stack behav
 - Arrival-page read model note: `/api/arrival-schedule` is now the dedicated open-arrival read model for the `/arrival` route.
   - it only returns `Ordered` lines
   - it enriches each row with `arrival_bucket` (`overdue`, `scheduled`, `no_eta`), `overdue_days`, and `days_until_expected`
-  - the frontend uses that model for overdue/no-ETA monitoring plus full and partial arrival actions without reusing the broader Orders browse screen
+  - the frontend uses that model for overdue/no-ETA monitoring, timeline/calendar ETA inspection, and full/partial arrival actions without reusing the broader Orders browse screen
 - Consistency rule: when these operations mutate DB rows, matching order CSV records are rewritten/inserted/removed so CSV source files and database state do not diverge.
 - Reliability/scalability posture: order split/merge transitions are persisted in `order_lineage_events` so future analytics/audit screens can read durable lineage without inferring history from mutable order rows.
 - CSV row identity rule for order-level maintenance: `update_order`/`delete_order` must target exactly one CSV row by order identity (including duplicate `(supplier, quotation_number, item_number)` occurrences) to prevent fan-out edits/deletes when a quotation contains repeated item rows.

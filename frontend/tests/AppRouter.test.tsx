@@ -166,6 +166,19 @@ describe("app router", () => {
     expect(screen.getByText("No projects available yet.")).toBeTruthy();
   });
 
+  it("renders the dedicated /arrival route and loads the arrival schedule", async () => {
+    act(() => {
+      window.sessionStorage.setItem("materials.auth-session", JSON.stringify({ accessToken: "token" }));
+    });
+
+    renderRouter("/arrival");
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Arrival" })).toBeTruthy();
+    });
+    expect(apiGetAllPagesMock).toHaveBeenCalledWith("/arrival-schedule?per_page=200");
+  });
+
   it("redirects the removed /rfq route back to the dashboard", async () => {
     window.sessionStorage.setItem("materials.auth-session", JSON.stringify({ accessToken: "token" }));
     const router = renderRouter("/rfq");

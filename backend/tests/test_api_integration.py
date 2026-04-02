@@ -2496,6 +2496,10 @@ def test_orders_endpoint_filters_by_item_id(client):
 
 
 def test_arrival_schedule_endpoint_classifies_open_lines(client):
+    today = datetime.strptime(today_jst(), "%Y-%m-%d").date()
+    overdue_date = (today - timedelta(days=2)).isoformat()
+    scheduled_date = (today + timedelta(days=8)).isoformat()
+
     client.post("/api/manufacturers", json={"name": "API-ARRIVAL-SCHED-MFG"})
     item = client.post(
         "/api/items",
@@ -5610,6 +5614,3 @@ def test_purchase_candidates_endpoints_flow(client):
     )
     assert from_bom.status_code == 200
     assert from_bom.json()["data"]["created_count"] == 2
-    today = datetime.strptime(today_jst(), "%Y-%m-%d").date()
-    overdue_date = (today - timedelta(days=2)).isoformat()
-    scheduled_date = (today + timedelta(days=8)).isoformat()

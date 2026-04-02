@@ -5,7 +5,7 @@
 - Split purchase tracking from arrival operations in the purchasing UI.
   - `/arrival` now renders a dedicated Arrival page instead of aliasing the Orders page
   - added backend read model `GET /api/arrival-schedule` for open arrival monitoring, including `arrival_bucket` (`overdue`, `scheduled`, `no_eta`), `overdue_days`, and `days_until_expected`
-  - the Arrival page now focuses on overdue / scheduled / no-ETA open lines and supports full or partial arrival processing from a dedicated detail pane
+  - the Arrival page now focuses on overdue / scheduled / no-ETA open lines, supports timeline and calendar ETA views, and supports full or partial arrival processing from a dedicated detail pane
   - the Orders page remains the purchasing ledger for purchase-order lines, quotations, and purchase-order headers, with copy updated to reflect that responsibility split
 
 ### Tests

@@ -5778,6 +5778,7 @@ def list_arrival_schedule(
     page: int = 1,
     per_page: int = 50,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    today_str = today_jst()
     valid_buckets = {"overdue", "scheduled", "no_eta"}
     normalized_bucket = bucket.strip().lower() if bucket else None
     if normalized_bucket and normalized_bucket not in valid_buckets:
@@ -5801,11 +5802,11 @@ def list_arrival_schedule(
     if normalized_bucket == "overdue":
         clauses.append("o.expected_arrival IS NOT NULL")
         clauses.append("date(o.expected_arrival) < date(?)")
-        params.append(today_jst())
+        params.append(today_str)
     elif normalized_bucket == "scheduled":
         clauses.append("o.expected_arrival IS NOT NULL")
         clauses.append("date(o.expected_arrival) >= date(?)")
-        params.append(today_jst())
+        params.append(today_str)
     elif normalized_bucket == "no_eta":
         clauses.append("o.expected_arrival IS NULL")
 
@@ -5831,15 +5832,15 @@ def list_arrival_schedule(
         ORDER BY
             CASE
                 WHEN o.expected_arrival IS NULL THEN 2
-                WHEN date(o.expected_arrival) < date('{today_jst()}') THEN 0
+                WHEN date(o.expected_arrival) < date(?) THEN 0
                 ELSE 1
             END,
             o.expected_arrival ASC,
             o.order_date DESC,
             o.order_id DESC
     """
-    rows, pagination = _paginate(conn, sql, tuple(params), page, per_page)
-    today = datetime.strptime(today_jst(), "%Y-%m-%d").date()
+    rows, pagination = _paginate(conn, sql, (*params, today_str), page, per_page)
+    today = datetime.strptime(today_str, "%Y-%m-%d").date()
     enriched: list[dict[str, Any]] = []
     for row in rows:
         expected_arrival = row.get("expected_arrival")

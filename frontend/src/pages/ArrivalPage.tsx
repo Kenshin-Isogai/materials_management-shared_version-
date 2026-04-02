@@ -7,6 +7,7 @@ import type { ArrivalScheduleEntry } from "../lib/types";
 
 type ArrivalBucketFilter = "all" | "overdue" | "scheduled" | "no_eta";
 type SupplyScope = "all" | "generic" | "dedicated";
+type ArrivalViewMode = "timeline" | "calendar";
 
 function renderDocumentLink(url: string | null | undefined, label = "Open document") {
   if (!url) return "-";
@@ -50,6 +51,36 @@ function formatDate(value: string | null | undefined): string {
     day: "numeric",
     weekday: "short",
   });
+}
+
+function monthKeyFromDate(value: string): string {
+  return value.slice(0, 7);
+}
+
+function formatMonthLabel(monthKey: string): string {
+  const [yearText, monthText] = monthKey.split("-");
+  const parsed = new Date(Number(yearText), Number(monthText) - 1, 1);
+  return parsed.toLocaleDateString(undefined, { year: "numeric", month: "long" });
+}
+
+function buildMonthGrid(monthKey: string): Array<{ date: string | null; inMonth: boolean }> {
+  const [yearText, monthText] = monthKey.split("-");
+  const year = Number(yearText);
+  const monthIndex = Number(monthText) - 1;
+  const first = new Date(year, monthIndex, 1);
+  const daysInMonth = new Date(year, monthIndex + 1, 0).getDate();
+  const startOffset = first.getDay();
+  const cells: Array<{ date: string | null; inMonth: boolean }> = [];
+  for (let index = 0; index < startOffset; index += 1) {
+    cells.push({ date: null, inMonth: false });
+  }
+  for (let day = 1; day <= daysInMonth; day += 1) {
+    cells.push({ date: `${monthKey}-${String(day).padStart(2, "0")}`, inMonth: true });
+  }
+  while (cells.length % 7 !== 0) {
+    cells.push({ date: null, inMonth: false });
+  }
+  return cells;
 }
 
 function arrivalStatusCopy(row: ArrivalScheduleEntry): string {
@@ -134,7 +165,10 @@ export function ArrivalPage() {
   const deferredSearch = useDeferredValue(search);
   const [bucketFilter, setBucketFilter] = useState<ArrivalBucketFilter>("all");
   const [supplyScope, setSupplyScope] = useState<SupplyScope>("all");
+  const [viewMode, setViewMode] = useState<ArrivalViewMode>("timeline");
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
+  const [selectedMonth, setSelectedMonth] = useState("");
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [partialArrivalQuantity, setPartialArrivalQuantity] = useState("");
   const [message, setMessage] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
@@ -189,6 +223,49 @@ export function ArrivalPage() {
   }, [filteredRows, selectedOrder]);
   const timelineGroups = useMemo(() => groupScheduledRows(scheduledRows), [scheduledRows]);
   const supplierCount = useMemo(() => new Set(filteredRows.map((row) => row.supplier_name)).size, [filteredRows]);
+  const monthOptions = useMemo(() => {
+    const values = Array.from(
+      new Set(
+        filteredRows
+          .filter((row) => row.expected_arrival)
+          .map((row) => monthKeyFromDate(row.expected_arrival as string))
+      )
+    );
+    values.sort();
+    return values;
+  }, [filteredRows]);
+  const calendarRows = useMemo(
+    () => filteredRows.filter((row) => row.expected_arrival && monthKeyFromDate(row.expected_arrival) === selectedMonth),
+    [filteredRows, selectedMonth]
+  );
+  const countsByDate = useMemo(() => {
+    const counts = new Map<string, { total: number; overdue: number; dedicated: number }>();
+    calendarRows.forEach((row) => {
+      const key = row.expected_arrival as string;
+      const current = counts.get(key) ?? { total: 0, overdue: 0, dedicated: 0 };
+      current.total += 1;
+      if (row.arrival_bucket === "overdue") current.overdue += 1;
+      if (row.project_id !== null) current.dedicated += 1;
+      counts.set(key, current);
+    });
+    return counts;
+  }, [calendarRows]);
+  const selectedDateRows = useMemo(() => {
+    if (!selectedDate) return [];
+    return calendarRows.filter((row) => row.expected_arrival === selectedDate);
+  }, [calendarRows, selectedDate]);
+  const monthGrid = selectedMonth ? buildMonthGrid(selectedMonth) : [];
+
+  useEffect(() => {
+    if (!monthOptions.length) {
+      setSelectedMonth("");
+      setSelectedDate(null);
+      return;
+    }
+    if (!selectedMonth || !monthOptions.includes(selectedMonth)) {
+      setSelectedMonth(monthOptions[0]);
+    }
+  }, [monthOptions, selectedMonth]);
 
   async function refreshDataWithMessage(nextMessage: string) {
     await mutate();
@@ -245,9 +322,25 @@ export function ArrivalPage() {
               workflow into the broader purchase-order ledger.
             </p>
           </div>
-          <button type="button" className="button-subtle" onClick={() => navigate("/purchase-order-lines")}>
-            Open Purchase Orders
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              className={`button-subtle ${viewMode === "timeline" ? "border-sky-300 bg-sky-50 text-sky-700" : ""}`}
+              onClick={() => setViewMode("timeline")}
+            >
+              Timeline
+            </button>
+            <button
+              type="button"
+              className={`button-subtle ${viewMode === "calendar" ? "border-sky-300 bg-sky-50 text-sky-700" : ""}`}
+              onClick={() => setViewMode("calendar")}
+            >
+              Calendar
+            </button>
+            <button type="button" className="button-subtle" onClick={() => navigate("/purchase-order-lines")}>
+              Open Purchase Orders
+            </button>
+          </div>
         </div>
 
         <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-5">
@@ -331,65 +424,171 @@ export function ArrivalPage() {
       {!isLoading && !error ? (
         <section className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(20rem,0.8fr)]">
           <div className="panel p-4">
-            <div className="space-y-5">
-              <div>
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <h2 className="font-display text-lg font-semibold text-slate-900">Overdue</h2>
-                  <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{overdueRows.length} lines</span>
-                </div>
-                {overdueRows.length === 0 ? (
-                  <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-500">No overdue arrivals.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {overdueRows.map((row) => (
-                      <ArrivalRowCard key={row.order_id} row={row} selected={row.order_id === selectedOrderId} onSelect={setSelectedOrderId} />
-                    ))}
+            {viewMode === "timeline" ? (
+              <div className="space-y-5">
+                <div>
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <h2 className="font-display text-lg font-semibold text-slate-900">Overdue</h2>
+                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{overdueRows.length} lines</span>
                   </div>
-                )}
-              </div>
+                  {overdueRows.length === 0 ? (
+                    <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-500">No overdue arrivals.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {overdueRows.map((row) => (
+                        <ArrivalRowCard key={row.order_id} row={row} selected={row.order_id === selectedOrderId} onSelect={setSelectedOrderId} />
+                      ))}
+                    </div>
+                  )}
+                </div>
 
-              <div>
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <h2 className="font-display text-lg font-semibold text-slate-900">Scheduled</h2>
-                  <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{scheduledRows.length} lines</span>
-                </div>
-                {timelineGroups.length === 0 ? (
-                  <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-500">No dated arrivals match the current filters.</p>
-                ) : (
-                  <div className="space-y-4">
-                    {timelineGroups.map((group) => (
-                      <div key={group.date} className="space-y-2">
-                        <div className="flex items-center justify-between gap-3">
-                          <h3 className="text-sm font-semibold text-slate-900">{formatDate(group.date)}</h3>
-                          <span className="text-xs text-slate-500">{group.rows.length} lines</span>
-                        </div>
-                        <div className="space-y-2">
-                          {group.rows.map((row) => (
-                            <ArrivalRowCard key={row.order_id} row={row} selected={row.order_id === selectedOrderId} onSelect={setSelectedOrderId} />
-                          ))}
-                        </div>
-                      </div>
-                    ))}
+                <div>
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <h2 className="font-display text-lg font-semibold text-slate-900">Scheduled</h2>
+                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{scheduledRows.length} lines</span>
                   </div>
-                )}
-              </div>
+                  {timelineGroups.length === 0 ? (
+                    <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-500">No dated arrivals match the current filters.</p>
+                  ) : (
+                    <div className="space-y-4">
+                      {timelineGroups.map((group) => (
+                        <div key={group.date} className="space-y-2">
+                          <div className="flex items-center justify-between gap-3">
+                            <h3 className="text-sm font-semibold text-slate-900">{formatDate(group.date)}</h3>
+                            <span className="text-xs text-slate-500">{group.rows.length} lines</span>
+                          </div>
+                          <div className="space-y-2">
+                            {group.rows.map((row) => (
+                              <ArrivalRowCard key={row.order_id} row={row} selected={row.order_id === selectedOrderId} onSelect={setSelectedOrderId} />
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
 
-              <div>
-                <div className="mb-2 flex items-center justify-between gap-3">
-                  <h2 className="font-display text-lg font-semibold text-slate-900">No ETA</h2>
-                  <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{noEtaRows.length} lines</span>
-                </div>
-                {noEtaRows.length === 0 ? (
-                  <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-500">All remaining open lines have an ETA.</p>
-                ) : (
-                  <div className="space-y-2">
-                    {noEtaRows.map((row) => (
-                      <ArrivalRowCard key={row.order_id} row={row} selected={row.order_id === selectedOrderId} onSelect={setSelectedOrderId} />
-                    ))}
+                <div>
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <h2 className="font-display text-lg font-semibold text-slate-900">No ETA</h2>
+                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">{noEtaRows.length} lines</span>
                   </div>
-                )}
+                  {noEtaRows.length === 0 ? (
+                    <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-500">All remaining open lines have an ETA.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {noEtaRows.map((row) => (
+                        <ArrivalRowCard key={row.order_id} row={row} selected={row.order_id === selectedOrderId} onSelect={setSelectedOrderId} />
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h2 className="font-display text-lg font-semibold text-slate-900">Arrival Calendar</h2>
+                    <p className="mt-1 text-sm text-slate-500">Date-centric view of scheduled arrivals plus a separate bucket for unscheduled open lines.</p>
+                  </div>
+                  <select
+                    aria-label="Arrival month"
+                    className="input max-w-[16rem]"
+                    value={selectedMonth}
+                    onChange={(event) => {
+                      setSelectedMonth(event.target.value);
+                      setSelectedDate(null);
+                    }}
+                  >
+                    {monthOptions.map((month) => (
+                      <option key={month} value={month}>
+                        {formatMonthLabel(month)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-7 gap-2 text-center text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => (
+                    <div key={day}>{day}</div>
+                  ))}
+                </div>
+                <div className="grid grid-cols-7 gap-2">
+                  {monthGrid.map((cell, index) => {
+                    const counts = cell.date ? countsByDate.get(cell.date) : null;
+                    const selected = cell.date !== null && selectedDate === cell.date;
+                    return (
+                      <button
+                        key={cell.date ?? `blank-${index}`}
+                        type="button"
+                        disabled={!cell.date}
+                        onClick={() => setSelectedDate(cell.date)}
+                        className={`min-h-[5.5rem] rounded-2xl border p-2 text-left transition ${
+                          !cell.inMonth
+                            ? "cursor-default border-transparent bg-transparent"
+                            : selected
+                              ? "border-sky-300 bg-sky-50"
+                              : "border-slate-200 bg-white hover:border-slate-300"
+                        }`}
+                      >
+                        {cell.date ? (
+                          <>
+                            <p className="text-sm font-semibold text-slate-900">{cell.date.slice(-2)}</p>
+                            {counts ? (
+                              <div className="mt-2 space-y-1 text-xs">
+                                <p className="rounded-full bg-slate-100 px-2 py-1 text-slate-700">{counts.total} lines</p>
+                                {counts.overdue > 0 ? <p className="rounded-full bg-rose-100 px-2 py-1 text-rose-700">{counts.overdue} overdue</p> : null}
+                                {counts.dedicated > 0 ? <p className="rounded-full bg-emerald-100 px-2 py-1 text-emerald-700">{counts.dedicated} dedicated</p> : null}
+                              </div>
+                            ) : (
+                              <p className="mt-2 text-xs text-slate-400">No lines</p>
+                            )}
+                          </>
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <h3 className="font-semibold text-slate-900">{selectedDate ? `${formatDate(selectedDate)} arrivals` : "Select a date"}</h3>
+                    {selectedDate ? (
+                      <button type="button" className="button-subtle" onClick={() => setSelectedDate(null)}>
+                        Clear
+                      </button>
+                    ) : null}
+                  </div>
+                  {!selectedDate ? (
+                    <p className="text-sm text-slate-500">Pick a calendar date to inspect the scheduled arrival lines for that day.</p>
+                  ) : selectedDateRows.length === 0 ? (
+                    <p className="text-sm text-slate-500">No arrival lines fall on that date after the current filters.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {selectedDateRows.map((row) => (
+                        <ArrivalRowCard key={row.order_id} row={row} selected={row.order_id === selectedOrderId} onSelect={setSelectedOrderId} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <h3 className="font-semibold text-slate-900">No ETA</h3>
+                    <span className="text-xs text-slate-500">{noEtaRows.length} lines</span>
+                  </div>
+                  {noEtaRows.length === 0 ? (
+                    <p className="text-sm text-slate-500">No unscheduled open lines.</p>
+                  ) : (
+                    <div className="space-y-2">
+                      {noEtaRows.map((row) => (
+                        <ArrivalRowCard key={row.order_id} row={row} selected={row.order_id === selectedOrderId} onSelect={setSelectedOrderId} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="panel p-4">

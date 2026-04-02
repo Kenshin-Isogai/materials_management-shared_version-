@@ -1050,7 +1050,7 @@ Base URL: `http://localhost:8000/api`
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/purchase-order-lines` | List purchase-order lines (supports `?status=`, `?supplier=`, `?item_id=`, `?project_id=`) |
-| GET | `/arrival-schedule` | List open purchase-order lines for arrival operations with `arrival_bucket`, overdue-day metadata, and the same `supplier` / `item_id` / `project_id` filter shape used by arrival monitoring UI |
+| GET | `/arrival-schedule` | List open purchase-order lines for arrival operations with `arrival_bucket`, overdue-day metadata, and the same `supplier` / `item_id` / `project_id` filter shape used by arrival monitoring UI. Supports optional `?bucket=overdue|scheduled|no_eta`. |
 | GET | `/purchase-order-lines/import-template` | Download header-only purchase-order-line import template CSV (UTF-8 with BOM) |
 | GET | `/purchase-order-lines/import-reference` | Download live purchase-order-line reference CSV; optional `?supplier_name=` remains available for alias lookup narrowing |
 | POST | `/purchase-order-lines/import-preview` | Preview purchase-order-line CSV reconciliation from uploaded CSV content; each row must carry `supplier` |

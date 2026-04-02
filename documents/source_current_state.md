@@ -317,6 +317,7 @@ Last updated: 2026-04-02 (JST)
 - Arrival page is now a dedicated route backed by `/api/arrival-schedule` instead of reusing the Orders page.
   - the page monitors only open (`Ordered`) lines
   - rows are classified into `overdue`, `scheduled`, and `no_eta`
+  - users can switch between timeline and calendar views for ETA-based arrival inspection
   - operators can process full arrival and partial arrival directly from the arrival detail pane
   - Orders and Arrival are now separate user questions: purchase traceability vs. incoming-schedule operations
 - Orders page loads all pages of the purchase-order-lines, quotations, and purchase-orders APIs for this screen so header counts remain correct even when older linked rows fall outside the first API page.
