@@ -19,22 +19,34 @@ describe("auth session handling", () => {
     window.localStorage.clear();
     window.sessionStorage.clear();
     import.meta.env.VITE_IDENTITY_PLATFORM_API_KEY = originalApiKey;
+    vi.unstubAllGlobals();
   });
 
   it("refreshes when the token is inside the safety window", async () => {
     const now = 1_700_000_000_000;
     vi.spyOn(Date, "now").mockReturnValue(now);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => ({
-        ok: true,
-        json: async () => ({
-          id_token: "refreshed-token",
-          refresh_token: "refresh-1",
-          expires_in: "3600",
-        }),
-      })),
-    );
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("securetoken.googleapis.com")) {
+        return {
+          ok: true,
+          json: async () => ({
+            id_token: "refreshed-token",
+            refresh_token: "refresh-1",
+            expires_in: "3600",
+          }),
+        };
+      }
+      if (url.includes("accounts:lookup")) {
+        return {
+          ok: true,
+          json: async () => ({
+            users: [{ email: "user@example.com", emailVerified: true }],
+          }),
+        };
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
     window.sessionStorage.setItem(
       "materials.auth-session",
       JSON.stringify({
@@ -52,6 +64,7 @@ describe("auth session handling", () => {
     expect(stored.accessToken).toBe("refreshed-token");
     expect(stored.refreshToken).toBe("refresh-1");
     expect(stored.email).toBe("user@example.com");
+    expect(stored.emailVerified).toBe(true);
   });
 
   it("clears the session when refresh fails", async () => {
@@ -117,19 +130,14 @@ describe("auth session handling", () => {
       throw new Error(`Unexpected URL: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
+    const auth = await loadAuthModule();
+    await auth.signUpWithIdentityPlatformEmailPassword("signup@example.com", "password");
+    await auth.sendIdentityPlatformVerificationEmail();
 
-    try {
-      const auth = await loadAuthModule();
-      await auth.signUpWithIdentityPlatformEmailPassword("signup@example.com", "password");
-      await auth.sendIdentityPlatformVerificationEmail();
-
-      const stored = JSON.parse(window.sessionStorage.getItem("materials.auth-session") ?? "{}");
-      expect(stored.email).toBe("signup@example.com");
-      expect(stored.emailVerified).toBe(false);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    const stored = JSON.parse(window.sessionStorage.getItem("materials.auth-session") ?? "{}");
+    expect(stored.email).toBe("signup@example.com");
+    expect(stored.emailVerified).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("can force-refresh the stored session after email verification", async () => {
@@ -160,17 +168,62 @@ describe("auth session handling", () => {
       }),
     );
 
-    try {
-      const auth = await loadAuthModule();
-      await auth.refreshStoredAuthSessionNow();
+    const auth = await loadAuthModule();
+    await auth.refreshStoredAuthSessionNow();
 
-      const stored = JSON.parse(window.sessionStorage.getItem("materials.auth-session") ?? "{}");
-      expect(stored.email).toBe("signup@example.com");
-      expect(stored.emailVerified).toBe(true);
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    const stored = JSON.parse(window.sessionStorage.getItem("materials.auth-session") ?? "{}");
+    expect(stored.email).toBe("signup@example.com");
+    expect(stored.emailVerified).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries refresh once when lookup says the email is verified but the refreshed token is still stale", async () => {
+    let refreshCount = 0;
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("securetoken.googleapis.com")) {
+        refreshCount += 1;
+        return {
+          ok: true,
+          json: async () => ({
+            id_token:
+              refreshCount === 1
+                ? "eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6InNpZ251cEBleGFtcGxlLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjpmYWxzZX0.signature"
+                : "eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6InNpZ251cEBleGFtcGxlLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlfQ.signature",
+            refresh_token: "refresh-signup",
+            expires_in: "3600",
+          }),
+        };
+      }
+      if (url.includes("accounts:lookup")) {
+        return {
+          ok: true,
+          json: async () => ({
+            users: [{ email: "signup@example.com", emailVerified: true }],
+          }),
+        };
+      }
+      throw new Error(`Unexpected URL: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    window.sessionStorage.setItem(
+      "materials.auth-session",
+      JSON.stringify({
+        accessToken:
+          "eyJhbGciOiJIUzI1NiJ9.eyJlbWFpbCI6InNpZ251cEBleGFtcGxlLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjpmYWxzZX0.signature",
+        refreshToken: "refresh-signup",
+        expiresAt: Date.now() + 3_600_000,
+        email: "signup@example.com",
+        emailVerified: false,
+      }),
+    );
+
+    const auth = await loadAuthModule();
+    await auth.refreshStoredAuthSessionNow();
+
+    const stored = JSON.parse(window.sessionStorage.getItem("materials.auth-session") ?? "{}");
+    expect(stored.emailVerified).toBe(true);
+    expect(refreshCount).toBe(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("can apply an email verification action code", async () => {
@@ -187,13 +240,9 @@ describe("auth session handling", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    try {
-      const auth = await loadAuthModule();
-      await auth.applyIdentityPlatformEmailVerificationCode("sample-oob-code");
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(String(fetchMock.mock.calls[0]?.[0] ?? "")).toContain("accounts:update");
-    } finally {
-      vi.unstubAllGlobals();
-    }
+    const auth = await loadAuthModule();
+    await auth.applyIdentityPlatformEmailVerificationCode("sample-oob-code");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0]?.[0] ?? "")).toContain("accounts:update");
   });
 });

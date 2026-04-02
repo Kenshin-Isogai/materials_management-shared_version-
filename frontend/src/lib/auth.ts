@@ -48,6 +48,16 @@ type IdentityPlatformRefreshResponse = {
   };
 };
 
+type IdentityPlatformLookupResponse = {
+  users?: Array<{
+    email?: string;
+    emailVerified?: boolean;
+  }>;
+  error?: {
+    message?: string;
+  };
+};
+
 let refreshInFlight: Promise<StoredAuthSession | null> | null = null;
 let refreshInFlightToken: string | null = null;
 
@@ -202,7 +212,24 @@ async function postIdentityPlatformJson<T>(path: string, body: object): Promise<
   return payload;
 }
 
-async function refreshIdentityPlatformSession(refreshToken: string): Promise<StoredAuthSession> {
+async function lookupIdentityPlatformSession(idToken: string): Promise<{
+  email: string | null;
+  emailVerified: boolean | null;
+}> {
+  const payload = await postIdentityPlatformJson<IdentityPlatformLookupResponse>("accounts:lookup", {
+    idToken,
+  });
+  const user = payload.users?.[0];
+  return {
+    email: user?.email?.trim() || null,
+    emailVerified: typeof user?.emailVerified === "boolean" ? user.emailVerified : null,
+  };
+}
+
+async function refreshIdentityPlatformSession(
+  refreshToken: string,
+  attempt: number = 0,
+): Promise<StoredAuthSession> {
   const response = await fetch(buildSecureTokenUrl(), {
     method: "POST",
     headers: {
@@ -217,11 +244,31 @@ async function refreshIdentityPlatformSession(refreshToken: string): Promise<Sto
   if (!response.ok || payload.error?.message || !payload.id_token) {
     throw new Error(payload.error?.message || `HTTP ${response.status}`);
   }
+  const nextRefreshToken = payload.refresh_token?.trim() || refreshToken;
+  const derived = deriveSessionMetadata(payload.id_token);
+  const shouldLookup =
+    derived.emailVerified !== true || !derived.email;
+  let lookedUp: { email: string | null; emailVerified: boolean | null } | null = null;
+  if (shouldLookup) {
+    try {
+      lookedUp = await lookupIdentityPlatformSession(payload.id_token);
+    } catch {
+      lookedUp = null;
+    }
+  }
+  if (
+    attempt === 0 &&
+    lookedUp?.emailVerified === true &&
+    derived.emailVerified !== true
+  ) {
+    return refreshIdentityPlatformSession(nextRefreshToken, 1);
+  }
   return {
     accessToken: payload.id_token,
-    refreshToken: payload.refresh_token?.trim() || refreshToken,
+    refreshToken: nextRefreshToken,
     expiresAt: toExpiryTimestamp(payload.expires_in),
-    ...deriveSessionMetadata(payload.id_token),
+    email: lookedUp?.email ?? derived.email ?? null,
+    emailVerified: lookedUp?.emailVerified ?? derived.emailVerified ?? null,
   };
 }
 

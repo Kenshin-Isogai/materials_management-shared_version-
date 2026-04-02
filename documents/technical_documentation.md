@@ -46,7 +46,9 @@ This document explains the implemented architecture of the Materials Management 
   - signed-in identities whose tokens are rejected because `email_verified=true` is required now go through a dedicated `/verify-email` route with verification-mail resend support
   - the verify-email route now also consumes Identity Platform email-action links (`mode=verifyEmail` + `oobCode`) and applies the verification code before refreshing the stored session, so the browser flow does not depend on the Google-hosted default handler alone
   - `/verify-email` now also offers an explicit "I have verified this email" action that refreshes the stored Identity Platform session immediately, so the UI does not stay stuck on an old unverified ID token after the user completes verification in another tab/window
+  - the verify-email refresh path now also performs an Identity Toolkit account lookup and retries one token refresh when the backend account state is verified but the first refreshed ID token still carries a stale `email_verified=false` claim
   - the shared shell now supports both sign-in and sign-up against Identity Platform email/password, and newly created accounts immediately trigger verification-mail delivery through the Identity Toolkit REST API
+  - login and verify-email success flows now land on `/registration` first; approved users are redirected onward to `/`, while unapproved users no longer briefly land on the mostly empty dashboard
   - hosted cloud UX now hides the manual bearer-token fallback entry by default; that token override remains visible only for local/test-style localhost operation
   - anonymous dashboard access now stops at explicit sign-in guidance instead of trying to load protected data and misreporting backend unavailability
   - self-registration requests are stored separately from active users so approval history can be retained without polluting the `users` table
