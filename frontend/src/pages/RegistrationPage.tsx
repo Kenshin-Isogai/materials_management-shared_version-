@@ -135,7 +135,7 @@ export function RegistrationPage() {
               required
               value={username}
               onChange={(event) => setUsername(event.target.value)}
-              placeholder="kenshin.isogai"
+              placeholder="ren.takeda"
             />
           </label>
 
@@ -146,7 +146,7 @@ export function RegistrationPage() {
               required
               value={displayName}
               onChange={(event) => setDisplayName(event.target.value)}
-              placeholder="Kenshin Isogai"
+              placeholder="Ren Takeda"
             />
           </label>
 
