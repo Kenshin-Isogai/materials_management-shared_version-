@@ -30,6 +30,7 @@ function makeApprovalDraft(request: RegistrationRequest): ApprovalDraft {
 }
 
 export function UsersPage() {
+  const currentUserQuery = useSWR("/users/me", () => apiGet<User>("/users/me"));
   const [showResolvedRequests, setShowResolvedRequests] = useState(false);
   const registrationRequestsPath = `/registration-requests?include_resolved=${showResolvedRequests ? "true" : "false"}`;
   const usersQuery = useSWR("/users?include_inactive=true", () =>
@@ -56,6 +57,7 @@ export function UsersPage() {
 
   const users = usersQuery.data ?? [];
   const registrationRequests = registrationRequestsQuery.data ?? [];
+  const canViewIdentityInternals = currentUserQuery.data?.role === "admin";
   const pendingRequests = registrationRequests.filter((request) => request.status === "pending");
   const hasActiveUsers = users.some((user) => user.is_active);
   const summary = useMemo(
@@ -405,7 +407,7 @@ export function UsersPage() {
                         <span className="font-semibold">Memo:</span> {request.memo}
                       </div>
                     ) : null}
-                    {request.identity_provider || request.external_subject ? (
+                    {canViewIdentityInternals && (request.identity_provider || request.external_subject) ? (
                       <div className="rounded-lg bg-white/80 px-3 py-2 text-xs text-slate-600">
                         <div className="font-semibold text-slate-700">Identity mapping</div>
                         <div>provider: {request.identity_provider || "-"}</div>
@@ -687,7 +689,9 @@ export function UsersPage() {
                         {user.external_subject ? (
                           <div className="space-y-1">
                             <div className="font-semibold text-slate-700">Email + subject linked</div>
-                            <div className="font-mono break-all">{user.external_subject}</div>
+                            {canViewIdentityInternals ? (
+                              <div className="font-mono break-all">{user.external_subject}</div>
+                            ) : null}
                           </div>
                         ) : user.email ? (
                           <span>Email-only</span>
