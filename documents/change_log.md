@@ -2,6 +2,20 @@
 
 ### Changed
 
+- Tightened the Identity Platform onboarding flow for newly created and not-yet-approved users.
+  - successful `/login` and `/verify-email` flows now land on `/registration` first, so users without an approved app-user mapping do not briefly land on the mostly empty dashboard
+  - forced verification refresh now also checks the current Identity Toolkit account state and retries token refresh once when the first refreshed ID token still carries a stale `email_verified=false` claim
+  - added frontend regression coverage for the login landing route and the verification-refresh retry path
+
+### Tests
+
+- Frontend unit tests:
+  - `npx vitest run tests/auth.test.ts tests/AppRouter.test.tsx`
+
+## 2026-04-02
+
+### Changed
+
 - Added product-hardening coverage for the remaining high-risk write paths and observability.
   - `process_order_arrival` now takes an order+item advisory lock so the same order cannot be arrived twice concurrently
   - `undo_transaction` now takes a transaction-scoped advisory lock so the same log cannot be undone twice under concurrent requests

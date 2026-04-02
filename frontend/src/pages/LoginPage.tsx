@@ -13,6 +13,7 @@ import { presentApiError } from "../lib/errorUtils";
 
 export function LoginPage() {
   const navigate = useNavigate();
+  const postLoginPath = "/registration";
   const [accessTokenDraft, setAccessTokenDraft] = useState<string>("");
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -41,9 +42,9 @@ export function LoginPage() {
   useEffect(() => {
     const token = getStoredAccessTokenOrNull();
     if (token) {
-      navigate("/", { replace: true });
+      navigate(postLoginPath, { replace: true });
     }
-  }, [navigate]);
+  }, [navigate, postLoginPath]);
 
   const handleTokenChange = (nextToken: string) => {
     setStoredAccessToken(nextToken || null);
@@ -51,7 +52,7 @@ export function LoginPage() {
     clearAuthFeedback();
     setAuthStatusMessage(null);
     if (nextToken.trim()) {
-      navigate("/", { replace: true });
+      navigate(postLoginPath, { replace: true });
     }
   };
 
@@ -64,7 +65,7 @@ export function LoginPage() {
       if (!mountedRef.current) return;
       setLoginPassword("");
       setAuthStatusMessage("Signed in. Redirecting...");
-      navigate("/", { replace: true });
+      navigate(postLoginPath, { replace: true });
     } catch (error) {
       if (!mountedRef.current) return;
       setLoginError(presentApiError(error));
@@ -84,7 +85,7 @@ export function LoginPage() {
       setAuthStatusMessage("Account created. Verify your email address before continuing.");
       setSignupMessage("Account created. A verification email has been sent.");
       setLoginPassword("");
-      navigate("/", { replace: true });
+      navigate(postLoginPath, { replace: true });
     } catch (error) {
       if (!mountedRef.current) return;
       setSignupError(presentApiError(error));

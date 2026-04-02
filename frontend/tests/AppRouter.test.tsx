@@ -304,6 +304,29 @@ describe("app router", () => {
     expect(screen.getByRole("heading", { name: "Verify your email" })).toBeTruthy();
   });
 
+  it("sends successful login flows to /registration first", async () => {
+    const router = renderRouter("/login");
+
+    fireEvent.change(screen.getByLabelText("Email"), {
+      target: { value: "pending@example.com" },
+    });
+    fireEvent.change(screen.getByLabelText("Password"), {
+      target: { value: "password123" },
+    });
+    fireEvent.click(screen.getAllByRole("button", { name: "Sign in" })[1]);
+
+    await waitFor(() => {
+      expect(signInWithIdentityPlatformEmailPasswordMock).toHaveBeenCalledWith(
+        "pending@example.com",
+        "password123",
+      );
+    });
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/registration");
+    });
+  });
+
   it("redirects approved users away from /registration", async () => {
     act(() => {
       window.sessionStorage.setItem("materials.auth-session", JSON.stringify({ accessToken: "token" }));

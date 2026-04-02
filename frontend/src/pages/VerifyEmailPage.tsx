@@ -14,6 +14,7 @@ type VerifyEmailPageProps = {
 
 export function VerifyEmailPage({ email }: VerifyEmailPageProps) {
   const navigate = useNavigate();
+  const postVerificationPath = "/registration";
   const [searchParams] = useSearchParams();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -39,7 +40,7 @@ export function VerifyEmailPage({ email }: VerifyEmailPageProps) {
         setMessage("Email verification completed. Refreshing the sign-in session now.");
         await refreshStoredAuthSessionNow();
         if (!active) return;
-        navigate("/", { replace: true });
+        navigate(postVerificationPath, { replace: true });
       } catch (applyError) {
         if (!active) return;
         setError(presentApiError(applyError));
@@ -53,7 +54,7 @@ export function VerifyEmailPage({ email }: VerifyEmailPageProps) {
     return () => {
       active = false;
     };
-  }, [navigate, searchParams, verificationApplied]);
+  }, [navigate, postVerificationPath, searchParams, verificationApplied]);
 
   async function resendVerificationEmail() {
     setBusy(true);
@@ -75,8 +76,8 @@ export function VerifyEmailPage({ email }: VerifyEmailPageProps) {
     setError(null);
     try {
       await refreshStoredAuthSessionNow();
-      setMessage("Verification state refreshed. If the account is verified, you can continue into the application.");
-      navigate("/", { replace: true });
+      setMessage("Verification state refreshed. If the account is verified, you can continue into registration.");
+      navigate(postVerificationPath, { replace: true });
     } catch (refreshError) {
       setError(presentApiError(refreshError));
     } finally {
