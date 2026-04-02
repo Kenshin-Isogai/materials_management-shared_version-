@@ -246,11 +246,15 @@ async function refreshIdentityPlatformSession(
   }
   const nextRefreshToken = payload.refresh_token?.trim() || refreshToken;
   const derived = deriveSessionMetadata(payload.id_token);
+  const shouldLookup =
+    derived.emailVerified !== true || !derived.email;
   let lookedUp: { email: string | null; emailVerified: boolean | null } | null = null;
-  try {
-    lookedUp = await lookupIdentityPlatformSession(payload.id_token);
-  } catch {
-    lookedUp = null;
+  if (shouldLookup) {
+    try {
+      lookedUp = await lookupIdentityPlatformSession(payload.id_token);
+    } catch {
+      lookedUp = null;
+    }
   }
   if (
     attempt === 0 &&

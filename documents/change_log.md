@@ -4,7 +4,7 @@
 
 - Tightened the Identity Platform onboarding flow for newly created and not-yet-approved users.
   - successful `/login` and `/verify-email` flows now land on `/registration` first, so users without an approved app-user mapping do not briefly land on the mostly empty dashboard
-  - forced verification refresh now also checks the current Identity Toolkit account state and retries token refresh once when the first refreshed ID token still carries a stale `email_verified=false` claim
+  - forced verification refresh now only calls Identity Toolkit account lookup when refreshed token claims are still missing/stale, and retries token refresh once when the first refreshed ID token still carries a stale `email_verified=false` claim
   - added frontend regression coverage for the login landing route and the verification-refresh retry path
 
 ### Tests
