@@ -18,6 +18,8 @@ import type {
   ProjectStatus,
 } from "../lib/types";
 import { CatalogPicker } from "./CatalogPicker";
+import { ImportPreviewSummary } from "./ImportPreviewSummary";
+import { previewStatusTone } from "../lib/previewStatus";
 
 function itemToCatalogResult(item: Item): CatalogSearchResult {
   return {
@@ -41,21 +43,6 @@ function projectPreviewMatchToCatalogResult(
     summary: match.summary,
     match_source: match.match_source,
   };
-}
-
-function previewStatusTone(status: ProjectRequirementPreviewRow["status"]): string {
-  switch (status) {
-    case "exact":
-      return "bg-emerald-50 text-emerald-700";
-    case "high_confidence":
-      return "bg-sky-50 text-sky-700";
-    case "needs_review":
-      return "bg-amber-50 text-amber-700";
-    case "unresolved":
-      return "bg-red-50 text-red-700";
-    default:
-      return "bg-slate-100 text-slate-700";
-  }
 }
 
 function countItemsCsvExportCandidates(preview: ProjectRequirementPreview | null): number {
@@ -499,20 +486,7 @@ export function ProjectEditor({
               {!!message && <p className="mt-2 text-xs text-slate-600">{message}</p>}
               {entryPreview && (
                 <div className="mt-3 rounded-xl border border-slate-200 bg-white p-3">
-                  <div className="flex flex-wrap gap-2 text-xs">
-                    <span className="rounded-full bg-emerald-50 px-3 py-1 font-semibold text-emerald-700">
-                      Exact {entryPreview.summary.exact}
-                    </span>
-                    <span className="rounded-full bg-sky-50 px-3 py-1 font-semibold text-sky-700">
-                      High Confidence {entryPreview.summary.high_confidence}
-                    </span>
-                    <span className="rounded-full bg-amber-50 px-3 py-1 font-semibold text-amber-700">
-                      Review {entryPreview.summary.needs_review}
-                    </span>
-                    <span className="rounded-full bg-red-50 px-3 py-1 font-semibold text-red-700">
-                      Unresolved {entryPreview.summary.unresolved}
-                    </span>
-                  </div>
+                  <ImportPreviewSummary summary={entryPreview.summary} />
                   <div className="mt-3 overflow-x-auto">
                     <table className="min-w-[1100px] text-sm">
                       <thead>

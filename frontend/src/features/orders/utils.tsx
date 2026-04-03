@@ -160,35 +160,7 @@ export function normalizeCatalogValue(value: string): string {
   return value.trim().toLowerCase().replace(/[\s_-]+/g, "");
 }
 
-export function previewStatusLabel(status: OrderImportPreviewStatus): string {
-  switch (status) {
-    case "exact":
-      return "Exact";
-    case "high_confidence":
-      return "High Confidence";
-    case "needs_review":
-      return "Needs Review";
-    case "unresolved":
-      return "Unresolved";
-    default:
-      return status;
-  }
-}
-
-export function previewStatusTone(status: OrderImportPreviewStatus): string {
-  switch (status) {
-    case "exact":
-      return "bg-emerald-50 text-emerald-700";
-    case "high_confidence":
-      return "bg-sky-50 text-sky-700";
-    case "needs_review":
-      return "bg-amber-50 text-amber-700";
-    case "unresolved":
-      return "bg-red-50 text-red-700";
-    default:
-      return "bg-slate-100 text-slate-700";
-  }
-}
+export { previewStatusLabel, previewStatusTone } from "@/lib/previewStatus";
 
 export function renderDocumentReference(url: string | null | undefined, label = "Open document") {
   if (!url) return "-";

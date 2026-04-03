@@ -1,7 +1,9 @@
 import { useState } from "react";
 import { CatalogPicker } from "@/components/CatalogPicker";
+import { ImportPreviewSummary } from "@/components/ImportPreviewSummary";
 import { apiSend } from "@/lib/api";
 import { formatActionError } from "@/lib/previewState";
+import { previewStatusTone } from "@/lib/previewStatus";
 import type { CatalogSearchResult } from "@/lib/types";
 
 type BomRow = {
@@ -65,21 +67,6 @@ const blankRow = (): BomRow => ({
   item_number: "",
   required_quantity: 0,
 });
-
-function previewStatusTone(status: BomPreviewStatus): string {
-  switch (status) {
-    case "exact":
-      return "bg-emerald-50 text-emerald-700";
-    case "high_confidence":
-      return "bg-sky-50 text-sky-700";
-    case "needs_review":
-      return "bg-amber-50 text-amber-700";
-    case "unresolved":
-      return "bg-red-50 text-red-700";
-    default:
-      return "bg-slate-100 text-slate-700";
-  }
-}
 
 function statusLabel(status: BomPreviewStatus): string {
   return status.replace("_", " ");
@@ -483,19 +470,8 @@ export function BomPage() {
               Analysis date: <strong>{preview.target_date ?? "current availability"}</strong>
             </div>
           </div>
-          <div className="mt-3 flex flex-wrap gap-2 text-xs">
-            <span className="rounded-full bg-emerald-50 px-3 py-1 font-semibold text-emerald-700">
-              Exact {preview.summary.exact}
-            </span>
-            <span className="rounded-full bg-sky-50 px-3 py-1 font-semibold text-sky-700">
-              High Confidence {preview.summary.high_confidence}
-            </span>
-            <span className="rounded-full bg-amber-50 px-3 py-1 font-semibold text-amber-700">
-              Review {preview.summary.needs_review}
-            </span>
-            <span className="rounded-full bg-red-50 px-3 py-1 font-semibold text-red-700">
-              Unresolved {preview.summary.unresolved}
-            </span>
+          <div className="mt-3">
+            <ImportPreviewSummary summary={preview.summary} />
           </div>
           <div className="mt-3 flex flex-wrap gap-2">
             <button className="button" disabled={loading} onClick={analyzePreviewRows} type="button">

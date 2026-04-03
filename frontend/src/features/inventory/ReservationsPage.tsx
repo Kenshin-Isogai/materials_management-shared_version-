@@ -2,9 +2,11 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 import { useLocation } from "react-router-dom";
 import { ApiErrorNotice } from "@/components/ApiErrorNotice";
+import { ImportPreviewSummary } from "@/components/ImportPreviewSummary";
 import { apiDownload, apiGetAllPages, apiGetWithPagination, apiSend, apiSendForm } from "@/lib/api";
 import { CatalogPicker } from "@/components/CatalogPicker";
 import { formatActionError, resolvePreviewSelection } from "@/lib/previewState";
+import { previewStatusTone } from "@/lib/previewStatus";
 import type { CatalogSearchResult, Item, Order, ProjectRow, Reservation } from "@/lib/types";
 
 type ReservationRow = {
@@ -302,21 +304,6 @@ export function ReservationsPage() {
     );
   }
 
-  function previewStatusTone(status: ReservationImportPreviewRow["status"]): string {
-    switch (status) {
-      case "exact":
-        return "bg-emerald-50 text-emerald-700";
-      case "high_confidence":
-        return "bg-sky-50 text-sky-700";
-      case "needs_review":
-        return "bg-amber-50 text-amber-700";
-      case "unresolved":
-        return "bg-red-50 text-red-700";
-      default:
-        return "bg-slate-100 text-slate-700";
-    }
-  }
-
   async function revalidateReservationViews() {
     await Promise.all([mutateReservations(), mutateReservationSummary()]);
   }
@@ -547,17 +534,7 @@ export function ReservationsPage() {
         {reservationMessage && <p className="text-sm text-signal">{reservationMessage}</p>}
         {reservationPreview && (
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <div className="flex flex-wrap gap-2 text-xs">
-              <span className="rounded-full bg-emerald-50 px-3 py-1 font-semibold text-emerald-700">
-                Exact {reservationPreview.summary.exact}
-              </span>
-              <span className="rounded-full bg-amber-50 px-3 py-1 font-semibold text-amber-700">
-                Review {reservationPreview.summary.needs_review}
-              </span>
-              <span className="rounded-full bg-red-50 px-3 py-1 font-semibold text-red-700">
-                Unresolved {reservationPreview.summary.unresolved}
-              </span>
-            </div>
+            <ImportPreviewSummary summary={reservationPreview.summary} />
             <div className="mt-3 overflow-x-auto">
               <table className="min-w-[1100px] text-sm">
                 <thead>

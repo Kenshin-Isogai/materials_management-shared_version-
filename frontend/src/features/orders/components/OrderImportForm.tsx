@@ -2,6 +2,7 @@ import { FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import type { MissingItemResolverRow, CatalogSearchResult } from "@/lib/types";
 import { CatalogPicker } from "@/components/CatalogPicker";
+import { ImportPreviewSummary } from "@/components/ImportPreviewSummary";
 import type {
   GeneratedArtifact,
   OrderImportPreview,
@@ -172,20 +173,7 @@ export function OrderImportForm({
                   Combined preview across {files.length} file(s). Supplier is resolved per row from the CSV content.
                 </p>
               </div>
-              <div className="flex flex-wrap gap-2 text-xs">
-                <span className="rounded-full bg-emerald-50 px-3 py-1 font-semibold text-emerald-700">
-                  Exact {importPreview.summary.exact}
-                </span>
-                <span className="rounded-full bg-sky-50 px-3 py-1 font-semibold text-sky-700">
-                  High {importPreview.summary.high_confidence}
-                </span>
-                <span className="rounded-full bg-amber-50 px-3 py-1 font-semibold text-amber-700">
-                  Review {importPreview.summary.needs_review}
-                </span>
-                <span className="rounded-full bg-red-50 px-3 py-1 font-semibold text-red-700">
-                  Unresolved {importPreview.summary.unresolved}
-                </span>
-              </div>
+              <ImportPreviewSummary summary={importPreview.summary} />
             </div>
 
             {importPreview.blocking_errors.length > 0 && (

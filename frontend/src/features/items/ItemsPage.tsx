@@ -26,6 +26,7 @@ import {
   previewStatusTone,
 } from "@/features/items/utils";
 import { CatalogPicker } from "@/components/CatalogPicker";
+import { ImportPreviewSummary } from "@/components/ImportPreviewSummary";
 import { ApiErrorNotice } from "@/components/ApiErrorNotice";
 import { BulkItemEntry } from "@/features/items/components/BulkItemEntry";
 import { ItemImportForm } from "@/features/items/components/ItemImportForm";
@@ -853,20 +854,7 @@ export function ItemsPage() {
         {csvMessage && <p className="mt-3 text-sm text-signal">{csvMessage}</p>}
         {csvPreview && (
           <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
-            <div className="flex flex-wrap gap-2 text-xs">
-              <span className="rounded-full bg-emerald-50 px-3 py-1 font-semibold text-emerald-700">
-                Exact {csvPreview.summary.exact}
-              </span>
-              <span className="rounded-full bg-sky-50 px-3 py-1 font-semibold text-sky-700">
-                High Confidence {csvPreview.summary.high_confidence}
-              </span>
-              <span className="rounded-full bg-amber-50 px-3 py-1 font-semibold text-amber-700">
-                Review {csvPreview.summary.needs_review}
-              </span>
-              <span className="rounded-full bg-red-50 px-3 py-1 font-semibold text-red-700">
-                Unresolved {csvPreview.summary.unresolved}
-              </span>
-            </div>
+            <ImportPreviewSummary summary={csvPreview.summary} />
             <div className="mt-3 overflow-x-auto">
               <table className="min-w-[1260px] text-sm">
                 <thead>

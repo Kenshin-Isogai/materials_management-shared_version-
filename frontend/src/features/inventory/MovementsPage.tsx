@@ -2,9 +2,11 @@ import { FormEvent, useMemo, useState } from "react";
 import useSWR from "swr";
 import { ApiErrorNotice } from "@/components/ApiErrorNotice";
 import { CatalogPicker } from "@/components/CatalogPicker";
+import { ImportPreviewSummary } from "@/components/ImportPreviewSummary";
 import { apiDownload, apiGetWithPagination, apiSend, apiSendForm } from "@/lib/api";
 import { getNextMovementEntryLocations } from "@/lib/movementEntry";
 import { formatActionError, resolvePreviewSelection } from "@/lib/previewState";
+import { previewStatusTone } from "@/lib/previewStatus";
 import type { CatalogSearchResult, InventoryRow, Item } from "@/lib/types";
 
 type MoveRow = {
@@ -111,20 +113,6 @@ export function InventoryPage() {
     return resolvePreviewSelection(movementPreviewSelections, row.row, row.suggested_match ?? null);
   }
 
-  function previewStatusTone(status: InventoryImportPreviewRow["status"]): string {
-    switch (status) {
-      case "exact":
-        return "bg-emerald-50 text-emerald-700";
-      case "high_confidence":
-        return "bg-sky-50 text-sky-700";
-      case "needs_review":
-        return "bg-amber-50 text-amber-700";
-      case "unresolved":
-        return "bg-red-50 text-red-700";
-      default:
-        return "bg-slate-100 text-slate-700";
-    }
-  }
 
 
 
@@ -320,17 +308,7 @@ export function InventoryPage() {
         {movementMessage && <p className="text-sm text-signal">{movementMessage}</p>}
         {movementPreview && (
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <div className="flex flex-wrap gap-2 text-xs">
-              <span className="rounded-full bg-emerald-50 px-3 py-1 font-semibold text-emerald-700">
-                Exact {movementPreview.summary.exact}
-              </span>
-              <span className="rounded-full bg-amber-50 px-3 py-1 font-semibold text-amber-700">
-                Review {movementPreview.summary.needs_review}
-              </span>
-              <span className="rounded-full bg-red-50 px-3 py-1 font-semibold text-red-700">
-                Unresolved {movementPreview.summary.unresolved}
-              </span>
-            </div>
+            <ImportPreviewSummary summary={movementPreview.summary} />
             <div className="mt-3 overflow-x-auto">
               <table className="min-w-[980px] text-sm">
                 <thead>

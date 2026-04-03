@@ -99,20 +99,7 @@ export function mergeItemImportResults(
   };
 }
 
-export function previewStatusTone(status: ItemImportPreviewRow["status"]): string {
-  switch (status) {
-    case "exact":
-      return "bg-emerald-50 text-emerald-700";
-    case "high_confidence":
-      return "bg-sky-50 text-sky-700";
-    case "needs_review":
-      return "bg-amber-50 text-amber-700";
-    case "unresolved":
-      return "bg-red-50 text-red-700";
-    default:
-      return "bg-slate-100 text-slate-700";
-  }
-}
+export { previewStatusTone } from "@/lib/previewStatus";
 
 export const blankRow = (): ItemEntryRow => ({
   row_type: "item",
