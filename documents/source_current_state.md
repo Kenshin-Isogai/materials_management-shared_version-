@@ -192,6 +192,8 @@ Last updated: 2026-04-03 (JST)
   - legacy purchase-order headers are backfilled during migration with stable `LEGACY-PO-<purchase_order_id>` values and stay unlocked so pre-rollout data remains uniquely addressable and re-importable
   - order-line document-reference edits now safely update the current header metadata and can reattach a line to another same-supplier header when that target document reference already exists
   - imported quotation/order document values open as links only when the stored reference is HTTPS; other values render as plain text in the Orders UI
+  - quotation-header and purchase-order-header lists now use the same capped independent scroll region as the purchase-order line list (`max-h-[42rem]`)
+  - purchase-order line cards now use tighter padding and keep the normal action buttons in one shared row, reducing vertical whitespace without changing text size
 - Manual Orders CSV import is now DB-tracked through the shared import-job tables.
   - `POST /api/purchase-order-lines/import` returns `import_job_id`
   - `GET /api/purchase-order-lines/import-jobs` lists `import_type='orders'` jobs

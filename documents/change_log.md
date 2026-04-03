@@ -2,6 +2,41 @@
 
 ### Changed
 
+- Tightened the Purchase Order Lines card layout on the Orders page.
+  - reduced card padding so each line row uses less vertical space
+  - moved `Line Details` into the same action row as the other line buttons so the default four actions sit together on one row when space allows
+  - added a focused Orders-page regression test for the shared line-action row
+
+### Tests
+
+- Frontend targeted Vitest:
+  - `npm run test -- tests/OrdersPage.test.tsx`
+  - result: `13 passed`
+- Frontend production build:
+  - `npm run build`
+  - result: successful
+
+## 2026-04-04
+
+### Changed
+
+- Fixed the Orders page header-list layout so quotation and purchase-order lists scroll independently.
+  - changed the Quotations and Purchase Orders list panes to use the same `max-h-[42rem] overflow-y-auto` cap as the Purchase Order Lines list
+  - added a focused Orders-page regression test that locks in the shared capped scroll behavior
+
+### Tests
+
+- Frontend targeted Vitest:
+  - `npm run test -- tests/OrdersPage.test.tsx`
+  - result: `12 passed`
+- Frontend production build:
+  - `npm run build`
+  - result: successful
+
+## 2026-04-04
+
+### Changed
+
 - Fixed the sidebar quick-search command palette crash.
   - wrapped the command-palette dialog contents in the required `cmdk` root `<Command>` provider so opening the palette no longer throws `Cannot read properties of undefined (reading 'subscribe')`
   - added a focused frontend regression test covering Ctrl+K palette open behavior

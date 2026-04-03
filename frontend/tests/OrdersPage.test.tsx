@@ -278,6 +278,26 @@ describe("OrdersPage", () => {
     expect(within(orderListSection as HTMLElement).queryByText(/Line #304 .* AOMO3080-125/)).toBeNull();
   });
 
+  it("keeps line actions in one shared action row", async () => {
+    renderPage();
+
+    const orderRow = (await screen.findByText(/Line #304 .* AOMO3080-125/)).closest(".rounded-2xl");
+    expect(orderRow).toBeTruthy();
+
+    const lineDetailsButton = within(orderRow as HTMLElement).getByRole("button", { name: "Line Details" });
+    const markArrivedButton = within(orderRow as HTMLElement).getByRole("button", { name: "Mark Arrived" });
+    const editOrderButton = within(orderRow as HTMLElement).getByRole("button", { name: "Edit Order" });
+    const deleteButton = within(orderRow as HTMLElement).getByRole("button", { name: "Delete" });
+
+    const actionRow = lineDetailsButton.parentElement;
+    expect(actionRow).toBeTruthy();
+    expect(actionRow).toBe(markArrivedButton.parentElement);
+    expect(actionRow).toBe(editOrderButton.parentElement);
+    expect(actionRow).toBe(deleteButton.parentElement);
+    expect(actionRow?.className).toContain("flex-wrap");
+    expect(actionRow?.className).toContain("items-center");
+  });
+
   it("shows purchase-order headers separately from quotation headers", async () => {
     const user = userEvent.setup();
     renderPage();
@@ -300,6 +320,28 @@ describe("OrdersPage", () => {
       expect(within(purchaseOrderDetailsSection as HTMLElement).getByText("Line #304 · AOMO3080-125")).toBeTruthy();
       expect(within(purchaseOrderDetailsSection as HTMLElement).getByText("Line #305 · BETA-200")).toBeTruthy();
     });
+  });
+
+  it("uses the same capped scroll height for quotation and purchase-order header lists", async () => {
+    renderPage();
+
+    const quotationsSection = sectionByHeading("Quotations");
+    const purchaseOrdersSection = sectionByHeading("Purchase Orders");
+    expect(quotationsSection).toBeTruthy();
+    expect(purchaseOrdersSection).toBeTruthy();
+
+    await waitFor(() => {
+      expect(within(quotationsSection as HTMLElement).getByText("Showing 1 / 1 quotations")).toBeTruthy();
+      expect(within(purchaseOrdersSection as HTMLElement).getByText("Showing 1 / 1 purchase orders")).toBeTruthy();
+    });
+
+    const quotationList = within(quotationsSection as HTMLElement).getByText("Showing 1 / 1 quotations").closest("div");
+    const purchaseOrderList = within(purchaseOrdersSection as HTMLElement).getByText("Showing 1 / 1 purchase orders").closest("div");
+
+    expect(quotationList?.className).toContain("max-h-[42rem]");
+    expect(quotationList?.className).toContain("overflow-y-auto");
+    expect(purchaseOrderList?.className).toContain("max-h-[42rem]");
+    expect(purchaseOrderList?.className).toContain("overflow-y-auto");
   });
 
   it("splits first and assigns only the created child order when a project is selected", async () => {

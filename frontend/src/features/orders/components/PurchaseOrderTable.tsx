@@ -73,7 +73,7 @@ export function PurchaseOrderTable({
       <div className="mt-3">
         <input className="input" value={purchaseOrderSearch} onChange={(event) => setPurchaseOrderSearch(event.target.value)} placeholder="Search by supplier, PO number, PO id, date, or document URL" />
       </div>
-      <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
+      <div className="mt-3 max-h-[42rem] overflow-y-auto pr-1">
         {purchaseOrdersLoading && <p className="text-sm text-slate-500">Loading...</p>}
         {purchaseOrdersError ? <ApiErrorNotice error={purchaseOrdersError} area="purchase order header data" /> : null}
         {purchaseOrdersData && (

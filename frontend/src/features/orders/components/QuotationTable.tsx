@@ -72,7 +72,7 @@ export function QuotationTable({
         <input className="input" value={quotationNumberSearch} onChange={(event) => setQuotationNumberSearch(event.target.value)} placeholder="Search by quotation number" />
         <input className="input" value={quotationFilter} onChange={(event) => setQuotationFilter(event.target.value)} placeholder="Filter by supplier, issue date, or document URL" />
       </div>
-      <div className="mt-3 min-h-0 flex-1 overflow-y-auto pr-1">
+      <div className="mt-3 max-h-[42rem] overflow-y-auto pr-1">
         {quotationsLoading && <p className="text-sm text-slate-500">Loading...</p>}
         {quotationsError ? <ApiErrorNotice error={quotationsError} area="quotation data" /> : null}
         {quotationsData && (

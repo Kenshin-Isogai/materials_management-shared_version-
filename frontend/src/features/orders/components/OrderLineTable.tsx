@@ -106,9 +106,9 @@ export function OrderLineTable({
             <p className="mb-2 text-xs text-slate-500">Showing {filteredSortedOrders.length} / {ordersData.length} orders</p>
             <div className="space-y-2">
               {filteredSortedOrders.map((row) => (
-                <div key={row.order_id} className={`rounded-2xl border px-4 py-3 ${row.order_id === selectedOrderId ? "border-amber-400 bg-amber-50" : "border-slate-200 bg-white"}`}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
+                <div key={row.order_id} className={`rounded-2xl border px-3.5 py-2.5 ${row.order_id === selectedOrderId ? "border-amber-400 bg-amber-50" : "border-slate-200 bg-white"}`}>
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0">
                       <p className="font-semibold">Line #{row.order_id} · {row.canonical_item_number}</p>
                       <p className="text-sm text-slate-600">
                         {row.supplier_name} · PO {row.purchase_order_number ?? `#${row.purchase_order_id}`} · Quote {row.quotation_number}
@@ -118,26 +118,8 @@ export function OrderLineTable({
                         {row.project_name ? ` · ${row.project_name}` : ""}
                       </p>
                     </div>
-                    <button className="button-subtle" onClick={() => openOrderDetails(row.order_id)} disabled={loading}>Line Details</button>
-                  </div>
-                  <div className="mt-3 grid gap-2 md:grid-cols-2">
-                    <div>
-                      {editingOrderId === row.order_id ? (
-                        <div className="space-y-2">
-                          <input className="input" type="date" value={editingOrderExpectedArrival} onChange={(event) => setEditingOrderExpectedArrival(event.target.value)} />
-                          <input className="input" type="number" min={1} max={row.order_amount - 1} placeholder={`Split qty (1-${row.order_amount - 1})`} value={editingOrderSplitQuantity} onChange={(event) => setEditingOrderSplitQuantity(event.target.value)} />
-                          <select className="input" value={editingOrderProjectId} onChange={(event) => setEditingOrderProjectId(event.target.value)}>
-                            <option value="">No project assignment</option>
-                            {(projectsData ?? []).map((project) => (
-                              <option key={project.project_id} value={project.project_id}>
-                                #{project.project_id} {project.name} ({project.status})
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      ) : null}
-                    </div>
-                    <div className="flex flex-wrap items-start justify-end gap-2">
+                    <div className="flex flex-wrap items-center justify-end gap-2">
+                      <button className="button-subtle" onClick={() => openOrderDetails(row.order_id)} disabled={loading}>Line Details</button>
                       {row.status === "Ordered" ? (
                         <>
                           <button className="button-subtle" onClick={() => markArrived(row.order_id)} disabled={loading}>Mark Arrived</button>
@@ -150,14 +132,26 @@ export function OrderLineTable({
                             <button className="button-subtle" onClick={() => beginEditOrder(row)} disabled={loading}>Edit Order</button>
                           )}
                         </>
-                      ) : (
-                        <span className="text-slate-400">-</span>
-                      )}
+                      ) : null}
                       <button className="button-subtle" onClick={() => deleteOrder(row.order_id)} disabled={loading || row.status === "Arrived"} title={row.status === "Arrived" ? "Arrived orders cannot be deleted" : "Delete this order"}>
                         Delete
                       </button>
                     </div>
                   </div>
+                  {editingOrderId === row.order_id ? (
+                    <div className="mt-2.5 grid gap-2 md:grid-cols-3">
+                      <input className="input" type="date" value={editingOrderExpectedArrival} onChange={(event) => setEditingOrderExpectedArrival(event.target.value)} />
+                      <input className="input" type="number" min={1} max={row.order_amount - 1} placeholder={`Split qty (1-${row.order_amount - 1})`} value={editingOrderSplitQuantity} onChange={(event) => setEditingOrderSplitQuantity(event.target.value)} />
+                      <select className="input" value={editingOrderProjectId} onChange={(event) => setEditingOrderProjectId(event.target.value)}>
+                        <option value="">No project assignment</option>
+                        {(projectsData ?? []).map((project) => (
+                          <option key={project.project_id} value={project.project_id}>
+                            #{project.project_id} {project.name} ({project.status})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  ) : null}
                 </div>
               ))}
             </div>
