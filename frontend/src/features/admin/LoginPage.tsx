@@ -7,9 +7,9 @@ import {
   sendIdentityPlatformVerificationEmail,
   signInWithIdentityPlatformEmailPassword,
   signUpWithIdentityPlatformEmailPassword,
-} from "../lib/auth";
-import { setStoredAccessToken } from "../lib/api";
-import { presentApiError } from "../lib/errorUtils";
+} from "@/lib/auth";
+import { setStoredAccessToken } from "@/lib/api";
+import { presentApiError } from "@/lib/errorUtils";
 
 export function LoginPage() {
   const navigate = useNavigate();

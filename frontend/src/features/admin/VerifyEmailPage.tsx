@@ -4,9 +4,9 @@ import {
   applyIdentityPlatformEmailVerificationCode,
   refreshStoredAuthSessionNow,
   sendIdentityPlatformVerificationEmail,
-} from "../lib/auth";
-import { presentApiError } from "../lib/errorUtils";
-import { StatusCallout } from "../components/StatusCallout";
+} from "@/lib/auth";
+import { presentApiError } from "@/lib/errorUtils";
+import { StatusCallout } from "@/components/StatusCallout";
 
 type VerifyEmailPageProps = {
   email?: string | null;

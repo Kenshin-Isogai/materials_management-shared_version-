@@ -1,9 +1,9 @@
 import { useState } from "react";
 import useSWR from "swr";
-import { ApiErrorNotice } from "../components/ApiErrorNotice";
-import { ProjectEditor } from "../components/ProjectEditor";
-import { apiGetWithPagination, apiSend } from "../lib/api";
-import type { ProjectRow } from "../lib/types";
+import { ApiErrorNotice } from "@/components/ApiErrorNotice";
+import { ProjectEditor } from "@/components/ProjectEditor";
+import { apiGetWithPagination, apiSend } from "@/lib/api";
+import type { ProjectRow } from "@/lib/types";
 
 export function ProjectsPage() {
   const [editingProjectId, setEditingProjectId] = useState<number | null>(null);

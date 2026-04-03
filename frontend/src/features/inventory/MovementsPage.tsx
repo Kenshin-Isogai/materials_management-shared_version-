@@ -1,11 +1,11 @@
 import { FormEvent, useMemo, useState } from "react";
 import useSWR from "swr";
-import { ApiErrorNotice } from "../components/ApiErrorNotice";
-import { CatalogPicker } from "../components/CatalogPicker";
-import { apiDownload, apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
-import { getNextMovementEntryLocations } from "../lib/movementEntry";
-import { formatActionError, resolvePreviewSelection } from "../lib/previewState";
-import type { CatalogSearchResult, InventoryRow, Item } from "../lib/types";
+import { ApiErrorNotice } from "@/components/ApiErrorNotice";
+import { CatalogPicker } from "@/components/CatalogPicker";
+import { apiDownload, apiGetWithPagination, apiSend, apiSendForm } from "@/lib/api";
+import { getNextMovementEntryLocations } from "@/lib/movementEntry";
+import { formatActionError, resolvePreviewSelection } from "@/lib/previewState";
+import type { CatalogSearchResult, InventoryRow, Item } from "@/lib/types";
 
 type MoveRow = {
   item_id: string;

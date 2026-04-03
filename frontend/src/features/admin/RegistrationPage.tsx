@@ -1,11 +1,11 @@
 import { FormEvent, useMemo, useState } from "react";
 import useSWR from "swr";
 import { Link } from "react-router-dom";
-import { apiGet, apiSend } from "../lib/api";
-import { ApiErrorNotice } from "../components/ApiErrorNotice";
-import { StatusCallout } from "../components/StatusCallout";
-import { presentApiError } from "../lib/errorUtils";
-import type { RegistrationRequest, RegistrationStatus, UserRole } from "../lib/types";
+import { apiGet, apiSend } from "@/lib/api";
+import { ApiErrorNotice } from "@/components/ApiErrorNotice";
+import { StatusCallout } from "@/components/StatusCallout";
+import { presentApiError } from "@/lib/errorUtils";
+import type { RegistrationRequest, RegistrationStatus, UserRole } from "@/lib/types";
 
 const REQUESTABLE_ROLES: UserRole[] = ["viewer", "operator", "admin"];
 

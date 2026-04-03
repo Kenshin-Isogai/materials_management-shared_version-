@@ -1,14 +1,14 @@
 import { useMemo, useState } from "react";
 import useSWR from "swr";
-import { apiDownload, apiGet, apiGetWithPagination, apiSend } from "../lib/api";
-import { buildLinkedOrderSelectOptions } from "../lib/rfqEditorState";
+import { apiDownload, apiGet, apiGetWithPagination, apiSend } from "@/lib/api";
+import { buildLinkedOrderSelectOptions } from "@/lib/rfqEditorState";
 import type {
   ProcurementBatchDetail,
   ProcurementBatchSummary,
   ProcurementLine,
   ProcurementLineStatus,
   PurchaseOrderLine,
-} from "../lib/types";
+} from "@/lib/types";
 
 type ShortageInboxRow = {
   item_id: number;

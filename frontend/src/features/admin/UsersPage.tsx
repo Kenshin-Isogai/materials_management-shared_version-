@@ -1,9 +1,9 @@
 import { FormEvent, useMemo, useState } from "react";
 import useSWR from "swr";
-import { ApiErrorNotice } from "../components/ApiErrorNotice";
-import { apiGet, apiSend, notifyUsersChanged } from "../lib/api";
-import { presentApiError } from "../lib/errorUtils";
-import type { RegistrationRequest, User, UserRole } from "../lib/types";
+import { ApiErrorNotice } from "@/components/ApiErrorNotice";
+import { apiGet, apiSend, notifyUsersChanged } from "@/lib/api";
+import { presentApiError } from "@/lib/errorUtils";
+import type { RegistrationRequest, User, UserRole } from "@/lib/types";
 
 const USER_ROLES: UserRole[] = ["admin", "operator", "viewer"];
 

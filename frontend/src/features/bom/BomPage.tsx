@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { CatalogPicker } from "../components/CatalogPicker";
-import { apiSend } from "../lib/api";
-import { formatActionError } from "../lib/previewState";
-import type { CatalogSearchResult } from "../lib/types";
+import { CatalogPicker } from "@/components/CatalogPicker";
+import { apiSend } from "@/lib/api";
+import { formatActionError } from "@/lib/previewState";
+import type { CatalogSearchResult } from "@/lib/types";
 
 type BomRow = {
   supplier: string;

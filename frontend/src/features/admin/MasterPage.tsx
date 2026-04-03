@@ -1,6 +1,6 @@
 import { FormEvent, useState } from "react";
 import useSWR from "swr";
-import { apiGet, apiSend } from "../lib/api";
+import { apiGet, apiSend } from "@/lib/api";
 
 type Manufacturer = { manufacturer_id: number; name: string };
 type Supplier = { supplier_id: number; name: string };

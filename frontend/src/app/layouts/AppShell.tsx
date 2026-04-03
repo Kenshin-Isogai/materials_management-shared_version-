@@ -17,6 +17,8 @@ import {
   History,
   LogOut,
   LogIn,
+  ClipboardList,
+  Kanban,
 } from "lucide-react";
 
 import {
@@ -43,6 +45,7 @@ import {
 } from "@/components/ui/breadcrumb";
 import { Separator } from "@/components/ui/separator";
 import { RouteErrorBoundary } from "@/components/RouteErrorBoundary";
+import { CommandPalette } from "@/components/CommandPalette";
 
 import {
   clearStoredAuthSession,
@@ -67,6 +70,7 @@ type NavItem = {
   to: string;
   label: string;
   icon: React.ComponentType<{ className?: string }>;
+  children?: NavItem[];
 };
 
 type NavGroup = {
@@ -79,7 +83,15 @@ const navGroups: NavGroup[] = [
     label: "Planning",
     items: [
       { to: "/", label: "Dashboard", icon: LayoutDashboard },
-      { to: "/projects", label: "Projects", icon: FolderKanban },
+      {
+        to: "/projects",
+        label: "Projects",
+        icon: FolderKanban,
+        children: [
+          { to: "/projects/overview", label: "Overview", icon: ClipboardList },
+          { to: "/projects/board", label: "Planning Board", icon: Kanban },
+        ],
+      },
       { to: "/procurement", label: "Procurement", icon: ShoppingCart },
       { to: "/bom", label: "BOM Analysis", icon: Layers },
     ],
@@ -111,7 +123,7 @@ const navGroups: NavGroup[] = [
   },
 ];
 
-const allNavItems = navGroups.flatMap((g) => g.items);
+const allNavItems = navGroups.flatMap((g) => g.items.flatMap((item) => [item, ...(item.children ?? [])]));
 
 /* ------------------------------------------------------------------ */
 /*  Helpers                                                           */
@@ -357,6 +369,7 @@ export function AppShell() {
   /* ── Render ── */
   return (
     <SidebarProvider>
+      <CommandPalette />
       {/* ── Sidebar ── */}
       <Sidebar className="border-r-0">
         {/* Header / logo */}
@@ -367,6 +380,18 @@ export function AppShell() {
         </SidebarHeader>
 
         <SidebarSeparator />
+
+        {/* Quick search hint */}
+        <div className="px-4 py-2">
+          <button
+            onClick={() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true }))}
+            className="flex w-full items-center gap-2 rounded-lg border border-sidebar-border bg-sidebar-accent/30 px-3 py-1.5 text-xs text-sidebar-foreground/60 transition hover:bg-sidebar-accent/50"
+          >
+            <span>🔍</span>
+            <span className="flex-1 text-left">Search...</span>
+            <kbd className="rounded border border-sidebar-border px-1.5 py-0.5 font-mono text-[10px]">Ctrl+K</kbd>
+          </button>
+        </div>
 
         {/* Navigation groups */}
         <SidebarContent>
@@ -380,7 +405,7 @@ export function AppShell() {
                       <SidebarMenuButton asChild>
                         <NavLink
                           to={item.to}
-                          end={item.to === "/"}
+                          end={item.to === "/" || !!item.children}
                           className={({ isActive }) =>
                             isActive
                               ? "bg-sidebar-primary text-sidebar-primary-foreground"
@@ -391,6 +416,27 @@ export function AppShell() {
                           <span>{item.label}</span>
                         </NavLink>
                       </SidebarMenuButton>
+                      {item.children && (
+                        <SidebarMenu className="ml-4 mt-0.5 border-l border-sidebar-border pl-2">
+                          {item.children.map((child) => (
+                            <SidebarMenuItem key={child.to}>
+                              <SidebarMenuButton asChild size="sm">
+                                <NavLink
+                                  to={child.to}
+                                  className={({ isActive }) =>
+                                    isActive
+                                      ? "bg-sidebar-primary text-sidebar-primary-foreground"
+                                      : ""
+                                  }
+                                >
+                                  <child.icon className="size-3.5" />
+                                  <span className="text-xs">{child.label}</span>
+                                </NavLink>
+                              </SidebarMenuButton>
+                            </SidebarMenuItem>
+                          ))}
+                        </SidebarMenu>
+                      )}
                     </SidebarMenuItem>
                   ))}
                 </SidebarMenu>

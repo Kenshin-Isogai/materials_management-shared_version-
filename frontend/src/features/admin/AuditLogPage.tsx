@@ -1,8 +1,8 @@
 import { useState } from "react";
 import useSWR from "swr";
-import { ApiErrorNotice } from "../components/ApiErrorNotice";
-import { apiGetWithPagination, apiSend } from "../lib/api";
-import type { Transaction } from "../lib/types";
+import { ApiErrorNotice } from "@/components/ApiErrorNotice";
+import { apiGetWithPagination, apiSend } from "@/lib/api";
+import type { Transaction } from "@/lib/types";
 
 export function HistoryPage() {
   const [busy, setBusy] = useState(false);

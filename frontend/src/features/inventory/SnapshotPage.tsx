@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { apiGet } from "../lib/api";
+import { apiGet } from "@/lib/api";
 
 type SnapshotRow = {
   item_id: number;

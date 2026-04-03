@@ -1,11 +1,11 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
 import { useLocation } from "react-router-dom";
-import { ApiErrorNotice } from "../components/ApiErrorNotice";
-import { apiDownload, apiGetAllPages, apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
-import { CatalogPicker } from "../components/CatalogPicker";
-import { formatActionError, resolvePreviewSelection } from "../lib/previewState";
-import type { CatalogSearchResult, Item, Order, ProjectRow, Reservation } from "../lib/types";
+import { ApiErrorNotice } from "@/components/ApiErrorNotice";
+import { apiDownload, apiGetAllPages, apiGetWithPagination, apiSend, apiSendForm } from "@/lib/api";
+import { CatalogPicker } from "@/components/CatalogPicker";
+import { formatActionError, resolvePreviewSelection } from "@/lib/previewState";
+import type { CatalogSearchResult, Item, Order, ProjectRow, Reservation } from "@/lib/types";
 
 type ReservationRow = {
   item_id: string;

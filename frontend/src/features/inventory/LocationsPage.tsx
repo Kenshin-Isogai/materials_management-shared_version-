@@ -1,6 +1,6 @@
 import { useState } from "react";
 import useSWR from "swr";
-import { apiGet, apiSend } from "../lib/api";
+import { apiGet, apiSend } from "@/lib/api";
 
 type LocationRow = {
   location: string;

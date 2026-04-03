@@ -68,6 +68,16 @@
 }
 
 /* ── Legacy utility classes (compat bridge, migrate away over time) ── */
+.input {
+  @apply w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-ink outline-none transition focus:border-signal focus:ring-2 focus:ring-signal/20;
+}
+.button {
+  @apply inline-flex items-center justify-center rounded-xl border border-slate-700 bg-slatebrand px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60;
+}
+.button-subtle {
+  @apply inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-slate-300 hover:bg-slate-50;
+}
+
 .panel {
   @apply rounded-2xl border bg-card backdrop-blur-md;
   box-shadow: 0 12px 36px rgba(29, 43, 58, 0.12);

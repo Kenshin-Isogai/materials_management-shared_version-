@@ -1,10 +1,10 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import useSWR from "swr";
-import { ApiErrorNotice } from "../components/ApiErrorNotice";
-import { apiGetAllPages, apiSend } from "../lib/api";
-import { isHttpsDocumentReference } from "../lib/documentReferences";
-import type { ArrivalScheduleEntry } from "../lib/types";
+import { ApiErrorNotice } from "@/components/ApiErrorNotice";
+import { apiGetAllPages, apiSend } from "@/lib/api";
+import { isHttpsDocumentReference } from "@/lib/documentReferences";
+import type { ArrivalScheduleEntry } from "@/lib/types";
 
 type ArrivalBucketFilter = "all" | "overdue" | "scheduled" | "no_eta";
 type SupplyScope = "all" | "generic" | "dedicated";

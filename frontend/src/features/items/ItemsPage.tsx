@@ -1,303 +1,38 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import useSWR from "swr";
-import { ApiErrorNotice } from "../components/ApiErrorNotice";
-import { CatalogPicker } from "../components/CatalogPicker";
-import { apiDownload, apiGet, apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
-import { formatActionError, resolvePreviewSelection } from "../lib/previewState";
-import type { CatalogSearchResult, Item } from "../lib/types";
-
-type ItemRowType = "item" | "alias";
-
-type ItemEntryRow = {
-  row_type: ItemRowType;
-  item_number: string;
-  manufacturer_name: string;
-  supplier: string;
-  canonical_item_number: string;
-  units_per_order: string;
-  category: string;
-  url: string;
-  description: string;
-};
-
-type ItemImportRow = {
-  row: number;
-  status: "created" | "duplicate" | "error";
-  entry_type?: ItemRowType;
-  item_id?: number;
-  item_number?: string;
-  supplier?: string;
-  canonical_item_number?: string;
-  units_per_order?: number;
-  error?: string;
-  source_name?: string;
-};
-
-type ItemImportResult = {
-  status: string;
-  processed: number;
-  created_count: number;
-  duplicate_count: number;
-  failed_count: number;
-  import_job_id?: number;
-  import_job_ids?: number[];
-  rows: ItemImportRow[];
-};
-
-type ItemImportPreviewMatch = CatalogSearchResult & {
-  confidence_score?: number | null;
-  match_reason?: string | null;
-};
-
-type ItemImportPreviewRow = {
-  row: number;
-  entry_type: "item" | "alias" | string;
-  item_number: string;
-  manufacturer_name: string;
-  supplier: string;
-  canonical_item_number: string;
-  units_per_order: string;
-  category: string;
-  url: string;
-  description: string;
-  status: "exact" | "high_confidence" | "needs_review" | "unresolved";
-  action: string;
-  message: string;
-  blocking: boolean;
-  requires_user_selection: boolean;
-  allowed_entity_types: Array<"item">;
-  suggested_match: ItemImportPreviewMatch | null;
-  candidates: ItemImportPreviewMatch[];
-  source_name?: string;
-  source_index?: number;
-  preview_key?: string;
-};
-
-type ItemImportPreview = {
-  source_name: string;
-  summary: {
-    total_rows: number;
-    exact: number;
-    high_confidence: number;
-    needs_review: number;
-    unresolved: number;
-  };
-  blocking_errors: string[];
-  can_auto_accept: boolean;
-  rows: ItemImportPreviewRow[];
-};
-
-function itemPreviewMatchToCatalogResult(
-  match: ItemImportPreviewMatch
-): CatalogSearchResult {
-  return {
-    entity_type: "item",
-    entity_id: match.entity_id,
-    value_text: match.value_text,
-    display_label: match.display_label,
-    summary: match.summary,
-    match_source: match.match_source,
-  };
-}
-
-function itemImportPreviewRowKey(row: ItemImportPreviewRow): string {
-  return row.preview_key ?? String(row.row);
-}
-
-function mergeItemImportPreviews(previews: ItemImportPreview[]): ItemImportPreview {
-  if (previews.length === 1) {
-    return {
-      ...previews[0],
-      rows: previews[0].rows.map((row) => ({
-        ...row,
-        source_name: previews[0].source_name,
-        source_index: 0,
-        preview_key: `0:${row.row}`
-      }))
-    };
-  }
-
-  return {
-    source_name: `${previews.length} files`,
-    summary: previews.reduce(
-      (summary, preview) => ({
-        total_rows: summary.total_rows + preview.summary.total_rows,
-        exact: summary.exact + preview.summary.exact,
-        high_confidence: summary.high_confidence + preview.summary.high_confidence,
-        needs_review: summary.needs_review + preview.summary.needs_review,
-        unresolved: summary.unresolved + preview.summary.unresolved
-      }),
-      {
-        total_rows: 0,
-        exact: 0,
-        high_confidence: 0,
-        needs_review: 0,
-        unresolved: 0
-      }
-    ),
-    blocking_errors: previews.flatMap((preview) =>
-      preview.blocking_errors.map((message) => `${preview.source_name}: ${message}`)
-    ),
-    can_auto_accept: previews.every((preview) => preview.can_auto_accept),
-    rows: previews.flatMap((preview, sourceIndex) =>
-      preview.rows.map((row) => ({
-        ...row,
-        source_name: preview.source_name,
-        source_index: sourceIndex,
-        preview_key: `${sourceIndex}:${row.row}`
-      }))
-    )
-  };
-}
-
-function mergeItemImportResults(
-  results: Array<{ sourceName: string; result: ItemImportResult }>
-): ItemImportResult {
-  const processed = results.reduce((sum, entry) => sum + entry.result.processed, 0);
-  const createdCount = results.reduce((sum, entry) => sum + entry.result.created_count, 0);
-  const duplicateCount = results.reduce((sum, entry) => sum + entry.result.duplicate_count, 0);
-  const failedCount = results.reduce((sum, entry) => sum + entry.result.failed_count, 0);
-  const importJobIds = results
-    .map((entry) => entry.result.import_job_id)
-    .filter((jobId): jobId is number => typeof jobId === "number");
-
-  return {
-    status: failedCount === 0 ? "ok" : createdCount > 0 || duplicateCount > 0 ? "partial" : "error",
-    processed,
-    created_count: createdCount,
-    duplicate_count: duplicateCount,
-    failed_count: failedCount,
-    import_job_id: importJobIds[importJobIds.length - 1],
-    import_job_ids: importJobIds,
-    rows: results.flatMap(({ sourceName, result }) =>
-      result.rows.map((row) => ({
-        ...row,
-        source_name: sourceName
-      }))
-    )
-  };
-}
-
-function previewStatusTone(status: ItemImportPreviewRow["status"]): string {
-  switch (status) {
-    case "exact":
-      return "bg-emerald-50 text-emerald-700";
-    case "high_confidence":
-      return "bg-sky-50 text-sky-700";
-    case "needs_review":
-      return "bg-amber-50 text-amber-700";
-    case "unresolved":
-      return "bg-red-50 text-red-700";
-    default:
-      return "bg-slate-100 text-slate-700";
-  }
-}
-
-type ItemImportJobSummary = {
-  import_job_id: number;
-  import_type: string;
-  source_name: string;
-  continue_on_error: boolean;
-  status: string;
-  processed: number;
-  created_count: number;
-  duplicate_count: number;
-  failed_count: number;
-  lifecycle_state: "active" | "undone";
-  created_at: string;
-  undone_at?: string | null;
-  redo_of_job_id?: number | null;
-  last_redo_job_id?: number | null;
-};
-
-type ItemImportJobEffect = {
-  effect_id: number;
-  row_number: number;
-  status: "created" | "duplicate" | "error";
-  entry_type?: ItemRowType;
-  effect_type: string;
-  item_number?: string;
-  supplier_name?: string;
-  canonical_item_number?: string;
-  units_per_order?: number;
-  message?: string;
-  code?: string;
-};
-
-type ItemImportJobDetail = {
-  job: ItemImportJobSummary;
-  effects: ItemImportJobEffect[];
-};
-
-type ItemEditDraft = {
-  item_number: string;
-  manufacturer_name: string;
-  category: string;
-  url: string;
-  description: string;
-};
-
-type MetadataBulkRow = {
-  item_id: string;
-  category: string;
-  url: string;
-  description: string;
-};
-
-type MetadataBulkResultRow = {
-  row: number;
-  status: "updated" | "error";
-  item_id: number;
-  item_number?: string;
-  error?: string;
-  code?: string;
-};
-
-type MetadataBulkResult = {
-  status: string;
-  processed: number;
-  updated_count: number;
-  failed_count: number;
-  rows: MetadataBulkResultRow[];
-};
-
-type ItemFlowEvent = {
-  event_at: string;
-  delta: number;
-  quantity: number;
-  direction: "increase" | "decrease";
-  source_type: string;
-  source_ref: string;
-  reason: string;
-  note: string | null;
-};
-
-type ItemFlowTimeline = {
-  item_id: number;
-  item_number: string;
-  manufacturer_name: string;
-  current_stock: number;
-  events: ItemFlowEvent[];
-};
-
-const blankRow = (): ItemEntryRow => ({
-  row_type: "item",
-  item_number: "",
-  manufacturer_name: "UNKNOWN",
-  supplier: "",
-  canonical_item_number: "",
-  units_per_order: "1",
-  category: "",
-  url: "",
-  description: ""
-});
-
-const blankMetadataRow = (): MetadataBulkRow => ({
-  item_id: "",
-  category: "",
-  url: "",
-  description: "",
-});
+import { apiDownload, apiGet, apiGetWithPagination, apiSend, apiSendForm } from "@/lib/api";
+import { formatActionError, resolvePreviewSelection } from "@/lib/previewState";
+import type { CatalogSearchResult, Item } from "@/lib/types";
+import type {
+  ItemEntryRow,
+  ItemImportPreview,
+  ItemImportPreviewRow,
+  ItemImportResult,
+  ItemImportJobSummary,
+  ItemImportJobDetail,
+  ItemEditDraft,
+  ItemRowType,
+  MetadataBulkRow,
+  MetadataBulkResult,
+  ItemFlowTimeline,
+} from "@/features/items/types";
+import {
+  blankRow,
+  blankMetadataRow,
+  itemPreviewMatchToCatalogResult,
+  itemImportPreviewRowKey,
+  mergeItemImportPreviews,
+  mergeItemImportResults,
+  previewStatusTone,
+} from "@/features/items/utils";
+import { CatalogPicker } from "@/components/CatalogPicker";
+import { ApiErrorNotice } from "@/components/ApiErrorNotice";
+import { BulkItemEntry } from "@/features/items/components/BulkItemEntry";
+import { ItemImportForm } from "@/features/items/components/ItemImportForm";
+import { ItemImportHistory } from "@/features/items/components/ItemImportHistory";
+import { BulkMetadataUpdate } from "@/features/items/components/BulkMetadataUpdate";
+import { ItemBrowseTable } from "@/features/items/components/ItemBrowseTable";
+import { ItemFlowTimeline as ItemFlowTimelinePanel } from "@/features/items/components/ItemFlowTimeline";
 
 export function ItemsPage() {
   const [q, setQ] = useState("");
@@ -404,6 +139,22 @@ export function ItemsPage() {
     return sortDirection === "asc" ? "↑" : "↓";
   }
 
+  function updateBulkRow(index: number, patch: Partial<ItemEntryRow>) {
+    setBulkRows((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  }
+
+  function removeBulkRow(index: number) {
+    setBulkRows((prev) => prev.filter((_, i) => i !== index));
+  }
+
+  function updateMetadataRow(index: number, patch: Partial<MetadataBulkRow>) {
+    setMetadataRows((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  }
+
+  function removeMetadataRow(index: number) {
+    setMetadataRows((prev) => prev.filter((_, i) => i !== index));
+  }
+
   useEffect(() => {
     if (!importJobs.length) {
       setSelectedImportJobId(null);
@@ -453,14 +204,6 @@ export function ItemsPage() {
         units_per_order: parsedUnits,
       }),
     });
-  }
-
-  function updateBulkRow(index: number, patch: Partial<ItemEntryRow>) {
-    setBulkRows((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
-  }
-
-  function removeBulkRow(index: number) {
-    setBulkRows((prev) => prev.filter((_, i) => i !== index));
   }
 
   async function createBulk() {
@@ -809,14 +552,6 @@ export function ItemsPage() {
     } finally {
       setListBusy(false);
     }
-  }
-
-  function updateMetadataRow(index: number, patch: Partial<MetadataBulkRow>) {
-    setMetadataRows((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
-  }
-
-  function removeMetadataRow(index: number) {
-    setMetadataRows((prev) => prev.filter((_, i) => i !== index));
   }
 
   async function submitMetadataBulk() {
@@ -1222,7 +957,7 @@ export function ItemsPage() {
                             <div className="space-y-2">
                               <CatalogPicker
                                 allowedTypes={["item"]}
-                                onChange={(value) =>
+                                onChange={(value: CatalogSearchResult | null) =>
                                   setCsvPreviewSelections((prev) => ({
                                     ...prev,
                                     [itemImportPreviewRowKey(row)]: value,
