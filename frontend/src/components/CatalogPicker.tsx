@@ -354,7 +354,9 @@ export function CatalogPicker(props: CatalogPickerProps) {
             )}
             {!isLoading && !error && groupedResults.length === 0 && (
               <p className="px-2 py-3 text-sm text-slate-500">
-                {deferredQuery ? "No matches found." : "Type to search or use a recent selection."}
+                {deferredQuery
+                  ? "No matches found."
+                  : "Type to search (space = AND) or use a recent selection."}
               </p>
             )}
             {!isLoading &&

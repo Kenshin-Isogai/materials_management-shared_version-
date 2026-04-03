@@ -1581,7 +1581,7 @@ export function ItemsPage() {
           </button>
           <input
             className="input w-80"
-            placeholder="Search by keyword"
+            placeholder="Search keywords (space = AND)"
             value={q}
             onChange={(e) => setQ(e.target.value)}
           />

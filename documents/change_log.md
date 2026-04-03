@@ -1,3 +1,18 @@
+## 2026-04-03
+
+### Changed
+
+- Relaxed Items and catalog search matching.
+  - `/api/items?q=...` now matches case-insensitively and ignores whitespace differences across item number, manufacturer, category, and description fields
+  - `/api/catalog/search` now applies the same normalization for item, supplier, and project searches, including supplier-alias text used by `CatalogPicker`
+  - both endpoints now also treat space-delimited terms as AND conditions, including cross-field item catalog matches
+  - added API regression coverage for whitespace/case-insensitive and multi-term item-list/catalog lookups
+
+### Tests
+
+- Backend targeted pytest against Docker test DB:
+  - `uv run --project backend python -m pytest backend/tests/test_api_integration.py -q --import-mode=importlib -k "items_list_search_ignores_case_and_whitespace or items_list_search_supports_space_delimited_and_terms or catalog_search_ignores_case_and_whitespace or catalog_search_supports_space_delimited_and_terms or catalog_search_endpoint_returns_typed_results_and_alias_matches or catalog_search_item_summary_includes_description"`
+
 ## 2026-04-02
 
 ### Changed

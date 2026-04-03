@@ -846,6 +846,8 @@ End-to-End tests are implemented using Playwright to verify the full-stack behav
   - `assembly`: assembly name and description
   - `supplier`: supplier name
   - `project`: project name and description
+- Item-list keyword search and catalog-search matching are case-insensitive and ignore whitespace differences, so `KM100A`, `km 100 a`, and similar variants resolve to the same candidates.
+- Space-delimited search terms now behave as AND conditions across the indexed text fields, so `thorlabs km100` narrows results to candidates that satisfy both terms even when the matches land in different fields.
 - Search returns typed rows with `entity_type`, `entity_id`, `value_text`, `display_label`, `summary`, and `match_source`; the frontend groups them by entity type.
 - Frontend now has a reusable `CatalogPicker` component with:
   - keyboard navigation (`ArrowUp`, `ArrowDown`, `Enter`, `Escape`)

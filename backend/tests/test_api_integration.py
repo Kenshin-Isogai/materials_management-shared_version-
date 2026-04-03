@@ -4007,6 +4007,112 @@ def test_catalog_search_endpoint_returns_typed_results_and_alias_matches(client)
     )
 
 
+def test_items_list_search_ignores_case_and_whitespace(client):
+    manufacturer = client.post("/api/manufacturers", json={"name": "API Search MFG"}).json()["data"]
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "KM 100 A",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Mirror Mount",
+            "description": "Kinematic Mirror Mount",
+        },
+    ).json()["data"]
+
+    response = client.get("/api/items?q=km100a&per_page=50")
+
+    assert response.status_code == 200
+    rows = response.json()["data"]
+    assert any(row["item_id"] == item["item_id"] and row["item_number"] == "KM 100 A" for row in rows)
+
+
+def test_items_list_search_supports_space_delimited_and_terms(client):
+    manufacturer = client.post("/api/manufacturers", json={"name": "API Search Multi MFG"}).json()["data"]
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "KM 100 A",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Mirror Mount",
+            "description": "Kinematic stage mount",
+        },
+    ).json()["data"]
+
+    response = client.get("/api/items?q=kinematic km100a&per_page=50")
+
+    assert response.status_code == 200
+    rows = response.json()["data"]
+    assert any(row["item_id"] == item["item_id"] for row in rows)
+
+
+def test_catalog_search_ignores_case_and_whitespace(client):
+    manufacturer = client.post("/api/manufacturers", json={"name": "API Catalog Search MFG"}).json()["data"]
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "KM 100 A",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Mirror Mount",
+        },
+    ).json()["data"]
+    supplier = client.post("/api/suppliers", json={"name": "Thor Labs Search Supplier"}).json()["data"]
+    alias = client.post(
+        f"/api/suppliers/{supplier['supplier_id']}/aliases",
+        json={
+            "ordered_item_number": "Thor Labs KM 100 A",
+            "canonical_item_id": item["item_id"],
+            "units_per_order": 1,
+        },
+    )
+    assert alias.status_code == 200
+
+    response = client.get("/api/catalog/search?q=thorlabskm100a&types=item")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["query"] == "thorlabskm100a"
+    assert any(
+        row["entity_type"] == "item"
+        and row["entity_id"] == item["item_id"]
+        and row["match_source"] == "supplier_item_alias"
+        for row in payload["results"]
+    )
+
+
+def test_catalog_search_supports_space_delimited_and_terms(client):
+    manufacturer = client.post("/api/manufacturers", json={"name": "API Catalog Multi MFG"}).json()["data"]
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "KM 100 A",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Mirror Mount",
+            "description": "Precision mount",
+        },
+    ).json()["data"]
+    supplier = client.post("/api/suppliers", json={"name": "Thor Labs Search Supplier"}).json()["data"]
+    alias = client.post(
+        f"/api/suppliers/{supplier['supplier_id']}/aliases",
+        json={
+            "ordered_item_number": "TL-KM100A",
+            "canonical_item_id": item["item_id"],
+            "units_per_order": 1,
+        },
+    )
+    assert alias.status_code == 200
+
+    response = client.get("/api/catalog/search?q=thor labs km100a&types=item")
+
+    assert response.status_code == 200
+    results = response.json()["data"]["results"]
+    assert any(
+        row["entity_type"] == "item"
+        and row["entity_id"] == item["item_id"]
+        and row["match_source"] in {"item_number", "supplier_item_alias", "alias_supplier_name"}
+        for row in results
+    )
+
+
 def test_catalog_search_endpoint_rejects_invalid_types(client):
     response = client.get("/api/catalog/search?q=test&types=item,unknown")
     assert response.status_code == 422

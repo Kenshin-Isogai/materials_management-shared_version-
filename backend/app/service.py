@@ -1576,6 +1576,46 @@ def _normalize_item_number_for_lookup(value: str) -> str:
     return normalized
 
 
+def _normalize_search_text(value: Any) -> str:
+    normalized = unicodedata.normalize("NFKC", str(value or "")).strip().casefold()
+    if not normalized:
+        return ""
+    return re.sub(r"\s+", "", normalized)
+
+
+def _split_search_terms(value: Any) -> list[str]:
+    raw = unicodedata.normalize("NFKC", str(value or "")).strip()
+    if not raw:
+        return []
+    terms = [_normalize_search_text(part) for part in re.split(r"\s+", raw) if part.strip()]
+    return [term for term in terms if term]
+
+
+def _search_text_sql(expression: str) -> str:
+    return (
+        "regexp_replace("
+        f"lower(COALESCE({expression}, '')),"
+        " '[[:space:]]+', '', 'g'"
+        ")"
+    )
+
+
+def _append_search_term_clauses(
+    clauses: list[str],
+    params: list[Any],
+    *,
+    terms: list[str],
+    expressions: list[str],
+) -> None:
+    if not terms:
+        return
+    normalized_expressions = [_search_text_sql(expression) for expression in expressions]
+    for term in terms:
+        wildcard = f"%{term}%"
+        clauses.append("(" + " OR ".join(f"{expression} LIKE ?" for expression in normalized_expressions) + ")")
+        params.extend([wildcard] * len(normalized_expressions))
+
+
 ORDER_IMPORT_AUTO_ACCEPT_SCORE = 95
 ORDER_IMPORT_REVIEW_SCORE = 70
 ORDER_IMPORT_PREVIEW_CANDIDATE_LIMIT = 5
@@ -3122,12 +3162,13 @@ def list_items(
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     clauses: list[str] = []
     params: list[Any] = []
-    if q:
-        clauses.append(
-            "(im.item_number LIKE ? OR im.description LIKE ? OR im.category LIKE ? OR m.name LIKE ?)"
-        )
-        wildcard = f"%{q}%"
-        params.extend([wildcard, wildcard, wildcard, wildcard])
+    search_terms = _split_search_terms(q)
+    _append_search_term_clauses(
+        clauses,
+        params,
+        terms=search_terms,
+        expressions=["im.item_number", "im.description", "im.category", "m.name"],
+    )
     if category:
         clauses.append("COALESCE(ca.canonical_category, im.category) = ?")
         params.append(category)
@@ -14098,26 +14139,42 @@ CATALOG_ENTITY_TYPES = {"item", "assembly", "supplier", "project"}
 
 
 def _catalog_rank_text(query: str, *values: Any) -> tuple[int, str | None]:
-    normalized_query = query.casefold()
+    normalized_query = _normalize_search_text(query)
+    query_terms = _split_search_terms(query)
+    if not normalized_query or not query_terms:
+        return 999, None
     best_rank = 999
     best_source: str | None = None
+    matched_terms: set[str] = set()
+    first_term_source: str | None = None
     for idx, value in enumerate(values):
         if value is None:
             continue
-        normalized_value = str(value).strip().casefold()
+        normalized_value = _normalize_search_text(value)
         if not normalized_value:
             continue
+        local_matches = [term for term in query_terms if term in normalized_value]
+        if local_matches:
+            matched_terms.update(local_matches)
+            if first_term_source is None and query_terms[0] in local_matches:
+                first_term_source = str(idx)
         if normalized_value == normalized_query:
             rank = 0
         elif normalized_value.startswith(normalized_query):
             rank = 1
         elif normalized_query in normalized_value:
             rank = 2
+        elif len(local_matches) == len(query_terms):
+            rank = 3
         else:
             continue
         if rank < best_rank:
             best_rank = rank
             best_source = str(idx)
+    if best_rank != 999:
+        return best_rank, best_source
+    if len(matched_terms) == len(query_terms):
+        return 4, first_term_source
     return best_rank, best_source
 
 
@@ -14128,8 +14185,10 @@ def catalog_search(
     entity_types: list[str] | None = None,
     limit_per_type: int = 8,
 ) -> dict[str, Any]:
-    normalized_query = str(q or "").strip()
-    if not normalized_query:
+    raw_query = str(q or "").strip()
+    normalized_query = _normalize_search_text(raw_query)
+    search_terms = _split_search_terms(raw_query)
+    if not normalized_query or not search_terms:
         return {"query": "", "results": []}
 
     requested_types = entity_types or sorted(CATALOG_ENTITY_TYPES)
@@ -14141,10 +14200,24 @@ def catalog_search(
             status_code=422,
         )
 
-    wildcard = f"%{normalized_query}%"
     results: list[dict[str, Any]] = []
 
     if "item" in requested_types:
+        item_clauses: list[str] = []
+        item_params: list[Any] = []
+        _append_search_term_clauses(
+            item_clauses,
+            item_params,
+            terms=search_terms,
+            expressions=[
+                "im.item_number",
+                "m.name",
+                "COALESCE(ca.canonical_category, im.category, '')",
+                "im.description",
+                "a.ordered_item_number",
+                "s.name",
+            ],
+        )
         item_rows = conn.execute(
             """
             SELECT
@@ -14160,21 +14233,17 @@ def catalog_search(
             LEFT JOIN category_aliases ca ON ca.alias_category = im.category
             LEFT JOIN supplier_item_aliases a ON a.canonical_item_id = im.item_id
             LEFT JOIN suppliers s ON s.supplier_id = a.supplier_id
-            WHERE
-                im.item_number ILIKE ?
-                OR m.name ILIKE ?
-                OR COALESCE(ca.canonical_category, im.category, '') ILIKE ?
-                OR COALESCE(im.description, '') ILIKE ?
-                OR COALESCE(a.ordered_item_number, '') ILIKE ?
-                OR COALESCE(s.name, '') ILIKE ?
+            WHERE """
+            + " AND ".join(item_clauses)
+            + """
             ORDER BY im.item_number, im.item_id
             """,
-            (wildcard, wildcard, wildcard, wildcard, wildcard, wildcard),
+            tuple(item_params),
         ).fetchall()
         item_candidates: dict[int, dict[str, Any]] = {}
         for row in item_rows:
             score, source_idx = _catalog_rank_text(
-                normalized_query,
+                raw_query,
                 row["item_number"],
                 row["manufacturer_name"],
                 row["category"],
@@ -14220,6 +14289,14 @@ def catalog_search(
         )
 
     if "supplier" in requested_types:
+        supplier_clauses: list[str] = []
+        supplier_params: list[Any] = []
+        _append_search_term_clauses(
+            supplier_clauses,
+            supplier_params,
+            terms=search_terms,
+            expressions=["s.name"],
+        )
         supplier_rows = conn.execute(
             """
             SELECT
@@ -14228,15 +14305,17 @@ def catalog_search(
                 COUNT(a.alias_id) AS alias_count
             FROM suppliers s
             LEFT JOIN supplier_item_aliases a ON a.supplier_id = s.supplier_id
-            WHERE s.name ILIKE ?
+            WHERE """
+            + " AND ".join(supplier_clauses)
+            + """
             GROUP BY s.supplier_id
             ORDER BY s.name, s.supplier_id
             """,
-            (wildcard,),
+            tuple(supplier_params),
         ).fetchall()
         supplier_results: list[dict[str, Any]] = []
         for row in supplier_rows:
-            score, _ = _catalog_rank_text(normalized_query, row["name"])
+            score, _ = _catalog_rank_text(raw_query, row["name"])
             if score == 999:
                 continue
             supplier_results.append(
@@ -14259,7 +14338,7 @@ def catalog_search(
     if "assembly" in requested_types:
         assembly_results: list[dict[str, Any]] = []
         for row in _load_assembly_preview_catalog_rows(conn):
-            score, source_idx = _catalog_rank_text(normalized_query, row["name"], row["description"])
+            score, source_idx = _catalog_rank_text(raw_query, row["name"], row["description"])
             if score == 999:
                 continue
             assembly_results.append(
@@ -14287,6 +14366,14 @@ def catalog_search(
         )
 
     if "project" in requested_types:
+        project_clauses: list[str] = []
+        project_params: list[Any] = []
+        _append_search_term_clauses(
+            project_clauses,
+            project_params,
+            terms=search_terms,
+            expressions=["p.name", "p.description"],
+        )
         project_rows = conn.execute(
             """
             SELECT
@@ -14298,15 +14385,17 @@ def catalog_search(
                 COUNT(pr.requirement_id) AS requirement_count
             FROM projects p
             LEFT JOIN project_requirements pr ON pr.project_id = p.project_id
-            WHERE p.name ILIKE ? OR COALESCE(p.description, '') ILIKE ?
+            WHERE """
+            + " AND ".join(project_clauses)
+            + """
             GROUP BY p.project_id
             ORDER BY p.created_at DESC, p.project_id DESC
             """,
-            (wildcard, wildcard),
+            tuple(project_params),
         ).fetchall()
         project_results: list[dict[str, Any]] = []
         for row in project_rows:
-            score, source_idx = _catalog_rank_text(normalized_query, row["name"], row["description"])
+            score, source_idx = _catalog_rank_text(raw_query, row["name"], row["description"])
             if score == 999:
                 continue
             match_source = "name" if source_idx == "0" else "description"
@@ -14332,7 +14421,7 @@ def catalog_search(
 
     for row in results:
         row.pop("_score", None)
-    return {"query": normalized_query, "results": results}
+    return {"query": raw_query, "results": results}
 
 
 def create_supplier(conn: sqlite3.Connection, name: str) -> dict[str, Any]:

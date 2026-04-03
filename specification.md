@@ -1016,13 +1016,13 @@ Base URL: `http://localhost:8000/api`
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/catalog/search` | Search typed catalog entities for write-flow selectors (`?q=...&types=item,assembly,supplier,project&limit_per_type=8`) |
+| GET | `/catalog/search` | Search typed catalog entities for write-flow selectors (`?q=...&types=item,assembly,supplier,project&limit_per_type=8`); matching is case-insensitive, ignores whitespace differences, and treats space-delimited terms as AND conditions |
 
 #### **Items**
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/items` | List items (supports `?q=`, `?category=`, `?manufacturer=`, pagination) |
+| GET | `/items` | List items (supports `?q=`, `?category=`, `?manufacturer=`, pagination); `q` matching is case-insensitive, ignores whitespace differences, and treats space-delimited terms as AND conditions |
 | GET | `/items/import-template` | Download header-only item import template CSV (UTF-8 with BOM) |
 | GET | `/items/import-reference` | Download live item/alias reference CSV |
 | POST | `/items/import-preview` | Preview item/alias CSV reconciliation before commit |

@@ -1,6 +1,6 @@
 # Source Current State
 
-Last updated: 2026-04-02 (JST)
+Last updated: 2026-04-03 (JST)
 
 ## 1. System Snapshot
 
@@ -213,6 +213,8 @@ Last updated: 2026-04-02 (JST)
 - Reservations page now includes `Provisional Allocation Summary` with project-level provisional reserved totals plus open incoming dedicated/uncommitted supply metrics, and supports `Export Summary CSV` for review handoff.
 - Reservations and Projects page headers now include guidance clarifying scope: Reservations is execution-time allocation, Projects is future-demand planning.
 - Added typed catalog search endpoint `/api/catalog/search` for write-flow selectors (`item`, `assembly`, `supplier`, `project`).
+- Items list keyword search and typed catalog search now ignore case and whitespace differences across item numbers, manufacturers, categories, descriptions, and supplier-alias text.
+- Those searches now also treat space-delimited terms as AND conditions, including cross-field matches used by `CatalogPicker`.
 - Projects page requirement entry now uses `CatalogPicker` for item and assembly targets instead of ad hoc `#id` text matching/datalist suggestions.
   - item search candidates now include item descriptions in their supporting summary text so similar part numbers are easier to distinguish
 - Projects page requirement entry now supports preview-first bulk text parsing (`item_number,quantity` per line).
