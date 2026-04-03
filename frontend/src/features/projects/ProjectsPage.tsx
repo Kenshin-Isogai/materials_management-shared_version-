@@ -1,16 +1,49 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import useSWR from "swr";
 import { ApiErrorNotice } from "@/components/ApiErrorNotice";
 import { ProjectEditor } from "@/components/ProjectEditor";
 import { apiGetWithPagination, apiSend } from "@/lib/api";
 import type { ProjectRow } from "@/lib/types";
 
+function parseEditProjectId(value: string | null): number | null {
+  if (!value) return null;
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 export function ProjectsPage() {
-  const [editingProjectId, setEditingProjectId] = useState<number | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [editingProjectId, setEditingProjectId] = useState<number | null>(() =>
+    parseEditProjectId(searchParams.get("edit")),
+  );
   const [working, setWorking] = useState(false);
   const { data, error, isLoading, mutate } = useSWR("/projects", () =>
     apiGetWithPagination<ProjectRow[]>("/projects?per_page=200"),
   );
+
+  useEffect(() => {
+    const nextProjectId = parseEditProjectId(searchParams.get("edit"));
+    setEditingProjectId((current) =>
+      current === nextProjectId ? current : nextProjectId,
+    );
+  }, [searchParams]);
+
+  function openProjectEditor(projectId: number | null) {
+    setEditingProjectId(projectId);
+    setSearchParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        if (projectId == null) {
+          next.delete("edit");
+        } else {
+          next.set("edit", String(projectId));
+        }
+        return next;
+      },
+      { replace: true },
+    );
+  }
 
   async function reserve(projectId: number) {
     setWorking(true);
@@ -43,9 +76,9 @@ export function ProjectsPage() {
         projectId={editingProjectId}
         title={editingProjectId ? `Edit Project #${editingProjectId}` : "Create Project"}
         submitLabel={editingProjectId ? "Save Project" : "Create Project"}
-        onCancel={editingProjectId ? () => setEditingProjectId(null) : undefined}
+        onCancel={editingProjectId ? () => openProjectEditor(null) : undefined}
         onSaved={async () => {
-          setEditingProjectId(null);
+          openProjectEditor(null);
           await mutate();
         }}
       />
@@ -79,7 +112,7 @@ export function ProjectsPage() {
                       <button
                         className="button-subtle mr-2"
                         type="button"
-                        onClick={() => setEditingProjectId(row.project_id)}
+                        onClick={() => openProjectEditor(row.project_id)}
                       >
                         Edit
                       </button>

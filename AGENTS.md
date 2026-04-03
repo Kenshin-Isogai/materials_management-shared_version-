@@ -36,14 +36,14 @@ Even when reads are effectively open, API mutation requests require `Authorizati
 
 When implementing or modifying code, consult these documents first:
 
-1. `specification.md` (source of truth for requirements and contracts)
+1. `documents/specification.md` (source of truth for requirements and contracts)
 2. `documents/technical_documentation.md` (architecture and maintenance guidance)
 3. `documents/source_current_state.md` (current implementation snapshot)
 4. `documents/change_log.md` (recent behavior and design changes)
 
 If any conflict appears, follow precedence:
 
-1. `specification.md`
+1. `documents/specification.md`
 2. `documents/technical_documentation.md`
 3. current code behavior
 
@@ -93,7 +93,7 @@ When updating this application, follow this order:
    - Architecture/data model/maintenance notes: `documents/technical_documentation.md`
    - Current-state snapshot updates: `documents/source_current_state.md` when structure/behavior changed
    - Change history updates: `documents/change_log.md` for meaningful changes
-   - Requirements/spec updates: `specification.md` when behavior or contract changed
+   - Requirements/spec updates: `documents/specification.md` when behavior or contract changed
 8. In your final report, always include:
    - What changed
    - What tests were run (and results)

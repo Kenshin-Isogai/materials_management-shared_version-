@@ -89,7 +89,7 @@ Example command:
 
 Before the first deployment, configure the GitHub Environment using:
 
-- [github_actions_environment_setup.md](C:/Users/IsogaiKenshin/Documents/Yaqumo/applications/materials_menagement(shared_version)/documents/gcp_cloud_run_rollout/github_actions_environment_setup.md)
+- [github_actions_environment_setup.md](github_actions_environment_setup.md)
 
 For a brand-new environment:
 
@@ -99,7 +99,7 @@ For a brand-new environment:
 
 If you need a reminder of the exact value format after secrets have already been entered once, check the example sections in:
 
-- [github_actions_environment_setup.md](C:/Users/IsogaiKenshin/Documents/Yaqumo/applications/materials_menagement(shared_version)/documents/gcp_cloud_run_rollout/github_actions_environment_setup.md)
+- [github_actions_environment_setup.md](github_actions_environment_setup.md)
 
 ## Step 4: Run backend-only GitHub Actions deployment
 

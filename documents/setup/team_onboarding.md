@@ -221,7 +221,7 @@ Then run tests and start the app as usual.
 
 Before implementing code changes, read in this order:
 
-1. `specification.md`
+1. `documents/specification.md`
 2. `documents/technical_documentation.md`
 3. `documents/source_current_state.md`
 4. `documents/change_log.md`

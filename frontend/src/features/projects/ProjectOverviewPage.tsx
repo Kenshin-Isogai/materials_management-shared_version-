@@ -14,6 +14,7 @@ import type {
   WorkspaceSummary,
 } from "@/lib/types";
 import { ProjectSummaryCard } from "./components/ProjectSummaryCard";
+import { projectBoardRoute, projectEditorRoute } from "@/features/projects/routes";
 
 type WorkspaceView = "summary" | "pipeline";
 
@@ -106,8 +107,6 @@ export function ProjectOverviewPage() {
     [projects],
   );
 
-  const [selectedProjectId] = useState<number | null>(null);
-
   return (
     <div className="space-y-6">
       <section className="flex flex-wrap items-start justify-between gap-4">
@@ -190,7 +189,7 @@ export function ProjectOverviewPage() {
             <ProjectSummaryCard
               key={project.project_id}
               project={project}
-              selected={project.project_id === selectedProjectId}
+              selected={false}
             />
           ))}
           {!projects.length && !workspaceLoading && (
@@ -274,13 +273,13 @@ export function ProjectOverviewPage() {
                       <div className="flex flex-wrap gap-2">
                         <Link
                           className="button-subtle"
-                          to={`/projects/${row.project_id}`}
+                          to={projectEditorRoute(row.project_id)}
                         >
                           Project
                         </Link>
                         <Link
                           className="button"
-                          to={`/projects/overview/board/${row.project_id}`}
+                          to={projectBoardRoute(row.project_id)}
                         >
                           Board
                         </Link>

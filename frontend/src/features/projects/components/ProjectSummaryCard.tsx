@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import type { WorkspaceProjectSummary } from "@/lib/types";
+import { projectBoardRoute, projectEditorRoute } from "@/features/projects/routes";
 
 function statusTone(status: string): string {
   switch (status) {
@@ -172,13 +173,13 @@ export function ProjectSummaryCard({
       <div className="mt-4 flex flex-wrap gap-2">
         <Link
           className="button-subtle"
-          to={`/projects/${project.project_id}`}
+          to={projectEditorRoute(project.project_id)}
         >
           Open Project
         </Link>
         <Link
           className="button"
-          to={`/projects/overview/board/${project.project_id}`}
+          to={projectBoardRoute(project.project_id)}
         >
           {project.status === "PLANNING" ? "Preview In Board" : "Open Board"}
         </Link>

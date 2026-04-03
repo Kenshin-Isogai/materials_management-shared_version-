@@ -10,6 +10,7 @@ import {
   presentApiError,
 } from "@/lib/errorUtils";
 import { nextSynchronizedBoardDate } from "@/lib/workspaceState";
+import { projectEditorRoute } from "@/features/projects/routes";
 import type {
   ConfirmAllocationResult,
   PlanningAnalysisResult,
@@ -254,6 +255,11 @@ export function PlanningBoardPage() {
     setAnalysisDateApplied(next);
   }, [analysisDateApplied, analysisDateDraft, selectedAnalysisTargetDate, selectedProject?.planned_start, selectedProject?.project_id]);
 
+  useEffect(() => {
+    if (!previewDirty) return;
+    setAllocationPreview(null);
+  }, [previewDirty]);
+
   async function refreshWorkspace() {
     await Promise.all([mutateWorkspace(), analysisKey ? mutateAnalysis() : Promise.resolve(undefined)]);
   }
@@ -402,14 +408,19 @@ export function PlanningBoardPage() {
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <h3 className="font-display text-lg font-semibold">Actions</h3>
           <div className="flex flex-wrap gap-2">
-            {selectedProjectId && <Link className="button-subtle" to={`/projects/${selectedProjectId}`}>Open Project</Link>}
+            {selectedProjectId && <Link className="button-subtle" to={projectEditorRoute(selectedProjectId)}>Open Project</Link>}
             {selectedProjectId && <button className="button-subtle" type="button" disabled={working || !analysisData || !hasConfirmableAllocation} onClick={() => void previewConfirmAllocation()}>Preview Confirm</button>}
-            {selectedProjectId && <button className="button-subtle" type="button" disabled={working || !allocationPreview || allocationPreview.dry_run !== true} onClick={() => void executeConfirmAllocation()}>Confirm Allocation</button>}
-            {selectedProjectId && <button className="button-subtle" type="button" disabled={working || !analysisData} onClick={() => void downloadPlanningExport()}>Export CSV</button>}
-            {selectedProjectId && <button className="button-subtle" type="button" disabled={working || !analysisData} onClick={() => void downloadPipelineExport()}>Export Pipeline</button>}
-            {selectedProjectId && <button className="button" type="button" disabled={working || !analysisData || analysisData.summary.shortage_at_start_total <= 0} onClick={createRfqBatch}>Create Procurement Batch</button>}
+            {selectedProjectId && <button className="button-subtle" type="button" disabled={working || previewDirty || !allocationPreview || allocationPreview.dry_run !== true} onClick={() => void executeConfirmAllocation()}>Confirm Allocation</button>}
+            {selectedProjectId && <button className="button-subtle" type="button" disabled={working || previewDirty || !analysisData} onClick={() => void downloadPlanningExport()}>Export CSV</button>}
+            {selectedProjectId && <button className="button-subtle" type="button" disabled={working || previewDirty || !analysisData} onClick={() => void downloadPipelineExport()}>Export Pipeline</button>}
+            {selectedProjectId && <button className="button" type="button" disabled={working || previewDirty || !analysisData || analysisData.summary.shortage_at_start_total <= 0} onClick={createRfqBatch}>Create Procurement Batch</button>}
           </div>
         </div>
+        {previewDirty && (
+          <p className="mb-3 text-xs text-amber-700">
+            Refresh the board with <span className="font-semibold">Preview Impact</span> before confirming, exporting, or creating procurement from the edited date.
+          </p>
+        )}
 
         {allocationPreview && (
           <div className="mb-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">

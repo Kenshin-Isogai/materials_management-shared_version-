@@ -70,14 +70,14 @@ This document explains the implemented architecture of the Materials Management 
   - item import jobs are finalized in the DB before the registered-history archive copy is written, so a failed request commit cannot leave a history archive behind without the matching DB mutation/import-job state
 - Manual Orders CSV import now uses external document URLs as the primary contract.
   - `supplier` is required on every imported order CSV row
-  - `quotation_document_url` is required and validated as `https://...`
-  - `purchase_order_document_url` is optional and also validated as `https://...`
+  - `quotation_document_url` is required and stored as a normalized non-empty document reference string
+  - `purchase_order_document_url` is optional and stored as a normalized non-empty document reference string when present
   - `purchase_order_number` is the canonical purchase-order header identity; the import lock key is `(supplier_id, purchase_order_number)`
   - multiple rows for the same supplier + purchase-order number in a single import reuse one purchase-order header instead of blocking the second line
   - `purchase_order_document_url` is descriptive metadata only and no longer determines purchase-order header identity
   - migration backfill assigns stable `LEGACY-PO-<purchase_order_id>` numbers to legacy purchase-order headers and keeps those existing headers unlocked so earlier data stays uniquely addressable
-  - line-level document-URL edits still flow through the header model: changing a line's purchase-order document URL updates the current header metadata when appropriate or reattaches the line to an existing same-supplier header already using that URL
-  - the Orders UI renders those values as openable document links instead of filesystem-style path text
+  - line-level document-reference edits still flow through the header model: changing a line's purchase-order document reference updates the current header metadata when appropriate or reattaches the line to an existing same-supplier header already using that value
+  - the Orders UI opens HTTPS references as document links and shows other references as plain text
   - order import jobs now persist `request_metadata` so `supplier_id`, `supplier_name`, `default_order_date`, `row_overrides`, `alias_saves`, and `unlock_purchase_orders` remain available for inspection and redo
   - `POST /api/purchase-order-lines/import-jobs/{import_job_id}/undo` and `POST /api/purchase-order-lines/import-jobs/{import_job_id}/redo` now provide the same safety-first operator pattern already used by item imports
 - Generated artifact delivery for batch-produced missing-item register CSVs:
@@ -117,7 +117,7 @@ This document explains the implemented architecture of the Materials Management 
 - Auth posture: PoC runs without enforced authentication, but API/architecture should remain RBAC-ready (`admin`, `operator`, `viewer` planned).
 - Timezone: fixed JST across backend date/time handling.
 - Scale target: ~10,000 items, ~5,000 orders, ~100,000 transactions.
-- Requirement precedence: `specification.md` > `documents/technical_documentation.md` > current code behavior.
+- Requirement precedence: `documents/specification.md` > `documents/technical_documentation.md` > current code behavior.
 
 ## Software Architecture
 
@@ -528,17 +528,21 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 
 - Item identity (`item_number`, `manufacturer`) cannot be changed once referenced by orders/inventory/reservations/assemblies/projects/aliases.
 - Metadata (`category`, `url`, `description`) remains editable.
+- Migration-ready ownership metadata now exists on `items_master` and `orders`.
+  - `source_system` defaults to `local`
+  - nullable `external_item_id` / `external_order_id` fields reserve stable external identities for future mirror-based migration
+  - local edit/delete paths should reject non-`local` rows instead of silently mutating externally managed records
 
 ### 4) Order and quotation file workflow
 
 - Manual Orders CSV import now uses external document URLs as the primary contract.
-  - `quotation_document_url` is required and must be `https://...`
-  - `purchase_order_document_url` is optional and, when present, must be `https://...`
+  - `quotation_document_url` is required and must be a normalized non-empty document reference string
+  - `purchase_order_document_url` is optional and, when present, must be a normalized non-empty document reference string
 - Unregistered batch import resolves/moves CSV and PDF files, but no longer rewrites archived CSV content or quotation DB rows just to keep filesystem paths canonical.
 - The GCP-target browser workflow does not depend on supplier folder names or uploaded PDF staging for order import.
 - Orders ZIP staging accepts either canonical `csv_files/...` + `pdf_files/...` paths or simpler supplier-subfolder layouts, then normalizes them into the canonical unregistered structure before domain import starts.
 - Upload-first Orders ZIP CSVs should use `quotation_document_url` values only; staged PDF filename/path compatibility is no longer supported.
-- Manual Orders CSV import should use external document URLs instead of filesystem-style PDF references.
+- Manual Orders CSV import should use normalized external document references instead of filesystem-style PDF references.
 - `quotations.pdf_link` is removed from the schema; `quotation_document_url` is the document-reference field.
 - Manual order import now records DB-backed import jobs and row-level effects.
   - `POST /api/purchase-order-lines/import` creates `import_jobs(import_type='orders')`
@@ -614,6 +618,10 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
   - full consumption: assign `project_id` directly
   - partial consumption: split first with the current ETA preserved, then assign only the created child row
 - Orders already controlled by ORDERED RFQ/procurement links are skipped rather than forcibly reassigned.
+- Split persistence now has two layers by design.
+  - the current operational behavior still creates split child rows in `orders`
+  - `local_order_splits` records root/child split metadata plus reconciliation mode so future external mirrors can reuse the same API/read model with shallow frontend changes
+  - user-created split ETA/quantity adjustments are marked as manual override state on the split metadata so later external ETA propagation can skip locally curated children
 
 ### 8) Schema and migration discipline
 
@@ -799,6 +807,8 @@ End-to-End tests are implemented using Playwright to verify the full-stack behav
   - `PUT /api/quotations/{quotation_id}` updates quotation metadata.
   - `DELETE /api/purchase-order-lines/{order_id}` deletes open (non-arrived) orders.
   - `DELETE /api/quotations/{quotation_id}` deletes quotation and linked orders only when no linked order is already arrived.
+- Orders and Items read models now also surface migration metadata (`source_system`, nullable external id, local-management flag, and split-root metadata for split children) so a later external-source rollout can stay largely backend-driven.
+- Order split read models now decode `split_manual_override_fields` into a field-name list before the payload leaves the service layer, and local ownership guards now treat missing `source_system` metadata as an integrity failure instead of defaulting it to `local`.
 - Orders-page read model note: the Orders screen now fetches all pages for `/purchase-order-lines`, `/quotations`, and `/purchase-orders` before rendering the line pane plus quotation/purchase-order header panes, preventing false header counts when linked rows fall outside the first API page.
 - Frontend UX note: the Orders screen is now intentionally split by domain level rather than one long row-form.
   - `Purchase Order Lines` is the operational pane for ETA, arrival, split, delete, and manual project assignment.
@@ -810,6 +820,8 @@ End-to-End tests are implemented using Playwright to verify the full-stack behav
   - the frontend uses that model for overdue/no-ETA monitoring, timeline/calendar ETA inspection, and full/partial arrival actions without reusing the broader Orders browse screen
 - Consistency rule: when these operations mutate DB rows, matching order CSV records are rewritten/inserted/removed so CSV source files and database state do not diverge.
 - Reliability/scalability posture: order split/merge transitions are persisted in `order_lineage_events` so future analytics/audit screens can read durable lineage without inferring history from mutable order rows.
+- Migration posture: future external purchasing integration should attach to `external_item_mirrors` / `external_order_mirrors` plus `local_order_splits`, not by mixing externally owned state and local split overlays into one indistinguishable row model.
+- Webhook/API conflict posture: business conflicts from external updates should generally be recorded locally on the mirror (`sync_state='conflict'`, conflict code/message/timestamp) rather than rejected as transport failures, while transient processing faults may still return retryable `5xx`.
 - CSV row identity rule for order-level maintenance: `update_order`/`delete_order` must target exactly one CSV row by order identity (including duplicate `(supplier, quotation_number, item_number)` occurrences) to prevent fan-out edits/deletes when a quotation contains repeated item rows.
 
 

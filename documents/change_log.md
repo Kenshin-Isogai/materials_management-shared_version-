@@ -1,5 +1,21 @@
 ## 2026-04-03
 
+### Changed
+
+- Hardened frontend redesign project navigation and planning-board action safety.
+  - project-context actions now route only through valid redesign paths instead of linking to removed project-detail URLs that fell through to the dashboard
+  - the Projects page now accepts `?edit=<project_id>` deep links so summary cards, item context, and planning actions can open the editor reliably without reintroducing a removed detail route
+  - planning-board confirm/export/procurement actions now require a refreshed analysis after the target date draft changes, preventing stale preview execution against an older board snapshot
+
+### Tests
+
+- Frontend production build:
+  - `npm run build`
+- Frontend Vitest:
+  - blocked in this sandbox with `spawn EPERM` while loading `vitest.config.ts`
+
+## 2026-04-03
+
 ### Frontend Redesign
 
 - **Architecture**: Restructured frontend from flat `pages/` directory to feature-based `features/{domain}/` modules (8 feature domains: dashboard, projects, items, orders, inventory, procurement, bom, admin).

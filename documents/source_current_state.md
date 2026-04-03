@@ -39,6 +39,7 @@ Last updated: 2026-04-03 (JST)
     - `features/inventory/`: LocationsPage, SnapshotPage, MovementsPage (renamed from InventoryPage), ReservationsPage
     - `features/procurement/ProcurementPage.tsx`, `features/bom/BomPage.tsx`
     - `features/admin/`: MasterPage, UsersPage, AuditLogPage (renamed from HistoryPage), LoginPage, RegistrationPage, VerifyEmailPage
+    - `features/projects/routes.ts`: shared project-route helpers that keep summary cards, item context, and board actions aligned with the active router (`/projects`, `/projects/board/:projectId`) and avoid stale removed-detail links
   - `src/components/ui/`: 19 shadcn/ui components (button, table, tabs, card, badge, dialog, command, sidebar, breadcrumb, skeleton, tooltip, etc.)
   - `src/components/layout/`: shared layout components (PageHeader, StatusBadge, EmptyState)
   - `src/components/CommandPalette.tsx`: Ctrl+K command palette for quick page navigation
@@ -157,6 +158,9 @@ Last updated: 2026-04-03 (JST)
 ## 4. Frontend State
 
 - SPA navigation now boots through a React Router data router (`createBrowserRouter` + `RouterProvider`) with `AppShell` as the shared layout route.
+- Project-context navigation now avoids the removed standalone project-detail route.
+  - project summary cards, item planning context, reservation links, and planning-board actions open the shared Projects editor via `/projects?edit=<project_id>`
+  - board-specific navigation uses `/projects/board/:projectId`
 - Data fetching is SWR-based with typed API client wrappers.
 - Added `/users` as the dedicated shared-server user administration route.
   - supports browser-side create, edit, activate, and deactivate flows against the existing `/api/users` endpoints
@@ -214,6 +218,7 @@ Last updated: 2026-04-03 (JST)
   - board view: selected-project timeline plus shortage grid with `supply_sources_by_start` and `recovery_sources_after_start`
   - planning-board recovery cells now summarize when later arrivals resolve the gap, including unresolved-later cases (`Still short ...`)
   - missing recovery dates now render as unknown-date recovery instead of exposing backend `None` placeholders in summary text or burndown dates
+  - confirm-allocation, export, and procurement-batch actions are now disabled while the board target date draft is dirty, forcing a fresh preview before downstream actions use the currently displayed date
 - route-leave blockers on the workspace page now run inside the supported data-router context
 - workspace unsaved-change navigation protection now uses `useBlocker` with an explicit confirm/reset flow instead of `unstable_usePrompt`, preventing client-side tab navigation from getting stuck after workspace/RFQ transitions
   - right-side drawer uses local breadcrumb navigation for project, item, and RFQ context while keeping the board visible

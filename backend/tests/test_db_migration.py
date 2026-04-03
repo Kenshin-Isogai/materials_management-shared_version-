@@ -57,6 +57,55 @@ def test_init_db_creates_users_and_orders_schema(conn):
         WHERE table_name = 'orders' AND column_name = 'purchase_order_id'
         """
     ).fetchone()
+    item_source_row = conn.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = 'items_master' AND column_name = 'source_system'
+        """
+    ).fetchone()
+    order_source_row = conn.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = 'orders' AND column_name = 'source_system'
+        """
+    ).fetchone()
+    order_external_id_row = conn.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = 'orders' AND column_name = 'external_order_id'
+        """
+    ).fetchone()
+    local_split_table_row = conn.execute(
+        """
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_name = 'local_order_splits'
+        """
+    ).fetchone()
+    local_split_manual_row = conn.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = 'local_order_splits' AND column_name = 'is_manual_override'
+        """
+    ).fetchone()
+    external_order_mirror_table_row = conn.execute(
+        """
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_name = 'external_order_mirrors'
+        """
+    ).fetchone()
+    external_order_conflict_row = conn.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = 'external_order_mirrors' AND column_name = 'conflict_code'
+        """
+    ).fetchone()
 
     assert users_row is not None
     assert oidc_email_row is not None
@@ -65,6 +114,13 @@ def test_init_db_creates_users_and_orders_schema(conn):
     assert purchase_order_number_row is not None
     assert purchase_order_lock_row is not None
     assert order_purchase_order_fk_row is not None
+    assert item_source_row is not None
+    assert order_source_row is not None
+    assert order_external_id_row is not None
+    assert local_split_table_row is not None
+    assert local_split_manual_row is not None
+    assert external_order_mirror_table_row is not None
+    assert external_order_conflict_row is not None
 
 
 def test_init_db_uses_explicit_database_url_even_when_env_differs(database_url: str, monkeypatch):

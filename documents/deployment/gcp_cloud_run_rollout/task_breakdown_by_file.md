@@ -34,10 +34,10 @@ Most migration-oriented file-by-file cleanup has already been completed and is i
 
 | File | Why it still matters |
 |---|---|
-| `documents\gcp_cloud_run_rollout\migration_checklist.md` | production-readiness status |
-| `documents\gcp_cloud_run_rollout\cloud_run_deployment_runbook.md` | deployment/update/rollback/recovery procedure |
-| `documents\gcp_cloud_run_rollout\environment_and_runtime_matrix.md` | environment contract |
-| `documents\gcp_cloud_run_rollout\security_and_cost_considerations.md` | risk and operating guardrails |
+| `documents\deployment\gcp_cloud_run_rollout\migration_checklist.md` | production-readiness status |
+| `documents\deployment\gcp_cloud_run_rollout\cloud_run_deployment_runbook.md` | deployment/update/rollback/recovery procedure |
+| `documents\deployment\gcp_cloud_run_rollout\environment_and_runtime_matrix.md` | environment contract |
+| `documents\deployment\gcp_cloud_run_rollout\security_and_cost_considerations.md` | risk and operating guardrails |
 
 ## If more code hardening is needed
 

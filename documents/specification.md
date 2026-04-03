@@ -47,7 +47,7 @@ The Optical Component Inventory Management System provides comprehensive lifecyc
 
 When statements conflict, interpret in this order:
 
-1. `specification.md`
+1. `documents/specification.md`
 2. `documents/technical_documentation.md`
 3. current code behavior
 
@@ -75,6 +75,9 @@ When statements conflict, interpret in this order:
 | `quotations` | Quotation headers | quotation_id, quotation_number |
 | `purchase_orders` | Purchase order headers | purchase_order_id, supplier_id |
 | `orders` | Purchase order lines | order_id, purchase_order_id, item_id |
+| `external_item_mirrors` | Future external item mirror cache | mirror_id, source_system, external_item_id |
+| `external_order_mirrors` | Future external order mirror cache | mirror_id, source_system, external_order_id |
+| `local_order_splits` | Local split metadata for externally reconcilable order operations | split_id, root_order_id, child_order_id |
 | `supplier_item_aliases` | Supplier SKU alias mappings | alias_id, supplier_id, ordered_item_number |
 | `category_aliases` | Category soft-merge aliases | alias_category, canonical_category |
 | `transaction_log` | All inventory operations | log_id, operation_type, item_id |
@@ -307,6 +310,8 @@ Stores constant, non-quantity attributes of components.
 | category | TEXT | | Component category (Lens, Mirror, etc.) |
 | url | TEXT | | Product URL |
 | description | TEXT | | Human-readable description |
+| source_system | TEXT | NOT NULL, default `local` | Ownership boundary for future external item master migration |
+| external_item_id | TEXT | Nullable, unique when present | External source identifier for mirrored item ownership |
 
 **Unique Constraint:** `(manufacturer_id, item_number)`
 
@@ -379,12 +384,18 @@ Tracks purchase-order lines and delivery status.
 | expected_arrival | TEXT | | Scheduled arrival date |
 | arrival_date | TEXT | | Actual arrival date |
 | status | TEXT | Normalized to `Ordered`/`Arrived` | `Ordered`, `Arrived` |
+| source_system | TEXT | NOT NULL, default `local` | Ownership boundary for future external order migration |
+| external_order_id | TEXT | Nullable, unique when present | External source identifier for mirrored order ownership |
 
 **Split Delivery Policy:**
 When an order is partially delivered:
 1. Update original row: `order_amount = arrived_quantity`, `status = 'Arrived'`
 2. Create a new row: `order_amount = remaining_quantity`, `status = 'Ordered'`
 3. Reject the operation if split traceability would become fractional
+
+**Migration-Ready Split Tracking:**
+- Current runtime still materializes split siblings as `orders` rows.
+- `local_order_splits` records the root/child relationship and reconciliation mode so future external-order mirroring can treat split behavior as a local overlay instead of inferring everything from mutable order rows.
 
 **Traceability Rule:**
 - `ordered_item_number` and `ordered_quantity` preserve the source order representation.
@@ -638,8 +649,8 @@ Maps raw category names to canonical category names for soft-merge behavior.
     - reject import when an existing locked purchase order with the same `(supplier, purchase_order_number)` already exists, unless the operator explicitly selected that header in `unlock_purchase_orders`
     - apply requested alias saves only after lock checks pass
 12. Normalize date fields to `YYYY-MM-DD`; reject invalid date strings
-13. For manual CSV import, `quotation_document_url` is required and must be a valid `https://...` URL
-14. `purchase_order_document_url` is optional and, when provided, must also be a valid `https://...` URL; it is descriptive metadata and does not determine purchase-order identity
+13. For manual CSV import, `quotation_document_url` is required and must be a normalized non-empty document reference string
+14. `purchase_order_document_url` is optional and, when provided, must be a normalized non-empty document reference string; it is descriptive metadata and does not determine purchase-order identity
 15. Manual `POST /purchase-order-lines/import` creates an `import_jobs` row with `import_type='orders'` and records row-level `import_job_effects`
     - created rows use `effect_type='order_created'`
     - locked purchase-order rejection uses `effect_type='order_purchase_order_locked'`
@@ -1290,14 +1301,14 @@ Compatibility rule:
 | issue_date | Yes | YYYY-MM-DD |
 | order_date | Conditional* | YYYY-MM-DD |
 | expected_arrival | No | YYYY-MM-DD |
-| quotation_document_url | Yes | Valid `https://...` document URL |
-| purchase_order_document_url | No | Valid `https://...` document URL |
+| quotation_document_url | Yes | Normalized non-empty document reference string |
+| purchase_order_document_url | No | Normalized non-empty document reference string |
 
 *Required unless shared order date provided.
 
 Browser/shared-server contract:
 - `supplier` is required on every order-import CSV row; browser flows should not rely on supplier folder names or a top-level supplier form field
-- `quotation_document_url` is required for manual CSV import and should point to the external quotation document
+- `quotation_document_url` is required for manual CSV import and should identify the external quotation document
 - `purchase_order_document_url` is optional and updates or creates the referenced purchase-order header when available
 - legacy ZIP/PDF batch flows remain compatibility-only for deployments that still manage PDFs inside this application, and are out of scope for the GCP-target browser workflow
 
@@ -1538,7 +1549,7 @@ Minimum gate for non-trivial changes:
 3. If frontend changed, run build check: `npm run build`.
 4. Execute a manual smoke check for touched flows (API/UI).
 5. Update documents in the same change:
-   - `specification.md` for requirement/contract changes
+   - `documents/specification.md` for requirement/contract changes
    - `documents/technical_documentation.md` for architecture/maintenance impact
    - relevant README files for usage/setup impact
 

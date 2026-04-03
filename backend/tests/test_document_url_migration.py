@@ -185,7 +185,7 @@ def test_generated_artifact_metadata_hides_workspace_paths(client):
     assert any(effect["effect_type"] == "order_missing_item" for effect in detail.json()["data"]["effects"])
 
 
-def test_order_import_preview_rejects_non_https_document_url(client):
+def test_order_import_preview_accepts_normalized_document_reference(client):
     client.post("/api/manufacturers", json={"name": "API-DOC-PREVIEW-MFG"})
     client.post(
         "/api/items",
@@ -221,10 +221,9 @@ def test_order_import_preview_rejects_non_https_document_url(client):
         data={"supplier_name": "SupplierDocumentPreview"},
     )
 
-    assert response.status_code == 422
-    payload = response.json()
-    assert payload["status"] == "error"
-    assert payload["error"]["code"] == "INVALID_DOCUMENT_URL"
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["rows"][0]["quotation_document_url"] == "not-a-url"
 
 
 def test_order_import_job_undo_and_redo_flow(client):

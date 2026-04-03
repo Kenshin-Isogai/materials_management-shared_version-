@@ -9,6 +9,7 @@ import {
   isBackendUnavailableError,
   presentApiError,
 } from "@/lib/errorUtils";
+import { projectEditorRoute } from "@/features/projects/routes";
 import type {
   InventoryRow,
   Item,
@@ -441,7 +442,7 @@ export function ItemDetailPage() {
                 <div className="flex flex-wrap gap-2">
                   <Link
                     className="button-subtle"
-                    to={`/projects/${project.project_id}`}
+                    to={projectEditorRoute(project.project_id)}
                   >
                     Project
                   </Link>
@@ -590,7 +591,7 @@ export function ItemDetailPage() {
                 {reservation.project_id && (
                   <Link
                     className="button-subtle"
-                    to={`/projects/${reservation.project_id}`}
+                    to={projectEditorRoute(reservation.project_id)}
                   >
                     Open Project
                   </Link>

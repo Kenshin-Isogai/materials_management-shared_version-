@@ -44,7 +44,7 @@ from .storage import (
     write_storage_bytes,
 )
 from .utils import (
-    normalize_external_document_url,
+    normalize_document_reference,
     normalize_optional_date,
     now_jst_iso,
     require_non_empty,
@@ -60,6 +60,11 @@ class Pagination:
     per_page: int
     total: int
     total_pages: int
+
+
+LOCAL_SOURCE_SYSTEM = "local"
+EXTERNAL_SOURCE_SYSTEM = "external"
+LOCAL_SPLIT_RECONCILIATION_MODE = "propagate_external_changes"
 
 
 def _rows_to_dict(rows: Iterable[sqlite3.Row]) -> list[dict[str, Any]]:
@@ -91,6 +96,75 @@ def _csv_archive_sync_disabled_result() -> dict[str, Any]:
         "enabled": False,
         "reason": "database_is_source_of_truth_for_order_and_quotation_edits",
     }
+
+
+def _require_entity_source_system(entity: dict[str, Any], *, entity_label: str, entity_id: Any) -> str:
+    raw_source_system = entity.get("source_system")
+    normalized_source_system = str(raw_source_system).strip() if raw_source_system is not None else ""
+    if normalized_source_system:
+        return normalized_source_system
+    raise AppError(
+        code=f"{entity_label.upper()}_SOURCE_SYSTEM_MISSING",
+        message=f"{entity_label.capitalize()} {entity_id} is missing source_system metadata",
+        status_code=500,
+    )
+
+
+def _assert_item_is_locally_managed(item: dict[str, Any]) -> None:
+    if _require_entity_source_system(item, entity_label="item", entity_id=item.get("item_id")) == LOCAL_SOURCE_SYSTEM:
+        return
+    raise AppError(
+        code="ITEM_MANAGED_EXTERNALLY",
+        message="This item is managed externally and cannot be edited locally",
+        status_code=409,
+    )
+
+
+def _assert_order_is_locally_managed(order: dict[str, Any]) -> None:
+    if _require_entity_source_system(order, entity_label="order", entity_id=order.get("order_id")) == LOCAL_SOURCE_SYSTEM:
+        return
+    raise AppError(
+        code="ORDER_MANAGED_EXTERNALLY",
+        message="This order is managed externally and cannot be edited locally",
+        status_code=409,
+    )
+
+
+def _decode_manual_override_fields(raw_value: Any, *, order_id: Any | None = None) -> list[str] | None:
+    if raw_value is None:
+        return None
+    if isinstance(raw_value, list):
+        normalized = sorted({str(field).strip() for field in raw_value if str(field).strip()})
+        return normalized
+
+    text = str(raw_value).strip()
+    if not text:
+        return []
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise AppError(
+            code="ORDER_SPLIT_METADATA_INVALID",
+            message=f"Order {order_id} has invalid split manual override metadata",
+            status_code=500,
+        ) from exc
+    if not isinstance(parsed, list):
+        raise AppError(
+            code="ORDER_SPLIT_METADATA_INVALID",
+            message=f"Order {order_id} has invalid split manual override metadata",
+            status_code=500,
+        )
+    return sorted({str(field).strip() for field in parsed if str(field).strip()})
+
+
+def _normalize_order_read_row(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+    data = dict(row)
+    data["split_manual_override_fields"] = _decode_manual_override_fields(
+        data.get("split_manual_override_fields"),
+        order_id=data.get("order_id"),
+    )
+    return data
 
 
 def _artifact_payload_from_row(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
@@ -3184,6 +3258,9 @@ def list_items(
             COALESCE(ca.canonical_category, im.category) AS category,
             im.url,
             im.description,
+            im.source_system,
+            im.external_item_id,
+            (im.source_system = 'local') AS is_locally_managed,
             m.manufacturer_id,
             m.name AS manufacturer_name
         FROM items_master im
@@ -3205,6 +3282,9 @@ def get_item(conn: sqlite3.Connection, item_id: int) -> dict[str, Any]:
             COALESCE(ca.canonical_category, im.category) AS category,
             im.url,
             im.description,
+            im.source_system,
+            im.external_item_id,
+            (im.source_system = 'local') AS is_locally_managed,
             m.manufacturer_id,
             m.name AS manufacturer_name
         FROM items_master im
@@ -3221,6 +3301,44 @@ def get_item(conn: sqlite3.Connection, item_id: int) -> dict[str, Any]:
             status_code=404,
         )
     return dict(row)
+
+
+def _order_read_select_columns() -> str:
+    return """
+            o.*,
+            o.source_system,
+            o.external_order_id,
+            (o.source_system = 'local') AS is_locally_managed,
+            los.root_order_id AS split_root_order_id,
+            los.split_type,
+            los.reconciliation_mode AS split_reconciliation_mode,
+            los.is_manual_override AS split_is_manual_override,
+            los.manual_override_fields AS split_manual_override_fields,
+            los.last_manual_override_at AS split_last_manual_override_at,
+            (los.split_id IS NOT NULL) AS is_split_child,
+            im.item_number AS canonical_item_number,
+            p.name AS project_name,
+            q.quotation_number,
+            q.issue_date,
+            q.quotation_document_url,
+            po.purchase_order_number,
+            po.purchase_order_document_url,
+            po.import_locked,
+            s.supplier_id,
+            s.name AS supplier_name
+    """
+
+
+def _order_read_joins() -> str:
+    return """
+        FROM orders o
+        JOIN items_master im ON im.item_id = o.item_id
+        JOIN purchase_orders po ON po.purchase_order_id = o.purchase_order_id
+        JOIN suppliers s ON s.supplier_id = po.supplier_id
+        LEFT JOIN quotations q ON q.quotation_id = o.quotation_id
+        LEFT JOIN projects p ON p.project_id = o.project_id
+        LEFT JOIN local_order_splits los ON los.child_order_id = o.order_id
+    """
 
 
 def create_item(conn: sqlite3.Connection, payload: dict[str, Any]) -> dict[str, Any]:
@@ -4490,6 +4608,7 @@ def redo_items_import_job(conn: sqlite3.Connection, import_job_id: int) -> dict[
 
 def update_item(conn: sqlite3.Connection, item_id: int, payload: dict[str, Any]) -> dict[str, Any]:
     current = get_item(conn, item_id)
+    _assert_item_is_locally_managed(current)
     updates: list[str] = []
     params: list[Any] = []
     resolved_item_number = current["item_number"]
@@ -4639,14 +4758,8 @@ def bulk_update_item_metadata(
 
 
 def delete_item(conn: sqlite3.Connection, item_id: int) -> None:
-    _get_entity_or_404(
-        conn,
-        "items_master",
-        "item_id",
-        item_id,
-        "ITEM_NOT_FOUND",
-        f"Item with id {item_id} not found",
-    )
+    item = get_item(conn, item_id)
+    _assert_item_is_locally_managed(item)
     ref = _first_item_reference(conn, item_id)
     if ref is not None:
         raise AppError(
@@ -4865,7 +4978,8 @@ def list_inventory(
         {where}
         ORDER BY il.location, im.item_number
     """
-    return _paginate(conn, sql, tuple(params), page, per_page)
+    rows, pagination = _paginate(conn, sql, tuple(params), page, per_page)
+    return [_normalize_order_read_row(row) for row in rows], pagination
 
 
 def move_inventory(
@@ -6023,23 +6137,8 @@ def list_orders(
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     sql = f"""
         SELECT
-            o.*,
-            im.item_number AS canonical_item_number,
-            p.name AS project_name,
-            s.supplier_id,
-            s.name AS supplier_name,
-            q.quotation_number,
-            q.issue_date,
-            q.quotation_document_url,
-            po.purchase_order_number,
-            po.purchase_order_document_url,
-            po.import_locked
-        FROM orders o
-        JOIN items_master im ON im.item_id = o.item_id
-        JOIN purchase_orders po ON po.purchase_order_id = o.purchase_order_id
-        JOIN suppliers s ON s.supplier_id = po.supplier_id
-        LEFT JOIN quotations q ON q.quotation_id = o.quotation_id
-        LEFT JOIN projects p ON p.project_id = o.project_id
+            {_order_read_select_columns()}
+        {_order_read_joins()}
         {where}
         ORDER BY o.order_date DESC, o.order_id DESC
     """
@@ -6091,23 +6190,8 @@ def list_arrival_schedule(
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     sql = f"""
         SELECT
-            o.*,
-            im.item_number AS canonical_item_number,
-            p.name AS project_name,
-            s.supplier_id,
-            s.name AS supplier_name,
-            q.quotation_number,
-            q.issue_date,
-            q.quotation_document_url,
-            po.purchase_order_number,
-            po.purchase_order_document_url,
-            po.import_locked
-        FROM orders o
-        JOIN items_master im ON im.item_id = o.item_id
-        JOIN purchase_orders po ON po.purchase_order_id = o.purchase_order_id
-        JOIN suppliers s ON s.supplier_id = po.supplier_id
-        LEFT JOIN quotations q ON q.quotation_id = o.quotation_id
-        LEFT JOIN projects p ON p.project_id = o.project_id
+            {_order_read_select_columns()}
+        {_order_read_joins()}
         {where}
         ORDER BY
             CASE
@@ -6122,7 +6206,8 @@ def list_arrival_schedule(
     rows, pagination = _paginate(conn, sql, (*params, today_str), page, per_page)
     today = datetime.strptime(today_str, "%Y-%m-%d").date()
     enriched: list[dict[str, Any]] = []
-    for row in rows:
+    for raw_row in rows:
+        row = _normalize_order_read_row(raw_row)
         expected_arrival = row.get("expected_arrival")
         arrival_bucket = "no_eta"
         overdue_days: int | None = None
@@ -6149,25 +6234,10 @@ def list_arrival_schedule(
 
 def get_order(conn: sqlite3.Connection, order_id: int) -> dict[str, Any]:
     row = conn.execute(
-        """
+        f"""
         SELECT
-            o.*,
-            im.item_number AS canonical_item_number,
-            p.name AS project_name,
-            q.quotation_number,
-            q.issue_date,
-            q.quotation_document_url,
-            po.purchase_order_number,
-            po.purchase_order_document_url,
-            po.import_locked,
-            s.supplier_id,
-            s.name AS supplier_name
-        FROM orders o
-        JOIN items_master im ON im.item_id = o.item_id
-        JOIN purchase_orders po ON po.purchase_order_id = o.purchase_order_id
-        JOIN suppliers s ON s.supplier_id = po.supplier_id
-        LEFT JOIN quotations q ON q.quotation_id = o.quotation_id
-        LEFT JOIN projects p ON p.project_id = o.project_id
+            {_order_read_select_columns()}
+        {_order_read_joins()}
         WHERE o.order_id = ?
         """,
         (order_id,),
@@ -6178,7 +6248,7 @@ def get_order(conn: sqlite3.Connection, order_id: int) -> dict[str, Any]:
             message=f"Order with id {order_id} not found",
             status_code=404,
         )
-    return dict(row)
+    return _normalize_order_read_row(row)
 
 
 def _record_order_lineage_event(
@@ -6218,6 +6288,146 @@ def _record_order_lineage_event(
     return dict(row) if row else {"event_id": event_id}
 
 
+def _record_local_order_split(
+    conn: sqlite3.Connection,
+    *,
+    split_type: str,
+    root_order_id: int,
+    child_order_id: int,
+    split_quantity: int,
+    root_expected_arrival: str | None,
+    child_expected_arrival: str | None,
+    is_manual_override: bool = False,
+    manual_override_fields: list[str] | None = None,
+) -> dict[str, Any]:
+    normalized_manual_fields = sorted({str(field).strip() for field in (manual_override_fields or []) if str(field).strip()})
+    cur = conn.execute(
+        """
+        INSERT INTO local_order_splits (
+            split_type,
+            root_order_id,
+            child_order_id,
+            split_quantity,
+            root_expected_arrival,
+            child_expected_arrival,
+            reconciliation_mode,
+            is_manual_override,
+            manual_override_fields,
+            last_manual_override_at,
+            created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            split_type,
+            root_order_id,
+            child_order_id,
+            split_quantity,
+            root_expected_arrival,
+            child_expected_arrival,
+            LOCAL_SPLIT_RECONCILIATION_MODE,
+            bool(is_manual_override),
+            json.dumps(normalized_manual_fields) if normalized_manual_fields else None,
+            now_jst_iso() if is_manual_override else None,
+            now_jst_iso(),
+        ),
+    )
+    split_id = int(cur.lastrowid)
+    row = conn.execute(
+        "SELECT * FROM local_order_splits WHERE split_id = ?",
+        (split_id,),
+    ).fetchone()
+    return dict(row) if row else {"split_id": split_id}
+
+
+def _mark_local_order_split_manual_override(
+    conn: sqlite3.Connection,
+    *,
+    child_order_id: int,
+    fields: list[str],
+) -> None:
+    normalized_fields = sorted({str(field).strip() for field in fields if str(field).strip()})
+    if not normalized_fields:
+        return
+    row = conn.execute(
+        """
+        SELECT manual_override_fields
+        FROM local_order_splits
+        WHERE child_order_id = ?
+        """,
+        (child_order_id,),
+    ).fetchone()
+    if row is None:
+        return
+    raw_existing = row.get("manual_override_fields") if isinstance(row, dict) else row["manual_override_fields"]
+    existing_fields = _decode_manual_override_fields(raw_existing, order_id=child_order_id) or []
+    merged_fields = sorted(set(existing_fields) | set(normalized_fields))
+    conn.execute(
+        """
+        UPDATE local_order_splits
+        SET is_manual_override = TRUE,
+            manual_override_fields = ?,
+            last_manual_override_at = ?
+        WHERE child_order_id = ?
+        """,
+        (json.dumps(merged_fields), now_jst_iso(), child_order_id),
+    )
+
+
+def record_external_order_mirror_conflict(
+    conn: sqlite3.Connection,
+    *,
+    source_system: str,
+    external_order_id: str,
+    conflict_code: str,
+    conflict_message: str,
+    local_order_id: int | None = None,
+) -> dict[str, Any]:
+    normalized_source_system = require_non_empty(source_system, "source_system")
+    normalized_external_order_id = require_non_empty(external_order_id, "external_order_id")
+    normalized_conflict_code = require_non_empty(conflict_code, "conflict_code")
+    normalized_conflict_message = require_non_empty(conflict_message, "conflict_message")
+    detected_at = now_jst_iso()
+    conn.execute(
+        """
+        INSERT INTO external_order_mirrors (
+            source_system,
+            external_order_id,
+            local_order_id,
+            sync_state,
+            conflict_code,
+            conflict_message,
+            conflict_detected_at,
+            created_at
+        ) VALUES (?, ?, ?, 'conflict', ?, ?, ?, ?)
+        ON CONFLICT (source_system, external_order_id)
+        DO UPDATE SET
+            local_order_id = COALESCE(EXCLUDED.local_order_id, external_order_mirrors.local_order_id),
+            sync_state = 'conflict',
+            conflict_code = EXCLUDED.conflict_code,
+            conflict_message = EXCLUDED.conflict_message,
+            conflict_detected_at = EXCLUDED.conflict_detected_at
+        """,
+        (
+            normalized_source_system,
+            normalized_external_order_id,
+            local_order_id,
+            normalized_conflict_code,
+            normalized_conflict_message,
+            detected_at,
+            detected_at,
+        ),
+    )
+    row = conn.execute(
+        """
+        SELECT *
+        FROM external_order_mirrors
+        WHERE source_system = ? AND external_order_id = ?
+        """,
+        (normalized_source_system, normalized_external_order_id),
+    ).fetchone()
+    return dict(row) if row else {}
+
+
 def list_order_lineage_events(
     conn: sqlite3.Connection,
     *,
@@ -6238,6 +6448,7 @@ def list_order_lineage_events(
 
 def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any]) -> dict[str, Any]:
     current = get_order(conn, order_id)
+    _assert_order_is_locally_managed(current)
     if current["status"] == "Arrived":
         raise AppError(
             code="ORDER_ALREADY_ARRIVED",
@@ -6250,7 +6461,7 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
         else current.get("expected_arrival")
     )
     next_purchase_order_document_url = (
-        normalize_external_document_url(payload.get("purchase_order_document_url"), "purchase_order_document_url")
+        normalize_document_reference(payload.get("purchase_order_document_url"), "purchase_order_document_url")
         if "purchase_order_document_url" in payload
         else current.get("purchase_order_document_url")
     )
@@ -6346,6 +6557,12 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
                 new_expected_arrival=updated.get("expected_arrival"),
                 note="full-order eta update",
             )
+            if bool(current.get("is_split_child")):
+                _mark_local_order_split_manual_override(
+                    conn,
+                    child_order_id=order_id,
+                    fields=["expected_arrival"],
+                )
         return updated
 
     require_positive_int(split_quantity, "split_quantity")
@@ -6461,6 +6678,17 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
         new_expected_arrival=expected_arrival,
         note="partial eta postponement split",
     )
+    _record_local_order_split(
+        conn,
+        split_type="ETA_SPLIT",
+        root_order_id=int(current.get("split_root_order_id") or order_id),
+        child_order_id=split_order_id,
+        split_quantity=split_quantity,
+        root_expected_arrival=current.get("expected_arrival"),
+        child_expected_arrival=expected_arrival,
+        is_manual_override=True,
+        manual_override_fields=["expected_arrival", "quantity"],
+    )
 
     return {
         "order_id": order_id,
@@ -6472,6 +6700,7 @@ def update_order(conn: sqlite3.Connection, order_id: int, payload: dict[str, Any
 
 def delete_order(conn: sqlite3.Connection, order_id: int) -> dict[str, Any]:
     order = get_order(conn, order_id)
+    _assert_order_is_locally_managed(order)
     if order["status"] == "Arrived":
         raise AppError(
             code="ORDER_ALREADY_ARRIVED",
@@ -6516,6 +6745,8 @@ def merge_open_orders(
 
     source = get_order(conn, source_purchase_order_line_id)
     target = get_order(conn, target_purchase_order_line_id)
+    _assert_order_is_locally_managed(source)
+    _assert_order_is_locally_managed(target)
     if source["status"] == "Arrived" or target["status"] == "Arrived":
         raise AppError(
             code="ORDER_ALREADY_ARRIVED",
@@ -6580,7 +6811,7 @@ def _normalize_required_quotation_document_url(
     *,
     row_index: int,
 ) -> str:
-    normalized = normalize_external_document_url(
+    normalized = normalize_document_reference(
         value,
         f"quotation_document_url (row {row_index})",
         required=True,
@@ -7474,7 +7705,7 @@ def preview_orders_import_from_rows(
             row,
             row_index=row_number,
         )
-        purchase_order_document_url = normalize_external_document_url(
+        purchase_order_document_url = normalize_document_reference(
             row.get("purchase_order_document_url"),
             f"purchase_order_document_url (row {row_number})",
         )
@@ -7643,7 +7874,7 @@ def _process_order_rows_for_import(
             row,
             row_index=idx,
         )
-        purchase_order_document_url = normalize_external_document_url(
+        purchase_order_document_url = normalize_document_reference(
             row.get("purchase_order_document_url"),
             f"purchase_order_document_url (row {idx})",
         )
@@ -8844,6 +9075,8 @@ def process_order_arrival(
     order = get_order(conn, order_id)
     _lock_order_item_state(conn, order_id, int(order["item_id"]))
     order = get_order(conn, order_id)
+    # Validate the ownership boundary against the serialized post-lock state.
+    _assert_order_is_locally_managed(order)
     if order["status"] == "Arrived":
         raise AppError(
             code="ORDER_ALREADY_ARRIVED",
@@ -8925,6 +9158,15 @@ def process_order_arrival(
             previous_expected_arrival=order.get("expected_arrival"),
             new_expected_arrival=order.get("expected_arrival"),
             note="partial arrival split",
+        )
+        _record_local_order_split(
+            conn,
+            split_type="ARRIVAL_SPLIT",
+            root_order_id=int(order.get("split_root_order_id") or order_id),
+            child_order_id=split_order_id,
+            split_quantity=remaining_order_amount,
+            root_expected_arrival=order.get("expected_arrival"),
+            child_expected_arrival=order.get("expected_arrival"),
         )
 
     _apply_inventory_delta(conn, int(order["item_id"]), "STOCK", arrived_qty)
@@ -9020,7 +9262,7 @@ def update_quotation(conn: sqlite3.Connection, quotation_id: int, payload: dict[
     )
     next_issue_date = normalize_optional_date(payload.get("issue_date"), "issue_date")
     next_document_url = (
-        normalize_external_document_url(payload.get("quotation_document_url"), "quotation_document_url")
+        normalize_document_reference(payload.get("quotation_document_url"), "quotation_document_url")
         if "quotation_document_url" in payload
         else None
     )
@@ -9077,7 +9319,7 @@ def update_purchase_order(conn: sqlite3.Connection, purchase_order_id: int, payl
         else current.get("purchase_order_number")
     )
     next_document_url = (
-        normalize_external_document_url(payload.get("purchase_order_document_url"), "purchase_order_document_url")
+        normalize_document_reference(payload.get("purchase_order_document_url"), "purchase_order_document_url")
         if "purchase_order_document_url" in payload
         else current.get("purchase_order_document_url")
     )
