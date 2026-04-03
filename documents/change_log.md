@@ -1,5 +1,67 @@
 ## 2026-04-03
 
+### Frontend Redesign
+
+- **Architecture**: Restructured frontend from flat `pages/` directory to feature-based `features/{domain}/` modules (8 feature domains: dashboard, projects, items, orders, inventory, procurement, bom, admin).
+- **Navigation**: Replaced 16-item flat horizontal tab navigation with grouped sidebar layout (Planning, Inventory, Purchasing, Admin groups) using shadcn/ui Sidebar components. Added sub-navigation for Projects area (Overview, Planning Board).
+- **Component library**: Installed and configured shadcn/ui with 19 UI primitives. Custom theme maps existing canvas/signal/brass palette to shadcn CSS variables.
+- **Page decomposition**:
+  - WorkspacePage (1745 lines) → ProjectOverviewPage, PlanningBoardPage, ItemDetailPage + 2 sub-components
+  - OrdersPage (1763 lines) → OrdersPage + 4 sub-components (OrderImportForm, OrderLineTable, QuotationTable, PurchaseOrderTable) + types.ts + utils.tsx
+  - ItemsPage (1739 lines) → ItemsPage + 7 sub-components (ItemBrowseTable, ItemImportForm, ItemImportPreview, ItemImportHistory, ItemFlowTimeline, BulkItemEntry, BulkMetadataUpdate) + types.ts + utils.ts
+- **UX improvements**:
+  - Drawer-based navigation replaced with full-page routes (`/items/:itemId`, `/projects/board/:projectId`)
+  - Dashboard enhanced with Quick Actions panel, Expiring Reservations, and Recent Activity panels
+  - Ctrl+K command palette for quick page navigation
+  - Old routes redirect to new paths (`/workspace` → `/projects/overview`, `/search` → `/items`, etc.)
+- **Cleanup**: Deleted 4 dead pages (PlanningPage, RfqPage, AssembliesPage, PurchaseCandidatesPage), old AppShell, WorkspaceDrawer, drawer state logic.
+- **Shared components**: Added PageHeader, StatusBadge, EmptyState layout components.
+
+### Tests
+
+- TypeScript compilation: clean (0 errors)
+- Vite production build: successful (682KB JS, 74KB CSS)
+- Docker runtime: frontend serves at `http://127.0.0.1/`, API healthy at `http://127.0.0.1/api/health`
+
+## 2026-04-03
+
+### Documentation
+
+- Reorganized application-level Markdown docs under `documents/`.
+  - moved the main specification to `documents/specification.md`
+  - added `documents/README.md` as the documentation index and reading-order hub
+  - moved onboarding docs to `documents/setup/`
+  - moved deployment runbooks to `documents/deployment/`
+  - moved the provisional allocation note to `documents/archive/`
+
+### Tests
+
+- Not run for this documentation-only reorganization.
+
+## 2026-04-03
+
+### Changed
+
+- Added migration-ready ownership and split foundations for future external purchasing integration.
+  - `items_master` and `orders` now carry `source_system` plus nullable external ids so future external ownership can be introduced without changing the current runtime contract
+  - added `external_item_mirrors` and `external_order_mirrors` tables for future mirror-based synchronization
+  - added `local_order_splits` so ETA splits and partial-arrival splits are recorded as explicit local split metadata in addition to the existing mutable `orders` rows and lineage events
+  - item/order read models now expose migration metadata (`source_system`, external ids, local-management flag, split-root metadata) for future shallow frontend rollout
+  - local item/order mutation paths now explicitly guard against future externally managed rows and fail closed when required `source_system` metadata is missing
+  - local split metadata now also tracks manual-override state for user-adjusted ETA/quantity changes, and order read models now expose `split_manual_override_fields` as a decoded field-name list instead of raw JSON text
+  - external order mirrors are ready to persist business-conflict records locally
+
+### Tests
+
+- Backend compile check:
+  - `uv run --project backend python -m compileall backend\app\db.py backend\app\service.py backend\tests\test_db_migration.py backend\tests\test_service_transactions.py backend\tests\test_api_integration.py`
+- Backend targeted pytest against Docker test DB:
+  - `uv run --project backend python -m pytest backend\tests\test_db_migration.py backend\tests\test_service_transactions.py backend\tests\test_api_integration.py -q --import-mode=importlib -k "init_db_creates_users_and_orders_schema or update_order_can_split_partial_eta_without_archive_sync or partial_arrival_sibling_inherits_project_id or items_endpoint_exposes_source_metadata or order_split_endpoint_exposes_split_metadata"`
+  - `PYTHONPATH=backend uv run --project backend python -m pytest backend\tests\test_service_transactions.py backend\tests\test_api_integration.py -q --import-mode=importlib -k "item_ownership_guard_raises_when_source_system_metadata_missing or order_ownership_guard_raises_when_source_system_metadata_missing or update_order_can_split_partial_eta_without_archive_sync or update_order_marks_split_child_eta_edit_as_manual_override or order_split_endpoint_exposes_split_metadata or process_order_arrival"`
+  - `PYTHONPATH=backend uv run --project backend python -m pytest backend\tests -q --import-mode=importlib`
+
+## 2026-04-03
+
 ### Changed
 
 - Relaxed Items and catalog search matching.
@@ -7,11 +69,16 @@
   - `/api/catalog/search` now applies the same normalization for item, supplier, and project searches, including supplier-alias text used by `CatalogPicker`
   - both endpoints now also treat space-delimited terms as AND conditions, including cross-field item catalog matches
   - added API regression coverage for whitespace/case-insensitive and multi-term item-list/catalog lookups
+- Relaxed order and quotation document handling.
+  - quotation and purchase-order document fields now store normalized document-reference strings instead of enforcing HTTPS URL syntax
+  - Orders and Arrival views now open HTTPS references as links and render non-HTTPS references as plain text
+  - updated backend regression coverage for import preview/import flows that now accept normalized non-URL references
 
 ### Tests
 
 - Backend targeted pytest against Docker test DB:
   - `uv run --project backend python -m pytest backend/tests/test_api_integration.py -q --import-mode=importlib -k "items_list_search_ignores_case_and_whitespace or items_list_search_supports_space_delimited_and_terms or catalog_search_ignores_case_and_whitespace or catalog_search_supports_space_delimited_and_terms or catalog_search_endpoint_returns_typed_results_and_alias_matches or catalog_search_item_summary_includes_description"`
+  - `uv run --project backend python -m pytest backend/tests/test_document_url_migration.py backend/tests/test_api_integration.py -q --import-mode=importlib -k "normalized_document_reference or quotation_document_url or document_url"`
 
 ## 2026-04-02
 
@@ -309,8 +376,8 @@
   - order import jobs now support `undo` and `redo`, including quotation and supplier-alias recovery plus conflict detection when imported rows were modified later
   - added Alembic revision `008_import_job_request_metadata` for the new `import_jobs.request_metadata` column
 - Organized the repo-side GCS lifecycle and Cloud SQL backup/restore operating contract in the rollout docs.
-  - `documents/gcp_cloud_run_rollout/cloud_run_deployment_runbook.md` now records the expected prefix/retention contract plus DB/object restore decision rules
-  - `documents/gcp_cloud_run_rollout/migration_checklist.md` and `security_and_cost_considerations.md` now distinguish documented recovery policy from still-pending live cloud enablement
+  - `documents/deployment/gcp_cloud_run_rollout/cloud_run_deployment_runbook.md` now records the expected prefix/retention contract plus DB/object restore decision rules
+  - `documents/deployment/gcp_cloud_run_rollout/migration_checklist.md` and `security_and_cost_considerations.md` now distinguish documented recovery policy from still-pending live cloud enablement
 - Extended the repo-side PITR preparation into backend diagnostics.
   - `/api/health` now includes a `recovery_policy` summary covering required Cloud SQL backup/PITR posture, GCS retention/versioning expectations, and post-restore validation targets
   - storage backend diagnostics now expose the retention/versioning and recovery-prefix contract directly
@@ -388,7 +455,7 @@
   - `POST /api/items/batch-upload` now processes uploaded missing-item CSV bytes directly instead of writing them into a server-side staging directory first
   - successful batch-upload archives still flow through the durable storage boundary, so Cloud Run can keep the upload path stateless
 - Added a concrete first-rollout Cloud Run deployment runbook.
-  - `documents/gcp_cloud_run_rollout/cloud_run_deployment_runbook.md`
+  - `documents/deployment/gcp_cloud_run_rollout/cloud_run_deployment_runbook.md`
   - documents build/push, migration, deploy, environment, and post-deploy validation steps for frontend + backend Cloud Run services
 - Completed the next Cloud Run-essential storage slice.
   - `backend/app/storage.py` now supports both `local://...` and `gcs://...` durable object refs
@@ -419,15 +486,15 @@
   - default registered-item archive moves and default registered-order CSV/PDF moves now execute through the storage layer, with rollback preserved for the item batch-registration path
 - Updated deployment/runtime documentation to match the new Cloud Run contract.
   - `.env.example`, `README.md`, `backend/README.md`, `documents/technical_documentation.md`, `documents/source_current_state.md`
-  - `documents/gcp_cloud_run_rollout/environment_and_runtime_matrix.md`
-  - `documents/gcp_cloud_run_rollout/migration_checklist.md`
+  - `documents/deployment/gcp_cloud_run_rollout/environment_and_runtime_matrix.md`
+  - `documents/deployment/gcp_cloud_run_rollout/migration_checklist.md`
 - Locked the remaining first-rollout decisions that were still causing scope ambiguity in the GCP plan.
   - split frontend/backend Cloud Run services stay in place and the frontend keeps nginx for static delivery
   - Cloud SQL uses the Cloud SQL Connector / Unix socket model, with secrets sourced from Google Secret Manager
   - GCS uses one bucket per environment plus prefix-based class separation and lifecycle retention of 7-day staging, 30-day exports, 90-day artifacts, and non-expiring archives
   - the first rollout assumes `dev` / `staging` / `prod`, native `*.run.app` URLs, backend-mediated downloads, a public browser-reachable backend with temporary pre-OIDC mutations, a 32 MB upload ceiling, a roughly 60-second heavy-request target, and small-team / conservative-concurrency operation
   - rollout planning now also fixes the initial admin/operator boundary, audit scope, monitoring baseline, and production-index review scope, while still deferring stronger end-user auth
-- Clarified checklist semantics in `documents/gcp_cloud_run_rollout/migration_checklist.md`.
+- Clarified checklist semantics in `documents/deployment/gcp_cloud_run_rollout/migration_checklist.md`.
   - added an explicit legend separating locked decisions from implementation/validation-complete items
   - converted decision-only entries from `[x]` to `[Decision]` so rollout progress no longer implies those items are already implemented
 
@@ -450,7 +517,7 @@
 
 ### Documentation
 
-- Added a new GCP rollout documentation set under `documents/gcp_cloud_run_rollout/`.
+- Added a new GCP rollout documentation set under `documents/deployment/gcp_cloud_run_rollout/`.
   - `README.md`
   - `implementation_plan.md`
   - `migration_checklist.md`
@@ -518,7 +585,7 @@
 ### Documentation
 
 - Updated migration-related contract notes in:
-  - `specification.md`
+  - `documents/specification.md`
   - `documents/technical_documentation.md`
   - `documents/source_current_state.md`
   - `documents/gcp_sharepoint_migration_plan/gcp_sharepoint_migration_plan.md`
@@ -781,7 +848,7 @@
 ### Documentation
 
 - Updated shared-server wording in:
-  - `specification.md`
+  - `documents/specification.md`
   - `documents/technical_documentation.md`
   - `documents/source_current_state.md`
   - `documents/change_log.md`
@@ -819,7 +886,7 @@
   - `POST /api/users`
   - `PUT /api/users/{id}`
   - `DELETE /api/users/{id}`
-- Windows Server deployment runbook: `documents/postgresql_windows_server_instructions.md`
+- Windows Server deployment runbook: `documents/deployment/windows_server_docker_deployment.md`
 
 ### Changed
 
@@ -1133,7 +1200,7 @@
 ### Docs
 
 - Updated `README.md` with the new workspace-first future-planning workflow and fallback-page posture.
-- Updated `specification.md` with the workspace editor/export/item-context endpoints and order-filter additions.
+- Updated `documents/specification.md` with the workspace editor/export/item-context endpoints and order-filter additions.
 - Updated `documents/technical_documentation.md` and `documents/source_current_state.md` with the drawer editing, dirty-state guard, item planning context, and export behavior.
 - Updated `documents/technical_documentation.md` and `documents/source_current_state.md` with the workspace/RFQ state-resynchronization and drawer-stack guard fixes.
 
@@ -1253,16 +1320,16 @@
 
 - Updated `README.md` with the new `Projects -> Planning -> RFQ -> Orders / Reservations` workflow.
 - Updated `README.md` with frontend test commands plus the stricter preview-confirmation override validation notes.
-- Updated `specification.md` with RFQ tables, project-linked order semantics, planning endpoint contracts, revised project planning behavior, and the RFQ-owned order assignment guardrails.
-- Updated `specification.md` with strict `422` contracts for preview-confirmation `row_overrides` / `alias_saves`.
+- Updated `documents/specification.md` with RFQ tables, project-linked order semantics, planning endpoint contracts, revised project planning behavior, and the RFQ-owned order assignment guardrails.
+- Updated `documents/specification.md` with strict `422` contracts for preview-confirmation `row_overrides` / `alias_saves`.
 - Updated `documents/technical_documentation.md` with the sequential planning pipeline, RFQ architecture, and RFQ/order ownership invariants.
 - Updated `documents/technical_documentation.md` and `documents/source_current_state.md` with the stricter import validation rules, picker state-sync behavior, and preview error-surfacing notes.
 - Updated `documents/source_current_state.md` with the current Planning/RFQ behavior, including stale-link clearing and RFQ-owned order assignment rules.
-- Updated `README.md`, `specification.md`, `documents/technical_documentation.md`, and `documents/source_current_state.md` with the CSV template/reference download endpoints and sticky-table UI behavior.
-- Updated `README.md`, `specification.md`, `documents/technical_documentation.md`, and `documents/source_current_state.md` with preview-first item/movement/reservation CSV import behavior and endpoint contracts.
-- Updated `README.md`, `specification.md`, `documents/technical_documentation.md`, and `documents/source_current_state.md` with the new Projects quick-parser preview endpoint and workflow.
-- Updated `README.md`, `specification.md`, `documents/technical_documentation.md`, and `documents/source_current_state.md` with the new BOM preview endpoint and preview-first reconciliation workflow.
-- Updated `specification.md`, `documents/technical_documentation.md`, and `documents/source_current_state.md` with reservation override precedence, RFQ split-order ownership, and effective gap-analysis `target_date` behavior.
+- Updated `README.md`, `documents/specification.md`, `documents/technical_documentation.md`, and `documents/source_current_state.md` with the CSV template/reference download endpoints and sticky-table UI behavior.
+- Updated `README.md`, `documents/specification.md`, `documents/technical_documentation.md`, and `documents/source_current_state.md` with preview-first item/movement/reservation CSV import behavior and endpoint contracts.
+- Updated `README.md`, `documents/specification.md`, `documents/technical_documentation.md`, and `documents/source_current_state.md` with the new Projects quick-parser preview endpoint and workflow.
+- Updated `README.md`, `documents/specification.md`, `documents/technical_documentation.md`, and `documents/source_current_state.md` with the new BOM preview endpoint and preview-first reconciliation workflow.
+- Updated `documents/specification.md`, `documents/technical_documentation.md`, and `documents/source_current_state.md` with reservation override precedence, RFQ split-order ownership, and effective gap-analysis `target_date` behavior.
 - Updated `documents/technical_documentation.md` and `documents/source_current_state.md` with the unified Movements entry workflow, `CatalogPicker` rollout, and movement-row location inheritance behavior.
 
 ### Tests
@@ -1480,7 +1547,7 @@
 
 ### Docs
 
-- Updated `specification.md` reservation and movement semantics to allocation-based behavior.
+- Updated `documents/specification.md` reservation and movement semantics to allocation-based behavior.
 - Updated `documents/technical_documentation.md` with reservation allocation architecture notes.
 - Updated `documents/source_current_state.md` reservation behavior section.
 
@@ -1488,7 +1555,7 @@
 
 ### Added
 
-- `documents/team_onboarding.md` with step-by-step setup for team members:
+- `documents/setup/team_onboarding.md` with step-by-step setup for team members:
   - local clone
   - `uv` backend environment setup
   - `npm` frontend install
@@ -1504,13 +1571,13 @@
   - `GET /api/auth/capabilities`
   - reports auth mode and planned RBAC roles metadata.
 - New docs in `documents/`:
-  - `team_onboarding.md`
+  - `setup/team_onboarding.md`
   - `source_current_state.md`
   - `change_log.md` (this file)
 
 ### Changed
 
-- Requirements/specification updates (`specification.md`):
+- Requirements/specification updates (`documents/specification.md`):
   - local-first PoC with forward compatibility to multi-user
   - auth stance: PoC no auth, RBAC planned (`admin`, `operator`, `viewer`)
   - timezone fixed to JST
@@ -1674,3 +1741,4 @@
 
 - Formal semantic versioning and release tags can be adopted once GitHub release workflow is started.
 - Recommended next step: map this log format to `vX.Y.Z` releases and attach migration notes per release.
+

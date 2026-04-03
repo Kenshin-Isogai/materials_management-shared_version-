@@ -22,19 +22,43 @@ Last updated: 2026-04-03 (JST)
   - `alembic/`: database migration scripts
   - `tests/`: integration/service/path tests
 - `frontend/`
-  - `src/pages/`: active pages wired into the router: Dashboard, Workspace, Items (Search), Locations, Projects, Procurement, Orders, Inventory (Movements), Reservations (Reserve), BOM, Snapshot, History, Master, Users. Unused page files retained but not routed: `PlanningPage.tsx`, `RfqPage.tsx`, `AssembliesPage.tsx`, `PurchaseCandidatesPage.tsx`.
+  - `src/app/router.tsx`: centralized router with feature-module imports, old-route redirects, and auth/main layout split
+  - `src/app/layouts/AppShell.tsx`: sidebar-based layout shell with grouped navigation (Planning/Inventory/Purchasing/Admin), sub-navigation for Projects, breadcrumb header, user identity/sign-out footer, and Ctrl+K command palette
+  - `src/app/layouts/AuthLayout.tsx`: minimal layout for login/registration/verify-email pages (no sidebar)
+  - `src/features/`: feature-based module structure replacing flat `pages/` directory
+    - `features/dashboard/DashboardPage.tsx`: enhanced dashboard with quick actions, summary stats, and 4 alert panels
+    - `features/projects/ProjectsPage.tsx`: project list
+    - `features/projects/ProjectOverviewPage.tsx`: summary + pipeline views (extracted from old WorkspacePage)
+    - `features/projects/PlanningBoardPage.tsx`: planning board with full analysis (extracted from old WorkspacePage)
+    - `features/projects/components/`: ProjectSummaryCard, AllocationConfirmation
+    - `features/items/ItemsPage.tsx`: item catalog with import/search, decomposed into 7 sub-components
+    - `features/items/ItemDetailPage.tsx`: standalone item detail page (replaces old drawer pattern)
+    - `features/items/components/`: BulkItemEntry, BulkMetadataUpdate, ItemBrowseTable, ItemFlowTimeline, ItemImportForm, ItemImportHistory, ItemImportPreview
+    - `features/orders/OrdersPage.tsx`: purchase order management, decomposed into sub-components
+    - `features/orders/components/`: OrderImportForm, OrderLineTable, QuotationTable, PurchaseOrderTable
+    - `features/inventory/`: LocationsPage, SnapshotPage, MovementsPage (renamed from InventoryPage), ReservationsPage
+    - `features/procurement/ProcurementPage.tsx`, `features/bom/BomPage.tsx`
+    - `features/admin/`: MasterPage, UsersPage, AuditLogPage (renamed from HistoryPage), LoginPage, RegistrationPage, VerifyEmailPage
+  - `src/components/ui/`: 19 shadcn/ui components (button, table, tabs, card, badge, dialog, command, sidebar, breadcrumb, skeleton, tooltip, etc.)
+  - `src/components/layout/`: shared layout components (PageHeader, StatusBadge, EmptyState)
+  - `src/components/CommandPalette.tsx`: Ctrl+K command palette for quick page navigation
   - `src/lib/api.ts`: API client now normalizes `VITE_API_BASE`, supports absolute backend URLs for split Cloud Run services, and injects `Authorization: Bearer <JWT>` when a stored token exists
   - `src/lib/errorUtils.ts`: frontend error classification/presentation helpers distinguish auth errors, backend-unavailable cases, and generic API failures for cloud-hosted UX
+  - `src/lib/workspaceState.ts`: board date synchronization utility (drawer state logic removed)
   - `src/components/StatusCallout.tsx`: shared callout used by the shell, dashboard, and workspace to explain sign-in requirements and environment-unavailable states
   - `src/components/ApiErrorNotice.tsx`: shared page-level API error presenter now used across major routed pages and embedded editors
   - `nginx.conf`: cloud-first static frontend config that does not proxy `/api`
   - `nginx.local-proxy.conf`: local Docker Compose nginx config that keeps same-origin `/api` proxying to the backend container
 - `documents/`
+  - `README.md`
+  - `specification.md`
   - `technical_documentation.md`
-  - `team_onboarding.md`
   - `source_current_state.md` (this file)
   - `change_log.md`
-  - `postgresql_windows_server_instructions.md`
+  - `setup/team_onboarding.md`
+  - `deployment/windows_server_docker_deployment.md`
+  - `deployment/gcp_cloud_run_rollout/`
+  - `archive/provisional_allocation_plan.md`
 - Root scripts:
   - `start-app.ps1`: Windows helper that starts the base Docker Compose app stack, defaulting to `docker-compose.yml` and only including the dev override when `-IncludeDevOverride` is requested
   - `stop-app.ps1`: matching Windows helper that stops the same app stack and optionally removes volumes with `-RemoveVolumes`
@@ -105,10 +129,14 @@ Last updated: 2026-04-03 (JST)
   - temporary legacy `rfq_batches` / `rfq_lines` and `purchase_candidates` compatibility remains during migration
   - supplier item aliases and category aliases
   - import jobs/effects for reversible item imports and recoverable manual order imports
+  - migration-ready ownership metadata on `items_master` / `orders` (`source_system`, nullable external ids)
+  - future external mirror tables: `external_item_mirrors`, `external_order_mirrors`
+  - local split metadata table: `local_order_splits`
   - transaction log with undo chain
 - Referential integrity and checks are enforced with foreign keys, constraints, indexes, and order validation triggers.
 - DB migration now backfills legacy `orders.project_id_manual` for rows with `project_id` and no ORDERED RFQ ownership, preserving historical manual project linkage during RFQ unlink sync.
 - Item reference guards for identity mutation/deletion include `purchase_candidates`, returning controlled domain errors before raw FK failures.
+- Local edit/delete paths for items and orders are now explicitly ready to reject future externally managed rows even though current runtime still seeds everything as `source_system='local'`.
 
 ### 3.3 Reservation Behavior
 
@@ -157,8 +185,8 @@ Last updated: 2026-04-03 (JST)
   - `purchase_order_document_url` is optional on orders
   - manual import reuses the same supplier-scoped purchase-order header when rows omit `purchase_order_document_url`, preventing duplicate header creation for one import/workflow
   - legacy purchase-order headers are backfilled during migration with stable `LEGACY-PO-<purchase_order_id>` values and stay unlocked so pre-rollout data remains uniquely addressable and re-importable
-  - order-line document-URL edits now safely update the current header metadata and can reattach a line to another same-supplier header when that target document URL already exists
-  - imported quotation/order document values are rendered as openable links in the Orders UI
+  - order-line document-reference edits now safely update the current header metadata and can reattach a line to another same-supplier header when that target document reference already exists
+  - imported quotation/order document values open as links only when the stored reference is HTTPS; other values render as plain text in the Orders UI
 - Manual Orders CSV import is now DB-tracked through the shared import-job tables.
   - `POST /api/purchase-order-lines/import` returns `import_job_id`
   - `GET /api/purchase-order-lines/import-jobs` lists `import_type='orders'` jobs
@@ -269,6 +297,9 @@ Last updated: 2026-04-03 (JST)
 - When split ETA editing is combined with project selection from the Orders page, the UI now performs the split first and then assigns only the created consumed child order.
 - Orders page `Order Details` now includes `Create Provisional Reservation…`, which opens Reservations with prefilled draft fields (`item_id`, `quantity`, optional `project_id`, and source-order context note/purpose) to reduce context switching for provisional stock-link workflows.
 - Backend now persists split/merge/partial-arrival order lineage in `order_lineage_events`; API exposes `POST /api/purchase-order-lines/merge` and `GET /api/purchase-order-lines/{order_id}/lineage` for durable traceability and future scale-out reporting.
+- Order and item API payloads now also include migration metadata (`source_system`, nullable external ids, local-management flag, and split-root metadata on split children) so future external-source rollout can remain mostly backend-configured.
+- Split metadata now also carries manual-override state for user-adjusted ETA/quantity changes, and `split_manual_override_fields` is normalized as a decoded field-name list in read models instead of a raw JSON string.
+- Local ownership guards now fail closed when required `source_system` metadata is missing rather than silently treating missing values as locally managed.
 - Orders manual CSV import is now preview-first:
   - `POST /api/purchase-order-lines/import-preview` classifies each row as `exact`, `high_confidence`, `needs_review`, or `unresolved`
   - supplier context is now row-driven from the CSV instead of a selected supplier outside the file
