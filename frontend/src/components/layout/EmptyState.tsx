@@ -1,8 +1,10 @@
+import type { ReactNode } from "react";
+
 import { cn } from "@/lib/utils";
 
 type EmptyStateProps = {
   message: string;
-  action?: React.ReactNode;
+  action?: ReactNode;
   className?: string;
 };
 

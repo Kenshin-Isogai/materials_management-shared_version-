@@ -2,6 +2,27 @@
 
 ### Changed
 
+- Fixed frontend redesign PR review follow-ups for the shared UI shell and test/build config.
+  - updated shadcn-derived layout primitives to use React type imports that work with the current TypeScript config without a global `React` namespace
+  - removed the runtime `shadcn/tailwind.css` import, moved `shadcn` to `devDependencies`, and aligned the command/tooltip class tokens with the Tailwind 3 syntax used by this repo
+  - mirrored the Vite `@` alias into `vitest.config.ts` so frontend tests resolve redesign-path imports consistently
+
+### Tests
+
+- Frontend production build:
+  - `npm run build`
+  - result: successful
+- Frontend targeted Vitest:
+  - `npx vitest run tests/ArrivalPage.test.tsx tests/ProjectEditor.test.tsx tests/auth.test.ts`
+  - result: `12 passed`
+- Frontend full Vitest:
+  - `npm run test`
+  - result: still failing due pre-existing unrelated test issues (`tests/AppRouter.test.tsx`, `tests/WorkspaceDrawer.test.tsx`, `tests/workspaceState.test.ts`, `tests/OrdersPage.test.tsx`)
+
+## 2026-04-03
+
+### Changed
+
 - Fixed two regressions in the external-sync foundation and Orders redesign follow-up.
   - migration `014_external_sync_foundation` now scopes `items_master.external_item_id` and `orders.external_order_id` uniqueness by `source_system`, matching the mirror-table namespace model and preventing cross-system ID collisions
   - the Orders page now revalidates purchase-order headers after order import, full arrival, and line deletion so the separate `/purchase-orders` cache no longer stays stale after line-level mutations
@@ -1778,4 +1799,3 @@
 
 - Formal semantic versioning and release tags can be adopted once GitHub release workflow is started.
 - Recommended next step: map this log format to `vX.Y.Z` releases and attach migration notes per release.
-

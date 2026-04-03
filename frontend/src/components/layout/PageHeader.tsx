@@ -1,9 +1,11 @@
+import type { ReactNode } from "react";
+
 import { cn } from "@/lib/utils";
 
 type PageHeaderProps = {
   title: string;
   description?: string;
-  children?: React.ReactNode;
+  children?: ReactNode;
   className?: string;
 };
 
