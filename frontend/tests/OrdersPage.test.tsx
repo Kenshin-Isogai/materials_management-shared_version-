@@ -298,6 +298,40 @@ describe("OrdersPage", () => {
     expect(actionRow?.className).toContain("items-center");
   });
 
+  it("requires confirmation before deleting a purchase order line", async () => {
+    const user = userEvent.setup();
+    apiSendMock.mockResolvedValue({});
+
+    renderPage();
+
+    const orderRow = (await screen.findByText(/Line #304 .* AOMO3080-125/)).closest(".rounded-2xl");
+    expect(orderRow).toBeTruthy();
+
+    await user.click(within(orderRow as HTMLElement).getByRole("button", { name: "Delete" }));
+
+    const confirmDialog = await screen.findByRole("dialog");
+    expect(within(confirmDialog).getByRole("heading", { name: "Delete purchase order line?" })).toBeTruthy();
+    expect(within(confirmDialog).getByText(/Line #304 \(AOMO3080-125\) will be deleted/)).toBeTruthy();
+    expect(apiSendMock).not.toHaveBeenCalled();
+
+    await user.click(within(confirmDialog).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+    expect(apiSendMock).not.toHaveBeenCalled();
+
+    await user.click(within(orderRow as HTMLElement).getByRole("button", { name: "Delete" }));
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
+
+    await waitFor(() => {
+      expect(apiSendMock).toHaveBeenCalledWith(
+        "/purchase-order-lines/304",
+        expect.objectContaining({ method: "DELETE" }),
+      );
+    });
+  });
+
   it("shows purchase-order headers separately from quotation headers", async () => {
     const user = userEvent.setup();
     renderPage();
@@ -681,6 +715,7 @@ describe("OrdersPage", () => {
     const orderRow = (await screen.findByText(/Line #304 .* AOMO3080-125/)).closest(".rounded-2xl");
     expect(orderRow).toBeTruthy();
     await user.click(within(orderRow as HTMLElement).getByRole("button", { name: "Delete" }));
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Delete" }));
 
     await waitFor(() => {
       expect(apiSendMock).toHaveBeenCalledWith(

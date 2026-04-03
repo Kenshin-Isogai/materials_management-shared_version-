@@ -1,5 +1,13 @@
 import React from "react";
 import { ApiErrorNotice } from "@/components/ApiErrorNotice";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import type { Item, Order, ProjectRow } from "@/lib/types";
 import { summaryMetric, renderDocumentReference } from "@/features/orders/utils";
 
@@ -72,6 +80,8 @@ export function OrderLineTable({
   cancelEditOrder,
   saveOrderEdit,
 }: OrderLineTableProps) {
+  const [pendingDeleteOrder, setPendingDeleteOrder] = React.useState<Order | null>(null);
+
   return (
     <section className="panel p-4">
       <div className="mb-3">
@@ -133,7 +143,12 @@ export function OrderLineTable({
                           )}
                         </>
                       ) : null}
-                      <button className="button-subtle" onClick={() => deleteOrder(row.order_id)} disabled={loading || row.status === "Arrived"} title={row.status === "Arrived" ? "Arrived orders cannot be deleted" : "Delete this order"}>
+                      <button
+                        className="button-subtle"
+                        onClick={() => setPendingDeleteOrder(row)}
+                        disabled={loading || row.status === "Arrived"}
+                        title={row.status === "Arrived" ? "Arrived orders cannot be deleted" : "Delete this order"}
+                      >
                         Delete
                       </button>
                     </div>
@@ -236,6 +251,35 @@ export function OrderLineTable({
           </div>
         </div>
       )}
+      <Dialog open={pendingDeleteOrder != null} onOpenChange={(open) => !open && setPendingDeleteOrder(null)}>
+        <DialogContent showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>Delete purchase order line?</DialogTitle>
+            <DialogDescription>
+              {pendingDeleteOrder
+                ? `Line #${pendingDeleteOrder.order_id} (${pendingDeleteOrder.canonical_item_number}) will be deleted from the registered purchase order lines.`
+                : "This line will be deleted from the registered purchase order lines."}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <button type="button" className="button-subtle" onClick={() => setPendingDeleteOrder(null)} disabled={loading}>
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="button-subtle text-red-700 hover:text-red-800"
+              onClick={() => {
+                if (!pendingDeleteOrder) return;
+                deleteOrder(pendingDeleteOrder.order_id);
+                setPendingDeleteOrder(null);
+              }}
+              disabled={loading || pendingDeleteOrder == null}
+            >
+              Delete
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

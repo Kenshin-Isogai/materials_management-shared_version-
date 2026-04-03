@@ -2,6 +2,24 @@
 
 ### Changed
 
+- Added an explicit confirmation dialog before deleting existing Purchase Order Lines from the Orders page.
+  - the line-level `Delete` action in `Purchase Order Lines` no longer deletes immediately on the first click
+  - the confirmation popup names the selected line before allowing the destructive action
+  - added a focused Orders-page regression test that locks in the confirm-before-delete behavior
+
+### Tests
+
+- Frontend targeted Vitest:
+  - `npm run test -- tests/OrdersPage.test.tsx`
+  - result: successful
+- Frontend production build:
+  - `npm run build`
+  - result: successful
+
+## 2026-04-04
+
+### Changed
+
 - Tightened the Purchase Order Lines card layout on the Orders page.
   - reduced card padding so each line row uses less vertical space
   - moved `Line Details` into the same action row as the other line buttons so the default four actions sit together on one row when space allows
