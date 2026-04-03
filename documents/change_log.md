@@ -2,6 +2,27 @@
 
 ### Changed
 
+- Fixed two regressions in the external-sync foundation and Orders redesign follow-up.
+  - migration `014_external_sync_foundation` now scopes `items_master.external_item_id` and `orders.external_order_id` uniqueness by `source_system`, matching the mirror-table namespace model and preventing cross-system ID collisions
+  - the Orders page now revalidates purchase-order headers after order import, full arrival, and line deletion so the separate `/purchase-orders` cache no longer stays stale after line-level mutations
+  - added regression coverage for the migration index shape and the Orders-page purchase-order revalidation paths
+
+### Tests
+
+- Frontend production build:
+  - `npm run build`
+  - result: successful
+- Frontend Vitest:
+  - `.\node_modules\.bin\vitest.cmd run tests\OrdersPage.test.tsx tests\ArrivalPage.test.tsx`
+  - blocked by the current Vitest alias-resolution issue (`@/...` imports not resolved from `vitest.config.ts` in this environment)
+- Backend targeted pytest:
+  - `PYTHONPATH=backend uv run --project backend python -m pytest backend/tests/test_db_migration.py -q --import-mode=importlib -k "external_sync_migration_scopes_external_ids_by_source_system or init_db_creates_users_and_orders_schema"`
+  - result: skipped in this environment because the DB-backed migration fixture was not available
+
+## 2026-04-03
+
+### Changed
+
 - Hardened frontend redesign project navigation and planning-board action safety.
   - project-context actions now route only through valid redesign paths instead of linking to removed project-detail URLs that fell through to the dashboard
   - the Projects page now accepts `?edit=<project_id>` deep links so summary cards, item context, and planning actions can open the editor reliably without reintroducing a removed detail route

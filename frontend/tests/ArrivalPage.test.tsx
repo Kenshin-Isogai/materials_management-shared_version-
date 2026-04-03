@@ -12,7 +12,7 @@ vi.mock("../src/lib/api", () => ({
   apiSend: (...args: unknown[]) => apiSendMock(...args),
 }));
 
-import { ArrivalPage } from "../src/pages/ArrivalPage";
+import { ArrivalPage } from "../src/features/orders/ArrivalPage";
 
 function renderPage() {
   render(

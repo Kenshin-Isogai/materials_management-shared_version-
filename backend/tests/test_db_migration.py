@@ -123,6 +123,72 @@ def test_init_db_creates_users_and_orders_schema(conn):
     assert external_order_conflict_row is not None
 
 
+def test_external_sync_migration_scopes_external_ids_by_source_system(conn):
+    conn.execute("DROP TABLE IF EXISTS local_order_splits CASCADE")
+    conn.execute("DROP TABLE IF EXISTS external_order_mirrors CASCADE")
+    conn.execute("DROP TABLE IF EXISTS external_item_mirrors CASCADE")
+    conn.execute("DROP TABLE IF EXISTS orders CASCADE")
+    conn.execute("DROP TABLE IF EXISTS items_master CASCADE")
+    conn.execute(
+        """
+        CREATE TABLE items_master (
+            item_id SERIAL PRIMARY KEY,
+            item_number TEXT NOT NULL,
+            manufacturer_id INTEGER REFERENCES manufacturers(manufacturer_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE orders (
+            order_id SERIAL PRIMARY KEY
+        )
+        """
+    )
+
+    migration_path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "014_external_sync_foundation.py"
+    )
+    spec = importlib.util.spec_from_file_location("external_sync_foundation_migration", migration_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    class _OpProxy:
+        def __init__(self, bind):
+            self._bind = bind
+
+        def get_bind(self):
+            return self._bind
+
+    module.op = _OpProxy(conn._connection)
+    module.upgrade()
+    conn.commit()
+
+    item_index = conn.execute(
+        """
+        SELECT indexdef
+        FROM pg_indexes
+        WHERE tablename = 'items_master' AND indexname = 'idx_items_master_external_item_id'
+        """
+    ).fetchone()
+    order_index = conn.execute(
+        """
+        SELECT indexdef
+        FROM pg_indexes
+        WHERE tablename = 'orders' AND indexname = 'idx_orders_external_order_id'
+        """
+    ).fetchone()
+
+    assert item_index is not None
+    assert order_index is not None
+    assert "(source_system, external_item_id)" in str(item_index["indexdef"])
+    assert "(source_system, external_order_id)" in str(order_index["indexdef"])
+
+
 def test_init_db_uses_explicit_database_url_even_when_env_differs(database_url: str, monkeypatch):
     _reset_database(database_url)
     monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://invalid:invalid@127.0.0.1:59999/invalid")

@@ -322,6 +322,10 @@ export function OrdersPage() {
     setPreviewUnlocks({});
   }
 
+  async function refreshOrderViews() {
+    await Promise.all([mutateOrders(), mutateQuotations(), mutatePurchaseOrders()]);
+  }
+
   function applyImportPreview(preview: OrderImportPreview) {
     const nextSelections: Record<string, CatalogSearchResult | null> = {};
     const nextUnits: Record<string, string> = {};
@@ -539,7 +543,7 @@ export function OrdersPage() {
           ? `Imported ${totalImportedCount} rows across ${files.length} file(s) and saved ${totalSavedAliasCount} alias mapping(s).`
           : `Imported ${totalImportedCount} rows across ${files.length} file(s).`
       );
-      await Promise.all([mutateOrders(), mutateQuotations()]);
+      await refreshOrderViews();
     } catch (error) {
       setMessage(formatActionError("Import failed", error));
     } finally {
@@ -563,7 +567,7 @@ export function OrdersPage() {
     setLoading(true);
     try {
       await apiSend(`/purchase-order-lines/${orderId}/arrival`, { method: "POST", body: JSON.stringify({}) });
-      await Promise.all([mutateOrders(), mutateQuotations()]);
+      await refreshOrderViews();
     } finally {
       setLoading(false);
     }
@@ -574,7 +578,7 @@ export function OrdersPage() {
     try {
       await apiSend(`/purchase-order-lines/${orderId}`, { method: "DELETE" });
       setMessage(`Deleted order #${orderId}.`);
-      await Promise.all([mutateOrders(), mutateQuotations()]);
+      await refreshOrderViews();
     } catch (error) {
       setMessage(`Delete failed: ${String(error ?? "")}`);
     } finally {
@@ -650,7 +654,7 @@ export function OrdersPage() {
           : `Updated order #${orderId}.`
       );
       cancelEditOrder();
-      await Promise.all([mutateOrders(), mutateQuotations(), mutatePurchaseOrders()]);
+      await refreshOrderViews();
     } catch (error) {
       setMessage(formatOrderUpdateError(error));
     } finally {
@@ -676,7 +680,7 @@ export function OrdersPage() {
       });
       setMessage(`Updated quotation #${quotationId}.`);
       setEditingQuotationId(null);
-      await Promise.all([mutateOrders(), mutateQuotations(), mutatePurchaseOrders()]);
+      await refreshOrderViews();
     } catch (error) {
       setMessage(`Quotation update failed: ${String(error ?? "")}`);
     } finally {
@@ -690,7 +694,7 @@ export function OrdersPage() {
       await apiSend(`/quotations/${quotationId}`, { method: "DELETE" });
       setMessage(`Deleted quotation #${quotationId} and related orders.`);
       if (editingQuotationId === quotationId) setEditingQuotationId(null);
-      await Promise.all([mutateOrders(), mutateQuotations(), mutatePurchaseOrders()]);
+      await refreshOrderViews();
     } catch (error) {
       setMessage(`Quotation delete failed: ${String(error ?? "")}`);
     } finally {
@@ -718,7 +722,7 @@ export function OrdersPage() {
       });
       setMessage(`Updated purchase order #${purchaseOrderId}.`);
       setEditingPurchaseOrderId(null);
-      await Promise.all([mutateOrders(), mutateQuotations(), mutatePurchaseOrders()]);
+      await refreshOrderViews();
     } catch (error) {
       setMessage(`Purchase order update failed: ${String(error ?? "")}`);
     } finally {
@@ -733,7 +737,7 @@ export function OrdersPage() {
       setMessage(`Deleted purchase order #${purchaseOrderId}.`);
       if (editingPurchaseOrderId === purchaseOrderId) setEditingPurchaseOrderId(null);
       if (selectedPurchaseOrderId === purchaseOrderId) setSelectedPurchaseOrderId(null);
-      await Promise.all([mutateOrders(), mutateQuotations(), mutatePurchaseOrders()]);
+      await refreshOrderViews();
     } catch (error) {
       setMessage(`Purchase order delete failed: ${String(error ?? "")}`);
     } finally {

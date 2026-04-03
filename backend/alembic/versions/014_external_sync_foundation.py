@@ -12,16 +12,18 @@ def upgrade() -> None:
     statements = [
         "ALTER TABLE items_master ADD COLUMN IF NOT EXISTS source_system TEXT NOT NULL DEFAULT 'local'",
         "ALTER TABLE items_master ADD COLUMN IF NOT EXISTS external_item_id TEXT",
+        "DROP INDEX IF EXISTS idx_items_master_external_item_id",
         """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_items_master_external_item_id
-        ON items_master (external_item_id)
+        CREATE UNIQUE INDEX idx_items_master_external_item_id
+        ON items_master (source_system, external_item_id)
         WHERE external_item_id IS NOT NULL
         """,
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS source_system TEXT NOT NULL DEFAULT 'local'",
         "ALTER TABLE orders ADD COLUMN IF NOT EXISTS external_order_id TEXT",
+        "DROP INDEX IF EXISTS idx_orders_external_order_id",
         """
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_external_order_id
-        ON orders (external_order_id)
+        CREATE UNIQUE INDEX idx_orders_external_order_id
+        ON orders (source_system, external_order_id)
         WHERE external_order_id IS NOT NULL
         """,
         """
