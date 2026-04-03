@@ -309,7 +309,7 @@ def test_reject_registration_request_requires_reason_and_records_review_metadata
             reviewer_user_id=reviewer["user_id"],
             rejection_reason="",
         )
-    assert exc_info.value.code == "VALIDATION_ERROR"
+    assert exc_info.value.code == "INVALID_FIELD"
 
     rejected = service.reject_registration_request(
         conn,
@@ -1560,12 +1560,148 @@ def test_update_order_can_split_partial_eta_without_archive_sync(conn, tmp_path:
     assert result["updated_order"]["expected_arrival"] == "2026-04-10"
     assert result["created_order"]["order_amount"] == 30
     assert result["created_order"]["expected_arrival"] == "2026-04-25"
+    assert result["created_order"]["is_split_child"] is True
+    assert result["created_order"]["split_root_order_id"] == order_id
+    split_row = conn.execute(
+        """
+        SELECT split_type, root_order_id, child_order_id, split_quantity, reconciliation_mode,
+               is_manual_override, manual_override_fields
+        FROM local_order_splits
+        WHERE child_order_id = ?
+        """,
+        (int(result["split_order_id"]),),
+    ).fetchone()
+    assert split_row is not None
+    assert split_row["split_type"] == "ETA_SPLIT"
+    assert int(split_row["root_order_id"]) == order_id
+    assert int(split_row["child_order_id"]) == int(result["split_order_id"])
+    assert int(split_row["split_quantity"]) == 30
+    assert split_row["reconciliation_mode"] == "propagate_external_changes"
+    assert bool(split_row["is_manual_override"]) is True
+    assert "expected_arrival" in str(split_row["manual_override_fields"])
+    assert "quantity" in str(split_row["manual_override_fields"])
+    assert result["created_order"]["split_manual_override_fields"] == ["expected_arrival", "quantity"]
 
     with csv_path.open("r", encoding="utf-8", newline="") as fp:
         rows_after_update = list(csv.DictReader(fp))
     assert len(rows_after_update) == 1
     assert rows_after_update[0]["quantity"] == "50"
     assert rows_after_update[0]["expected_arrival"] == "2026-04-10"
+
+
+def test_update_order_marks_split_child_eta_edit_as_manual_override(conn):
+    item = _create_basic_item(conn, item_number="SPLIT-MANUAL-ETA-001")
+    imported = service.import_orders_from_rows(
+        conn,
+        supplier_name="SplitManualEtaSupplier",
+        rows=[
+            {
+                "item_number": item["item_number"],
+                "quantity": "10",
+                "quotation_number": "Q-SPLIT-MANUAL-ETA-001",
+                "issue_date": "2026-04-01",
+                "order_date": "2026-04-01",
+                "expected_arrival": "2026-04-10",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
+            }
+        ],
+        source_name="split_manual_eta.csv",
+    )
+    order_id = int(imported["order_ids"][0])
+    split = service.update_order(
+        conn,
+        order_id,
+        {
+            "expected_arrival": "2026-04-20",
+            "split_quantity": 4,
+        },
+    )
+    child_order_id = int(split["split_order_id"])
+
+    updated_child = service.update_order(
+        conn,
+        child_order_id,
+        {
+            "expected_arrival": "2026-04-22",
+        },
+    )
+    assert updated_child["expected_arrival"] == "2026-04-22"
+
+    split_row = conn.execute(
+        """
+        SELECT is_manual_override, manual_override_fields, last_manual_override_at
+        FROM local_order_splits
+        WHERE child_order_id = ?
+        """,
+        (child_order_id,),
+    ).fetchone()
+    assert split_row is not None
+    assert bool(split_row["is_manual_override"]) is True
+    assert "expected_arrival" in str(split_row["manual_override_fields"])
+    assert split_row["last_manual_override_at"] is not None
+    assert updated_child["split_manual_override_fields"] == ["expected_arrival", "quantity"]
+
+
+def test_item_ownership_guard_raises_when_source_system_metadata_missing():
+    with pytest.raises(AppError) as exc_info:
+        service._assert_item_is_locally_managed({"item_id": 101})
+
+    assert exc_info.value.code == "ITEM_SOURCE_SYSTEM_MISSING"
+    assert exc_info.value.status_code == 500
+
+
+def test_order_ownership_guard_raises_when_source_system_metadata_missing():
+    with pytest.raises(AppError) as exc_info:
+        service._assert_order_is_locally_managed({"order_id": 202})
+
+    assert exc_info.value.code == "ORDER_SOURCE_SYSTEM_MISSING"
+    assert exc_info.value.status_code == 500
+
+
+def test_record_external_order_mirror_conflict_upserts_conflict_state(conn):
+    item = _create_basic_item(conn, item_number="EXT-CONFLICT-ITEM-001")
+    imported = service.import_orders_from_rows(
+        conn,
+        supplier_name="ExternalConflictSupplier",
+        rows=[
+            {
+                "item_number": item["item_number"],
+                "quantity": "5",
+                "quotation_number": "Q-EXT-CONFLICT-001",
+                "issue_date": "2026-04-01",
+                "order_date": "2026-04-01",
+                "expected_arrival": "2026-04-15",
+                "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
+            }
+        ],
+        source_name="external_conflict.csv",
+    )
+    order_id = int(imported["order_ids"][0])
+
+    first = service.record_external_order_mirror_conflict(
+        conn,
+        source_system="purchasing",
+        external_order_id="EXT-ORDER-001",
+        local_order_id=order_id,
+        conflict_code="ORDER_QUANTITY_CONFLICT",
+        conflict_message="External quantity decrease could not be absorbed by local splits",
+    )
+    assert first["sync_state"] == "conflict"
+    assert first["conflict_code"] == "ORDER_QUANTITY_CONFLICT"
+    assert int(first["local_order_id"]) == order_id
+
+    second = service.record_external_order_mirror_conflict(
+        conn,
+        source_system="purchasing",
+        external_order_id="EXT-ORDER-001",
+        conflict_code="ORDER_CANCEL_CONFLICT",
+        conflict_message="External cancellation conflicts with local arrived quantity",
+    )
+    assert second["sync_state"] == "conflict"
+    assert second["conflict_code"] == "ORDER_CANCEL_CONFLICT"
+    assert second["conflict_message"] == "External cancellation conflicts with local arrived quantity"
+    assert int(second["local_order_id"]) == order_id
+    assert second["conflict_detected_at"] is not None
 
 
 def test_update_order_rejects_manual_project_reassignment_for_ordered_rfq_link(conn):
@@ -2914,6 +3050,21 @@ def test_partial_arrival_sibling_inherits_project_id(conn):
         "Arrival-split sibling must inherit project_id from the original order"
     )
     assert int(sibling["order_amount"]) == 6
+    assert sibling["is_split_child"] is True
+    assert int(sibling["split_root_order_id"]) == order_id
+    split_row = conn.execute(
+        """
+        SELECT split_type, root_order_id, child_order_id, split_quantity
+        FROM local_order_splits
+        WHERE child_order_id = ?
+        """,
+        (sibling_id,),
+    ).fetchone()
+    assert split_row is not None
+    assert split_row["split_type"] == "ARRIVAL_SPLIT"
+    assert int(split_row["root_order_id"]) == order_id
+    assert int(split_row["child_order_id"]) == sibling_id
+    assert int(split_row["split_quantity"]) == 6
 
 
 def test_manual_project_id_preserved_when_rfq_link_removed(conn):

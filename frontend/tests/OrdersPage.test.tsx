@@ -37,7 +37,7 @@ vi.mock("../src/components/CatalogPicker", () => ({
   ),
 }));
 
-import { OrdersPage } from "../src/pages/OrdersPage";
+import { OrdersPage } from "../src/features/orders/OrdersPage";
 
 function renderPage() {
   render(
@@ -500,6 +500,138 @@ describe("OrdersPage", () => {
         }),
       }),
     );
+  });
+
+  it("revalidates purchase-order headers after confirming an import", async () => {
+    const user = userEvent.setup();
+    apiSendFormMock.mockImplementation(async (path: string) => {
+      if (path === "/purchase-order-lines/import-preview") {
+        return {
+          can_auto_accept: true,
+          blocking_errors: [],
+          locked_purchase_orders: [],
+          summary: {
+            total_rows: 1,
+            exact_matches: 1,
+            needs_review: 0,
+            unresolved: 0,
+          },
+          rows: [
+            {
+              row: 1,
+              source_index: 0,
+              source_name: "orders.csv",
+              supplier_id: 3,
+              supplier_name: "オーテックス",
+              item_number: "AOMO3080-125",
+              quantity: 15,
+              purchase_order_number: "PO-41",
+              quotation_number: "0000001809",
+              order_date: "2025-10-21",
+              expected_arrival: "2025-11-30",
+              quotation_document_url: "https://example.sharepoint.com/sites/procurement/0000001809",
+              purchase_order_document_url: "https://example.sharepoint.com/sites/procurement/po-41",
+              status: "exact",
+              confidence_score: 100,
+              warnings: [],
+              candidates: [],
+              suggested_match: {
+                item_id: 1,
+                item_number: "AOMO3080-125",
+                units_per_order: 1,
+                display_label: "AOMO3080-125",
+                value_text: "AOMO3080-125",
+                summary: "Autex test optic",
+              },
+            },
+          ],
+        };
+      }
+      if (path === "/purchase-order-lines/import") {
+        return {
+          status: "ok",
+          imported_count: 1,
+          saved_alias_count: 0,
+        };
+      }
+      throw new Error(`Unexpected apiSendForm path: ${path}`);
+    });
+
+    renderPage();
+
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement | null;
+    expect(fileInput).toBeTruthy();
+    const file = new File(["supplier,item_number,quantity\nオーテックス,AOMO3080-125,15\n"], "orders.csv", {
+      type: "text/csv",
+    });
+    Object.defineProperty(fileInput, "files", {
+      value: [file],
+      configurable: true,
+    });
+    fireEvent.change(fileInput!);
+
+    fireEvent.submit(screen.getByRole("button", { name: "Preview Import" }).closest("form") as HTMLFormElement);
+
+    expect(await screen.findByRole("button", { name: "Confirm Import" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Confirm Import" }));
+
+    await waitFor(() => {
+      expect(apiSendFormMock).toHaveBeenCalledWith("/purchase-order-lines/import", expect.any(FormData));
+    });
+    await waitFor(() => {
+      expect(
+        apiGetAllPagesMock.mock.calls.filter(([path]) => path === "/purchase-orders?per_page=200")
+      ).toHaveLength(2);
+    });
+  });
+
+  it("revalidates purchase-order headers after marking a line arrived", async () => {
+    const user = userEvent.setup();
+    apiSendMock.mockResolvedValue({});
+
+    renderPage();
+
+    await screen.findByText(/Line #304 .* AOMO3080-125/);
+    await user.click(screen.getAllByRole("button", { name: "Mark Arrived" })[0]);
+
+    await waitFor(() => {
+      expect(apiSendMock).toHaveBeenCalledWith(
+        "/purchase-order-lines/304/arrival",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({}),
+        }),
+      );
+    });
+    await waitFor(() => {
+      expect(
+        apiGetAllPagesMock.mock.calls.filter(([path]) => path === "/purchase-orders?per_page=200")
+      ).toHaveLength(2);
+    });
+  });
+
+  it("revalidates purchase-order headers after deleting a line", async () => {
+    const user = userEvent.setup();
+    apiSendMock.mockResolvedValue({});
+
+    renderPage();
+
+    await screen.findByText(/Line #304 .* AOMO3080-125/);
+    await user.click(screen.getAllByRole("button", { name: "Delete" })[0]);
+
+    await waitFor(() => {
+      expect(apiSendMock).toHaveBeenCalledWith(
+        "/purchase-order-lines/304",
+        expect.objectContaining({
+          method: "DELETE",
+        }),
+      );
+    });
+    await waitFor(() => {
+      expect(
+        apiGetAllPagesMock.mock.calls.filter(([path]) => path === "/purchase-orders?per_page=200")
+      ).toHaveLength(2);
+    });
   });
 
   it("points preview pdf-link failures to the upload-first recovery path", async () => {

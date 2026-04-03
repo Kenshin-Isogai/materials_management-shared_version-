@@ -3,8 +3,6 @@ from __future__ import annotations
 from datetime import date, datetime, timezone, timedelta
 import re
 import sqlite3
-from urllib.parse import urlparse
-
 from .errors import AppError
 
 JST = timezone(timedelta(hours=9))
@@ -78,7 +76,7 @@ def require_non_empty(value: str, field_name: str) -> str:
     return normalized
 
 
-def normalize_external_document_url(
+def normalize_document_reference(
     value: str | None,
     field_name: str,
     *,
@@ -101,13 +99,6 @@ def normalize_external_document_url(
                 status_code=422,
             )
         return None
-    parsed = urlparse(normalized)
-    if parsed.scheme.lower() != "https" or not parsed.netloc:
-        raise AppError(
-            code="INVALID_DOCUMENT_URL",
-            message=f"{field_name} must be a valid https URL",
-            status_code=422,
-        )
     return normalized
 
 

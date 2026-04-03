@@ -366,6 +366,27 @@ def test_project_requirement_preview_item_summary_includes_description(client):
     assert "Beam shaping lens" in suggested_match["summary"]
 
 
+def test_items_endpoint_exposes_source_metadata(client):
+    manufacturer = client.post("/api/manufacturers", json={"name": "API-ITEM-SOURCE-MFG"}).json()["data"]
+    created = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-ITEM-SOURCE-001",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Optics",
+        },
+    )
+    assert created.status_code == 200
+    item_id = created.json()["data"]["item_id"]
+
+    fetched = client.get(f"/api/items/{item_id}")
+    assert fetched.status_code == 200
+    payload = fetched.json()["data"]
+    assert payload["source_system"] == "local"
+    assert payload["external_item_id"] is None
+    assert payload["is_locally_managed"] is True
+
+
 def test_location_assembly_assignment_endpoint_remains_available(client):
     manufacturer = client.post("/api/manufacturers", json={"name": "API-LOCATION-MFG"}).json()["data"]
     item = client.post(
@@ -943,57 +964,61 @@ def test_registration_status_and_create_request_allow_unmapped_identity(database
         assert pending_status.json()["data"]["state"] == "pending"
 
 
-def test_admin_can_approve_and_reject_registration_requests(client, conn):
-    request = service.create_registration_request(
-        conn,
-        data={
-            "username": "approve-target",
-            "display_name": "Approve Target",
-            "requested_role": "viewer",
-        },
-        email="approve-target@example.test",
-        external_subject="sub-approve-target",
-        identity_provider="test-oidc",
-    )
-    second_request = service.create_registration_request(
-        conn,
-        data={
-            "username": "reject-target",
-            "display_name": "Reject Target",
-            "requested_role": "operator",
-        },
-        email="reject-target@example.test",
-        external_subject="sub-reject-target",
-        identity_provider="test-oidc",
-    )
-    conn.commit()
+def test_admin_can_approve_and_reject_registration_requests(client):
+    conn = get_connection(client.app.state.database_url)
+    try:
+        request = service.create_registration_request(
+            conn,
+            data={
+                "username": "approve-target",
+                "display_name": "Approve Target",
+                "requested_role": "viewer",
+            },
+            email="approve-target@example.test",
+            external_subject="sub-approve-target",
+            identity_provider="test-oidc",
+        )
+        second_request = service.create_registration_request(
+            conn,
+            data={
+                "username": "reject-target",
+                "display_name": "Reject Target",
+                "requested_role": "operator",
+            },
+            email="reject-target@example.test",
+            external_subject="sub-reject-target",
+            identity_provider="test-oidc",
+        )
+        conn.commit()
 
-    listing = client.get("/api/registration-requests")
-    assert listing.status_code == 200
-    assert len(listing.json()["data"]) == 2
+        listing = client.get("/api/registration-requests")
+        assert listing.status_code == 200
+        assert len(listing.json()["data"]) == 2
 
-    approve_response = client.post(
-        f"/api/registration-requests/{request['request_id']}/approve",
-        json={"role": "operator", "username": "approved-user", "display_name": "Approved User"},
-    )
-    assert approve_response.status_code == 200
-    approved_payload = approve_response.json()["data"]
-    assert approved_payload["status"] == "approved"
-    assert approved_payload["approved_user_id"] is not None
+        approve_response = client.post(
+            f"/api/registration-requests/{request['request_id']}/approve",
+            json={"role": "operator", "username": "approved-user", "display_name": "Approved User"},
+        )
+        assert approve_response.status_code == 200
+        approved_payload = approve_response.json()["data"]
+        assert approved_payload["status"] == "approved"
+        assert approved_payload["approved_user_id"] is not None
 
-    reject_response = client.post(
-        f"/api/registration-requests/{second_request['request_id']}/reject",
-        json={"rejection_reason": "Need manager confirmation"},
-    )
-    assert reject_response.status_code == 200
-    rejected_payload = reject_response.json()["data"]
-    assert rejected_payload["status"] == "rejected"
-    assert rejected_payload["rejection_reason"] == "Need manager confirmation"
-    assert rejected_payload["reviewed_by_user_id"] is not None
+        reject_response = client.post(
+            f"/api/registration-requests/{second_request['request_id']}/reject",
+            json={"rejection_reason": "Need manager confirmation"},
+        )
+        assert reject_response.status_code == 200
+        rejected_payload = reject_response.json()["data"]
+        assert rejected_payload["status"] == "rejected"
+        assert rejected_payload["rejection_reason"] == "Need manager confirmation"
+        assert rejected_payload["reviewed_by_user_id"] is not None
 
-    created_user = service.get_user(conn, int(approved_payload["approved_user_id"]))
-    assert created_user["username"] == "approved-user"
-    assert created_user["role"] == "operator"
+        created_user = service.get_user(conn, int(approved_payload["approved_user_id"]))
+        assert created_user["username"] == "approved-user"
+        assert created_user["role"] == "operator"
+    finally:
+        conn.close()
 
 
 def test_user_update_allows_partial_identity_update_when_existing_pair_remains_valid(client):
@@ -1166,7 +1191,7 @@ def test_shared_secret_verifier_rejects_email_without_true_verified_claim(databa
     assert response.status_code == 401
     payload = response.json()
     assert payload["status"] == "error"
-    assert payload["error"]["code"] == "INVALID_TOKEN"
+    assert payload["error"]["code"] == "EMAIL_VERIFICATION_REQUIRED"
     assert payload["error"]["message"] == "Verified email claim is required when email is present"
 
 
@@ -1991,7 +2016,7 @@ def test_order_import_requires_quotation_document_url(client):
     assert payload["error"]["code"] == "INVALID_FIELD"
     assert "quotation_document_url" in payload["error"]["message"]
 
-def test_order_import_rejects_non_url_quotation_document_url(client):
+def test_order_import_accepts_normalized_quotation_document_reference(client):
     client.post("/api/manufacturers", json={"name": "API-MANUAL-VALID-MFG"})
     client.post(
         "/api/items",
@@ -2032,11 +2057,14 @@ def test_order_import_rejects_non_url_quotation_document_url(client):
         files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
         data={"supplier_name": "SupplierManual"},
     )
-    assert response.status_code == 422
-    payload = response.json()
-    assert payload["status"] == "error"
-    assert payload["error"]["code"] == "INVALID_DOCUMENT_URL"
-    assert "quotation_document_url" in payload["error"]["message"]
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload["status"] == "ok"
+    orders = client.get("/api/purchase-order-lines").json()["data"]
+    assert any(
+        row["quotation_document_url"] == "imports/orders/unregistered/pdf_files/SupplierManual/Q-MANUAL-002.pdf"
+        for row in orders
+    )
 
 def test_order_import_blocks_locked_purchase_order_and_allows_explicit_unlock(client):
     client.post("/api/manufacturers", json={"name": "API-DUP-QUOTE-MFG"})
@@ -3658,6 +3686,75 @@ def test_merge_orders_endpoint_merges_and_returns_lineage(client):
         row["event_type"] == "ETA_MERGE" and row["source_purchase_order_line_id"] == source_purchase_order_line_id
         for row in lineage.json()["data"]
     )
+
+
+def test_order_split_endpoint_exposes_split_metadata(client):
+    client.post("/api/manufacturers", json={"name": "API-SPLIT-META-MFG"})
+    client.post(
+        "/api/items",
+        json={
+            "item_number": "API-SPLIT-META-ITEM",
+            "manufacturer_name": "API-SPLIT-META-MFG",
+            "category": "Lens",
+        },
+    )
+
+    output = StringIO()
+    writer = csv.DictWriter(
+        output,
+        fieldnames=[
+            "item_number",
+            "quantity",
+            "quotation_number",
+            "issue_date",
+            "order_date",
+            "expected_arrival",
+            "quotation_document_url",
+        ],
+    )
+    writer.writeheader()
+    writer.writerow(
+        {
+            "item_number": "API-SPLIT-META-ITEM",
+            "quantity": "12",
+            "quotation_number": "Q-SPLIT-META-001",
+            "issue_date": "2026-03-01",
+            "order_date": "2026-03-01",
+            "expected_arrival": "2026-03-10",
+            "quotation_document_url": "https://example.sharepoint.com/sites/procurement/placeholder.pdf",
+        }
+    )
+
+    imported = client.post(
+        "/api/purchase-order-lines/import",
+        files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
+        data={"supplier_name": "SupplierSplitMetaApi"},
+    )
+    assert imported.status_code == 200
+    order_id = imported.json()["data"]["order_ids"][0]
+
+    split_response = client.put(
+        f"/api/purchase-order-lines/{order_id}",
+        json={"expected_arrival": "2026-03-20", "split_quantity": 5},
+    )
+    assert split_response.status_code == 200
+    payload = split_response.json()["data"]
+    assert payload["created_order"]["source_system"] == "local"
+    assert payload["created_order"]["is_split_child"] is True
+    assert payload["created_order"]["split_root_order_id"] == order_id
+    assert payload["created_order"]["split_reconciliation_mode"] == "propagate_external_changes"
+    assert payload["created_order"]["split_is_manual_override"] is True
+    assert payload["created_order"]["split_manual_override_fields"] == ["expected_arrival", "quantity"]
+
+    split_order_id = payload["split_order_id"]
+    fetched = client.get(f"/api/purchase-order-lines/{split_order_id}")
+    assert fetched.status_code == 200
+    fetched_payload = fetched.json()["data"]
+    assert fetched_payload["source_system"] == "local"
+    assert fetched_payload["is_split_child"] is True
+    assert fetched_payload["split_root_order_id"] == order_id
+    assert fetched_payload["split_is_manual_override"] is True
+    assert fetched_payload["split_manual_override_fields"] == ["expected_arrival", "quantity"]
 
 
 def test_delete_quotation_endpoint_removes_related_orders(client):

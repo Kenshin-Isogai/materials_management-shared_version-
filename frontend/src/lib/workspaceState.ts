@@ -12,22 +12,4 @@ export function nextSynchronizedBoardDate(_props: {
   return nextBoardDate;
 }
 
-export function resolveDrawerStackPush<T extends { key: string }>(
-  current: T[],
-  context: T,
-): {
-  nextStack: T[];
-  discardedKeys: string[];
-} {
-  const existingIndex = current.findIndex((entry) => entry.key === context.key);
-  if (existingIndex >= 0) {
-    return {
-      nextStack: current.slice(0, existingIndex + 1),
-      discardedKeys: current.slice(existingIndex + 1).map((entry) => entry.key),
-    };
-  }
-  return {
-    nextStack: [...current, context],
-    discardedKeys: [],
-  };
-}
+

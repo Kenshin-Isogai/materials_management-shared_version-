@@ -57,6 +57,55 @@ def test_init_db_creates_users_and_orders_schema(conn):
         WHERE table_name = 'orders' AND column_name = 'purchase_order_id'
         """
     ).fetchone()
+    item_source_row = conn.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = 'items_master' AND column_name = 'source_system'
+        """
+    ).fetchone()
+    order_source_row = conn.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = 'orders' AND column_name = 'source_system'
+        """
+    ).fetchone()
+    order_external_id_row = conn.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = 'orders' AND column_name = 'external_order_id'
+        """
+    ).fetchone()
+    local_split_table_row = conn.execute(
+        """
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_name = 'local_order_splits'
+        """
+    ).fetchone()
+    local_split_manual_row = conn.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = 'local_order_splits' AND column_name = 'is_manual_override'
+        """
+    ).fetchone()
+    external_order_mirror_table_row = conn.execute(
+        """
+        SELECT table_name
+        FROM information_schema.tables
+        WHERE table_name = 'external_order_mirrors'
+        """
+    ).fetchone()
+    external_order_conflict_row = conn.execute(
+        """
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_name = 'external_order_mirrors' AND column_name = 'conflict_code'
+        """
+    ).fetchone()
 
     assert users_row is not None
     assert oidc_email_row is not None
@@ -65,6 +114,79 @@ def test_init_db_creates_users_and_orders_schema(conn):
     assert purchase_order_number_row is not None
     assert purchase_order_lock_row is not None
     assert order_purchase_order_fk_row is not None
+    assert item_source_row is not None
+    assert order_source_row is not None
+    assert order_external_id_row is not None
+    assert local_split_table_row is not None
+    assert local_split_manual_row is not None
+    assert external_order_mirror_table_row is not None
+    assert external_order_conflict_row is not None
+
+
+def test_external_sync_migration_scopes_external_ids_by_source_system(conn):
+    conn.execute("DROP TABLE IF EXISTS local_order_splits CASCADE")
+    conn.execute("DROP TABLE IF EXISTS external_order_mirrors CASCADE")
+    conn.execute("DROP TABLE IF EXISTS external_item_mirrors CASCADE")
+    conn.execute("DROP TABLE IF EXISTS orders CASCADE")
+    conn.execute("DROP TABLE IF EXISTS items_master CASCADE")
+    conn.execute(
+        """
+        CREATE TABLE items_master (
+            item_id SERIAL PRIMARY KEY,
+            item_number TEXT NOT NULL,
+            manufacturer_id INTEGER REFERENCES manufacturers(manufacturer_id)
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE orders (
+            order_id SERIAL PRIMARY KEY
+        )
+        """
+    )
+
+    migration_path = (
+        Path(__file__).resolve().parents[1]
+        / "alembic"
+        / "versions"
+        / "014_external_sync_foundation.py"
+    )
+    spec = importlib.util.spec_from_file_location("external_sync_foundation_migration", migration_path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    class _OpProxy:
+        def __init__(self, bind):
+            self._bind = bind
+
+        def get_bind(self):
+            return self._bind
+
+    module.op = _OpProxy(conn._connection)
+    module.upgrade()
+    conn.commit()
+
+    item_index = conn.execute(
+        """
+        SELECT indexdef
+        FROM pg_indexes
+        WHERE tablename = 'items_master' AND indexname = 'idx_items_master_external_item_id'
+        """
+    ).fetchone()
+    order_index = conn.execute(
+        """
+        SELECT indexdef
+        FROM pg_indexes
+        WHERE tablename = 'orders' AND indexname = 'idx_orders_external_order_id'
+        """
+    ).fetchone()
+
+    assert item_index is not None
+    assert order_index is not None
+    assert "(source_system, external_item_id)" in str(item_index["indexdef"])
+    assert "(source_system, external_order_id)" in str(order_index["indexdef"])
 
 
 def test_init_db_uses_explicit_database_url_even_when_env_differs(database_url: str, monkeypatch):

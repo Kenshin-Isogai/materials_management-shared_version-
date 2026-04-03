@@ -1,66 +1,11 @@
-import {
-  createBrowserRouter,
-  createRoutesFromElements,
-  Navigate,
-  Route,
-  RouterProvider,
-} from "react-router-dom";
-import { AppShell } from "./components/AppShell";
-import { ArrivalPage } from "./pages/ArrivalPage";
-import { BomPage } from "./pages/BomPage";
-import { DashboardPage } from "./pages/DashboardPage";
-import { HistoryPage } from "./pages/HistoryPage";
-import { InventoryPage } from "./pages/InventoryPage";
-import { ItemsPage } from "./pages/ItemsPage";
-import { LocationsPage } from "./pages/LocationsPage";
-import { LoginPage } from "./pages/LoginPage";
-import { MasterPage } from "./pages/MasterPage";
-import { OrdersPage } from "./pages/OrdersPage";
-import { ProcurementPage } from "./pages/ProcurementPage";
-import { ProjectsPage } from "./pages/ProjectsPage";
-import { ReservationsPage } from "./pages/ReservationsPage";
-import { RegistrationPage } from "./pages/RegistrationPage";
-import { SnapshotPage } from "./pages/SnapshotPage";
-import { UsersPage } from "./pages/UsersPage";
-import { VerifyEmailPage } from "./pages/VerifyEmailPage";
-import { WorkspacePage } from "./pages/WorkspacePage";
-
-export const appRoutes = createRoutesFromElements(
-  <>
-    {/* Login page renders OUTSIDE AppShell — standalone full-screen */}
-    <Route path="/login" element={<LoginPage />} />
-
-    {/* All other routes use the normal AppShell layout (header + nav) */}
-    <Route element={<AppShell />}>
-      <Route path="/" element={<DashboardPage />} />
-      <Route path="/dashboard" element={<Navigate to="/" replace />} />
-      <Route path="/search" element={<ItemsPage />} />
-      <Route path="/location" element={<LocationsPage />} />
-      <Route path="/arrival" element={<ArrivalPage />} />
-      <Route path="/movements" element={<InventoryPage />} />
-      <Route path="/reserve" element={<ReservationsPage />} />
-      <Route path="/items" element={<ItemsPage />} />
-      <Route path="/inventory" element={<Navigate to="/movements" replace />} />
-      <Route path="/purchase-order-lines" element={<OrdersPage />} />
-      <Route path="/reservations" element={<Navigate to="/reserve" replace />} />
-      <Route path="/projects" element={<ProjectsPage />} />
-      <Route path="/workspace" element={<WorkspacePage />} />
-      <Route path="/procurement" element={<ProcurementPage />} />
-      <Route path="/bom" element={<BomPage />} />
-      <Route path="/locations" element={<Navigate to="/location" replace />} />
-      <Route path="/snapshot" element={<SnapshotPage />} />
-      <Route path="/history" element={<HistoryPage />} />
-      <Route path="/master" element={<MasterPage />} />
-      <Route path="/users" element={<UsersPage />} />
-      <Route path="/registration" element={<RegistrationPage />} />
-      <Route path="/verify-email" element={<VerifyEmailPage />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Route>
-  </>,
-);
-
-const appRouter = createBrowserRouter(appRoutes);
+import { RouterProvider } from "react-router-dom";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { appRouter } from "@/app/router";
 
 export default function App() {
-  return <RouterProvider router={appRouter} />;
+  return (
+    <TooltipProvider>
+      <RouterProvider router={appRouter} />
+    </TooltipProvider>
+  );
 }

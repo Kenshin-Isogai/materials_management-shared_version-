@@ -46,8 +46,8 @@ For Cloud Run deployment posture, the backend now supports:
 - `docker-compose.test.yml`: PostgreSQL test database
 - `imports/orders/`: Registered/unregistered order import CSV/PDF files
 - `exports/`: Generated CSV exports (for example missing-item registration templates)
-- `documents/`: Technical documentation
-- `specification.md`: Detailed functional specification
+- `documents/`: Application-level documentation hub
+- `documents/specification.md`: Detailed functional specification
 - `start-app.ps1` / `stop-app.ps1`: PowerShell helper scripts to start/stop the Docker Compose stack
 - `launch-start-app.bat` / `launch-stop-app.bat`: Batch wrappers for the PowerShell scripts
 
@@ -87,7 +87,7 @@ The Docker Compose stack keeps the local `/api` path by mounting `frontend/nginx
 docker compose down
 ```
 
-Detailed Windows Server deployment steps are in `documents/postgresql_windows_server_instructions.md`.
+Detailed Windows Server deployment steps are in `documents/deployment/windows_server_docker_deployment.md`.
 
 ## Local Development
 
@@ -140,11 +140,11 @@ This wrapper sets `NGINX_HOST_PORT=8088` for the E2E stack, so Playwright does n
 - local Docker Compose now relies on normal backend startup migration (`AUTO_MIGRATE_ON_STARTUP=1` by default in compose) instead of embedding `alembic upgrade head` into the container command
 - manual order-import missing-item outputs are now exposed through artifact metadata/download endpoints rather than raw path fields
 - Legacy ZIP/PDF compatibility import remains a local/shared-server workflow, not the target Cloud Run path
-- Concrete first-rollout deploy steps are documented in [documents/gcp_cloud_run_rollout/cloud_run_deployment_runbook.md](documents/gcp_cloud_run_rollout/cloud_run_deployment_runbook.md)
+- Concrete first-rollout deploy steps are documented in [documents/deployment/gcp_cloud_run_rollout/cloud_run_deployment_runbook.md](documents/deployment/gcp_cloud_run_rollout/cloud_run_deployment_runbook.md)
 - Repo-side deployment assets live under `deployment/gcp/`, including backend/frontend env templates, PowerShell deploy scripts, and a Secret Manager helper
 - A manual GitHub Actions deploy workflow now lives at `.github/workflows/deploy-gcp.yml`
-- GitHub Environment variable/secret setup is documented in [documents/gcp_cloud_run_rollout/github_actions_environment_setup.md](documents/gcp_cloud_run_rollout/github_actions_environment_setup.md)
-- First-time per-environment bootstrap steps are documented in [documents/gcp_cloud_run_rollout/first_time_environment_bootstrap.md](documents/gcp_cloud_run_rollout/first_time_environment_bootstrap.md)
+- GitHub Environment variable/secret setup is documented in [documents/deployment/gcp_cloud_run_rollout/github_actions_environment_setup.md](documents/deployment/gcp_cloud_run_rollout/github_actions_environment_setup.md)
+- First-time per-environment bootstrap steps are documented in [documents/deployment/gcp_cloud_run_rollout/first_time_environment_bootstrap.md](documents/deployment/gcp_cloud_run_rollout/first_time_environment_bootstrap.md)
 
 ## API
 
@@ -196,9 +196,10 @@ For targeted backend slices from the repo root, keep the same `TEST_DATABASE_URL
 
 ## Documentation
 
-- Functional specification: [`specification.md`](specification.md)
+- Documentation hub: [`documents/README.md`](documents/README.md)
+- Functional specification: [`documents/specification.md`](documents/specification.md)
 - Technical architecture and ER diagrams: [`documents/technical_documentation.md`](documents/technical_documentation.md)
-- Team onboarding (clone/install/run/test): [`documents/team_onboarding.md`](documents/team_onboarding.md)
+- Team onboarding (clone/install/run/test): [`documents/setup/team_onboarding.md`](documents/setup/team_onboarding.md)
 - Current source snapshot: [`documents/source_current_state.md`](documents/source_current_state.md)
 - Project change history: [`documents/change_log.md`](documents/change_log.md)
 

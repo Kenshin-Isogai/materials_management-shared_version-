@@ -53,6 +53,9 @@ _PRIMARY_KEY_BY_TABLE = {
     "supplier_item_aliases": "alias_id",
     "import_jobs": "import_job_id",
     "import_job_effects": "effect_id",
+    "external_item_mirrors": "mirror_id",
+    "external_order_mirrors": "mirror_id",
+    "local_order_splits": "split_id",
     "users": "user_id",
     "registration_requests": "request_id",
 }
