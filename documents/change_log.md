@@ -2,6 +2,23 @@
 
 ### Changed
 
+- Fixed the Dashboard `Overdue Orders` panel so large result sets no longer render the same orders twice in different layouts.
+  - the panel now uses a single display mode at a time: compact cards for up to 8 rows, table view for 9 or more rows
+  - added focused frontend regression coverage for both the large-set table mode and filtered compact-list mode
+
+### Tests
+
+- Frontend targeted Vitest:
+  - `npm run test -- tests/DashboardPage.test.tsx`
+  - result: successful
+- Frontend production build:
+  - `npm run build`
+  - result: successful
+
+## 2026-04-04
+
+### Changed
+
 - Added an explicit confirmation dialog before deleting existing Purchase Order Lines from the Orders page.
   - the line-level `Delete` action in `Purchase Order Lines` no longer deletes immediately on the first click
   - the confirmation popup names the selected line before allowing the destructive action

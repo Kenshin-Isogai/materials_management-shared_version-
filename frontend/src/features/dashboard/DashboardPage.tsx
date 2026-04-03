@@ -54,6 +54,7 @@ export function DashboardPage() {
         .includes(needle)
     );
   }, [data, overdueQuery]);
+  const showOverdueTable = filteredOverdueOrders.length > 8;
 
   return (
     <div className="space-y-6">
@@ -117,16 +118,9 @@ export function DashboardPage() {
                   onChange={(e) => setOverdueQuery(e.target.value)}
                 />
               </div>
-              <ul className="mt-3 space-y-2 text-sm">
-                {filteredOverdueOrders.slice(0, 8).map((order, idx) => (
-                  <li key={idx} className="rounded-lg bg-slate-50 px-3 py-2">
-                    #{String(order.order_id)} {String(order.item_number)} ({String(order.supplier_name)}) -{" "}
-                    {String(order.expected_arrival)}
-                  </li>
-                ))}
-                {!filteredOverdueOrders.length && <li className="text-slate-500">None</li>}
-              </ul>
-              {filteredOverdueOrders.length > 8 && (
+              {!filteredOverdueOrders.length ? (
+                <p className="mt-3 text-sm text-slate-500">None</p>
+              ) : showOverdueTable ? (
                 <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200">
                   <table className="min-w-[560px] text-sm">
                     <thead>
@@ -149,6 +143,15 @@ export function DashboardPage() {
                     </tbody>
                   </table>
                 </div>
+              ) : (
+                <ul className="mt-3 space-y-2 text-sm">
+                  {filteredOverdueOrders.map((order, idx) => (
+                    <li key={idx} className="rounded-lg bg-slate-50 px-3 py-2">
+                      #{String(order.order_id)} {String(order.item_number)} ({String(order.supplier_name)}) -{" "}
+                      {String(order.expected_arrival)}
+                    </li>
+                  ))}
+                </ul>
               )}
             </article>
 
