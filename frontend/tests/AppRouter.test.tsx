@@ -108,7 +108,7 @@ vi.mock("../src/components/ProjectEditor", () => ({
   },
 }));
 
-import { appRoutes } from "../src/App";
+import { appRoutes } from "../src/app/router";
 
 const activeRouters: Array<{ dispose: () => void }> = [];
 
@@ -130,6 +130,21 @@ function renderRouter(initialEntry: string) {
 describe("app router", () => {
   beforeEach(() => {
     window.sessionStorage.clear();
+    vi.stubGlobal("matchMedia", vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })));
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 0;
+    });
+    Element.prototype.scrollIntoView = vi.fn();
     apiGetMock.mockReset();
     apiGetMock.mockImplementation(defaultApiGet);
     apiGetAllPagesMock.mockReset();
@@ -150,19 +165,22 @@ describe("app router", () => {
     while (activeRouters.length) {
       activeRouters.pop()?.dispose();
     }
+    vi.unstubAllGlobals();
     cleanup();
   });
 
-  it("renders the workspace route through a data router without crashing", async () => {
+  it("redirects the legacy /workspace route to the project overview page", async () => {
     window.sessionStorage.setItem("materials.auth-session", JSON.stringify({ accessToken: "token" }));
-    renderRouter("/workspace");
-
-    expect(screen.getByRole("heading", { name: "Workspace" })).toBeTruthy();
+    const router = renderRouter("/workspace");
 
     await waitFor(() => {
       expect(apiGetMock).toHaveBeenCalledWith("/workspace/summary");
     });
 
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/projects/overview");
+    });
+    expect(screen.getByRole("heading", { name: "Project Overview" })).toBeTruthy();
     expect(screen.getByText("No projects available yet.")).toBeTruthy();
   });
 
@@ -340,7 +358,33 @@ describe("app router", () => {
     });
   });
 
-  it("redirects approved users away from /registration", async () => {
+  it("shows an approved-access callout on /registration for mapped users", async () => {
+    apiGetMock.mockImplementation(async (path: string) => {
+      if (path === "/auth/registration-status") {
+        return {
+          state: "approved",
+          email: "admin@example.com",
+          identity_provider: "identity_platform",
+          external_subject: "sub-admin",
+          current_user: {
+            user_id: 1,
+            username: "admin",
+            display_name: "Admin",
+            role: "admin",
+            is_active: true,
+            created_at: "2026-03-08T00:00:00+09:00",
+            updated_at: "2026-03-08T00:00:00+09:00",
+            email: "admin@example.com",
+            external_subject: "sub-admin",
+            identity_provider: "identity_platform",
+            hosted_domain: null,
+          },
+          request: null,
+        };
+      }
+      return defaultApiGet(path);
+    });
+
     act(() => {
       window.sessionStorage.setItem("materials.auth-session", JSON.stringify({ accessToken: "token" }));
     });
@@ -348,9 +392,10 @@ describe("app router", () => {
     const router = renderRouter("/registration");
 
     await waitFor(() => {
-      expect(router.state.location.pathname).toBe("/");
+      expect(router.state.location.pathname).toBe("/registration");
     });
-    expect(screen.getByRole("heading", { name: "Dashboard" })).toBeTruthy();
+    expect(screen.getByText("Access already approved")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Open dashboard" })).toBeTruthy();
   });
 
   it("clears a stale signup error after switching to sign-in and logging in successfully", async () => {

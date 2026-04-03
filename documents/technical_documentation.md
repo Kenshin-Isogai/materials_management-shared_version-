@@ -62,6 +62,10 @@ This document explains the implemented architecture of the Materials Management 
   - the shell now shows a persistent sign-in guidance callout while anonymous, and workspace/dashboard views surface a dedicated "environment unavailable" message when Cloud SQL or the backend is down
   - the same auth/backend-unavailable messaging is now reused across the other major routed pages (Orders, Items, Projects, Inventory, Reservations, History) and supporting editors so protected-page failures no longer surface as raw exception text
   - create/update/deactivate flows emit a frontend refresh signal so the shared header picker stays aligned
+- Frontend styling runtime now uses Tailwind CSS v4 in CSS-first mode.
+  - `frontend/src/index.css` is the source of truth for theme tokens through `@theme inline`
+  - `frontend/postcss.config.js` uses `@tailwindcss/postcss`
+  - `frontend/tailwind.config.ts` remains as a minimal compatibility file and no longer carries the active theme contract
 - The browser-facing item registration flow is now unified around the preview-first Items CSV import.
   - order-generated missing-item CSVs are downloaded to the browser, edited, and re-imported through `POST /api/items/import-preview` + `POST /api/items/import`
   - the Items page no longer exposes a dedicated missing-item resolver or batch-upload section

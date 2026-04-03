@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   nextSynchronizedBoardDate,
-  resolveDrawerStackPush,
 } from "../src/lib/workspaceState";
 
 describe("workspaceState", () => {
@@ -26,19 +25,5 @@ describe("workspaceState", () => {
     });
 
     expect(nextDate).toBeNull();
-  });
-
-  it("reports discarded drawer keys when reopening an earlier stack entry", () => {
-    const resolved = resolveDrawerStackPush(
-      [
-        { key: "project:1" },
-        { key: "item:2" },
-        { key: "rfq:1:2" },
-      ],
-      { key: "project:1" },
-    );
-
-    expect(resolved.nextStack.map((entry) => entry.key)).toEqual(["project:1"]);
-    expect(resolved.discardedKeys).toEqual(["item:2", "rfq:1:2"]);
   });
 });

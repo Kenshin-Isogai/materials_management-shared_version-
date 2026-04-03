@@ -30,57 +30,57 @@ import { LoginPage } from "@/features/admin/LoginPage";
 import { RegistrationPage } from "@/features/admin/RegistrationPage";
 import { VerifyEmailPage } from "@/features/admin/VerifyEmailPage";
 
-export const appRouter = createBrowserRouter(
-  createRoutesFromElements(
-    <>
-      {/* Auth pages — standalone, no sidebar */}
-      <Route element={<AuthLayout />}>
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/registration" element={<RegistrationPage />} />
-        <Route path="/verify-email" element={<VerifyEmailPage />} />
-      </Route>
+export const appRoutes = createRoutesFromElements(
+  <>
+    {/* Auth pages — standalone, no sidebar */}
+    <Route element={<AuthLayout />}>
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/registration" element={<RegistrationPage />} />
+      <Route path="/verify-email" element={<VerifyEmailPage />} />
+    </Route>
 
-      {/* Main app — sidebar layout */}
-      <Route element={<AppShell />}>
-        {/* ── Planning ── */}
-        <Route path="/" element={<DashboardPage />} />
-        <Route path="/projects" element={<ProjectsPage />} />
-        <Route path="/projects/overview" element={<ProjectOverviewPage />} />
-        <Route path="/projects/board" element={<PlanningBoardPage />} />
-        <Route path="/projects/board/:projectId" element={<PlanningBoardPage />} />
-        <Route path="/procurement" element={<ProcurementPage />} />
-        <Route path="/bom" element={<BomPage />} />
+    {/* Main app — sidebar layout */}
+    <Route element={<AppShell />}>
+      {/* ── Planning ── */}
+      <Route path="/" element={<DashboardPage />} />
+      <Route path="/projects" element={<ProjectsPage />} />
+      <Route path="/projects/overview" element={<ProjectOverviewPage />} />
+      <Route path="/projects/board" element={<PlanningBoardPage />} />
+      <Route path="/projects/board/:projectId" element={<PlanningBoardPage />} />
+      <Route path="/procurement" element={<ProcurementPage />} />
+      <Route path="/bom" element={<BomPage />} />
 
-        {/* ── Inventory ── */}
-        <Route path="/items" element={<ItemsPage />} />
-        <Route path="/items/:itemId" element={<ItemDetailPage />} />
-        <Route path="/locations" element={<LocationsPage />} />
-        <Route path="/snapshot" element={<SnapshotPage />} />
-        <Route path="/movements" element={<MovementsPage />} />
-        <Route path="/reservations" element={<ReservationsPage />} />
+      {/* ── Inventory ── */}
+      <Route path="/items" element={<ItemsPage />} />
+      <Route path="/items/:itemId" element={<ItemDetailPage />} />
+      <Route path="/locations" element={<LocationsPage />} />
+      <Route path="/snapshot" element={<SnapshotPage />} />
+      <Route path="/movements" element={<MovementsPage />} />
+      <Route path="/reservations" element={<ReservationsPage />} />
 
-        {/* ── Purchasing ── */}
-        <Route path="/orders" element={<OrdersPage />} />
-        <Route path="/arrival" element={<ArrivalPage />} />
+      {/* ── Purchasing ── */}
+      <Route path="/orders" element={<OrdersPage />} />
+      <Route path="/arrival" element={<ArrivalPage />} />
 
-        {/* ── Admin ── */}
-        <Route path="/master" element={<MasterPage />} />
-        <Route path="/users" element={<UsersPage />} />
-        <Route path="/history" element={<AuditLogPage />} />
+      {/* ── Admin ── */}
+      <Route path="/master" element={<MasterPage />} />
+      <Route path="/users" element={<UsersPage />} />
+      <Route path="/history" element={<AuditLogPage />} />
 
-        {/* ── Redirects for old routes ── */}
-        <Route path="/dashboard" element={<Navigate to="/" replace />} />
-        <Route path="/search" element={<Navigate to="/items" replace />} />
-        <Route path="/location" element={<Navigate to="/locations" replace />} />
-        <Route path="/inventory" element={<Navigate to="/movements" replace />} />
-        <Route path="/reserve" element={<Navigate to="/reservations" replace />} />
-        <Route path="/workspace" element={<Navigate to="/projects/overview" replace />} />
-        <Route path="/purchase-order-lines" element={<Navigate to="/orders" replace />} />
-        <Route path="/audit" element={<Navigate to="/history" replace />} />
+      {/* ── Redirects for old routes ── */}
+      <Route path="/dashboard" element={<Navigate to="/" replace />} />
+      <Route path="/search" element={<Navigate to="/items" replace />} />
+      <Route path="/location" element={<Navigate to="/locations" replace />} />
+      <Route path="/inventory" element={<Navigate to="/movements" replace />} />
+      <Route path="/reserve" element={<Navigate to="/reservations" replace />} />
+      <Route path="/workspace" element={<Navigate to="/projects/overview" replace />} />
+      <Route path="/purchase-order-lines" element={<Navigate to="/orders" replace />} />
+      <Route path="/audit" element={<Navigate to="/history" replace />} />
 
-        {/* Catch-all */}
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Route>
-    </>,
-  ),
+      {/* Catch-all */}
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Route>
+  </>,
 );
+
+export const appRouter = createBrowserRouter(appRoutes);

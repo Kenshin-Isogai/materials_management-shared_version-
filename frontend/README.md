@@ -1,5 +1,11 @@
 ## Optical Component Inventory Management Frontend
 
+### Styling
+
+- Tailwind CSS is now configured for v4.
+- Theme tokens live in `src/index.css` via the CSS-first `@theme` block.
+- `tailwind.config.ts` is intentionally kept minimal for tooling compatibility; do not add app theme tokens there unless a tool strictly requires it.
+
 ### Setup
 
 ```bash

@@ -22,6 +22,7 @@ Last updated: 2026-04-03 (JST)
   - `alembic/`: database migration scripts
   - `tests/`: integration/service/path tests
 - `frontend/`
+  - styling: Tailwind CSS v4 in CSS-first mode (`src/index.css` owns theme tokens; `tailwind.config.ts` is minimal compatibility only)
   - `src/app/router.tsx`: centralized router with feature-module imports, old-route redirects, and auth/main layout split
   - `src/app/layouts/AppShell.tsx`: sidebar-based layout shell with grouped navigation (Planning/Inventory/Purchasing/Admin), sub-navigation for Projects, breadcrumb header, user identity/sign-out footer, and Ctrl+K command palette
   - `src/app/layouts/AuthLayout.tsx`: minimal layout for login/registration/verify-email pages (no sidebar)

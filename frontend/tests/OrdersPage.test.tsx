@@ -509,10 +509,23 @@ describe("OrdersPage", () => {
         return {
           can_auto_accept: true,
           blocking_errors: [],
+          duplicate_quotation_numbers: [],
           locked_purchase_orders: [],
+          source_name: "orders.csv",
+          supplier: {
+            supplier_id: null,
+            supplier_name: "Per-row supplier",
+            exists: false,
+            mode: "per_row",
+          },
+          thresholds: {
+            auto_accept: 100,
+            review: 80,
+          },
           summary: {
             total_rows: 1,
-            exact_matches: 1,
+            exact: 1,
+            high_confidence: 0,
             needs_review: 0,
             unresolved: 0,
           },
@@ -537,12 +550,18 @@ describe("OrdersPage", () => {
               candidates: [],
               suggested_match: {
                 item_id: 1,
+                canonical_item_number: "AOMO3080-125",
+                manufacturer_name: "AUTEX",
                 item_number: "AOMO3080-125",
                 units_per_order: 1,
                 display_label: "AOMO3080-125",
                 value_text: "AOMO3080-125",
                 summary: "Autex test optic",
+                match_source: "exact_item_number",
+                match_reason: "Exact item-number match",
+                confidence_score: 100,
               },
+              order_amount: 15,
             },
           ],
         };
@@ -564,11 +583,11 @@ describe("OrdersPage", () => {
     const file = new File(["supplier,item_number,quantity\nオーテックス,AOMO3080-125,15\n"], "orders.csv", {
       type: "text/csv",
     });
-    Object.defineProperty(fileInput, "files", {
-      value: [file],
-      configurable: true,
+    await user.upload(fileInput as HTMLInputElement, file);
+
+    await waitFor(() => {
+      expect(screen.getByText("1 file(s) selected")).toBeTruthy();
     });
-    fireEvent.change(fileInput!);
 
     fireEvent.submit(screen.getByRole("button", { name: "Preview Import" }).closest("form") as HTMLFormElement);
 
@@ -591,8 +610,9 @@ describe("OrdersPage", () => {
 
     renderPage();
 
-    await screen.findByText(/Line #304 .* AOMO3080-125/);
-    await user.click(screen.getAllByRole("button", { name: "Mark Arrived" })[0]);
+    const orderRow = (await screen.findByText(/Line #304 .* AOMO3080-125/)).closest(".rounded-2xl");
+    expect(orderRow).toBeTruthy();
+    await user.click(within(orderRow as HTMLElement).getByRole("button", { name: "Mark Arrived" }));
 
     await waitFor(() => {
       expect(apiSendMock).toHaveBeenCalledWith(
@@ -616,8 +636,9 @@ describe("OrdersPage", () => {
 
     renderPage();
 
-    await screen.findByText(/Line #304 .* AOMO3080-125/);
-    await user.click(screen.getAllByRole("button", { name: "Delete" })[0]);
+    const orderRow = (await screen.findByText(/Line #304 .* AOMO3080-125/)).closest(".rounded-2xl");
+    expect(orderRow).toBeTruthy();
+    await user.click(within(orderRow as HTMLElement).getByRole("button", { name: "Delete" }));
 
     await waitFor(() => {
       expect(apiSendMock).toHaveBeenCalledWith(

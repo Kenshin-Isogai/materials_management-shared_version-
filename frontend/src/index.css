@@ -1,14 +1,56 @@
 @import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+JP:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;700&display=swap");
+@import "tailwindcss";
 @import "tw-animate-css";
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@theme inline {
+  --font-sans: var(--app-font-sans);
+  --font-display: var(--app-font-heading);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --color-canvas: #f4f2eb;
+  --color-ink: #1c1d1f;
+  --color-signal: #007568;
+  --color-brass: #be8c3f;
+  --color-slatebrand: #293a4f;
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+
+  --shadow-panel: 0 12px 36px rgba(29, 43, 58, 0.12);
+}
 
 @layer base {
   :root {
-    --font-sans: "IBM Plex Sans JP", sans-serif;
-    --font-heading: "Space Grotesk", sans-serif;
+    --app-font-sans: "IBM Plex Sans JP", sans-serif;
+    --app-font-heading: "Space Grotesk", sans-serif;
 
     /* ── Optical Inventory palette mapped to shadcn variables ── */
     --background: #f4f2eb;          /* canvas */
@@ -51,12 +93,12 @@
   body {
     background-color: var(--background);
     color: var(--foreground);
-    font-family: var(--font-sans);
+    font-family: var(--app-font-sans);
     margin: 0;
     min-height: 100vh;
   }
   html {
-    font-family: var(--font-sans);
+    font-family: var(--app-font-sans);
   }
 }
 

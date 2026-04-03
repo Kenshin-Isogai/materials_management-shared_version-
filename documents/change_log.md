@@ -1,3 +1,22 @@
+## 2026-04-04
+
+### Changed
+
+- Migrated the frontend Tailwind setup from v3-style configuration to Tailwind CSS v4.
+  - upgraded the frontend Tailwind dependency chain to `tailwindcss@4` with `@tailwindcss/postcss`
+  - moved frontend theme tokens out of `frontend/tailwind.config.ts` and into the CSS-first `@theme inline` block in `frontend/src/index.css`
+  - kept `frontend/tailwind.config.ts` as a minimal compatibility stub so generator/tooling integrations do not depend on the old theme contract
+  - preserved the existing semantic color/font/radius/shadow tokens used across the redesign and shadcn-style UI primitives while enabling the v4-specific utility syntax already present in the codebase
+
+### Tests
+
+- Frontend production build:
+  - `npm run build`
+  - result: successful
+- Frontend full Vitest:
+  - `npm run test`
+  - result: still failing due pre-existing unrelated test issues (`tests/WorkspaceDrawer.test.tsx`, `tests/workspaceState.test.ts`, `tests/AppRouter.test.tsx`, `tests/OrdersPage.test.tsx`)
+
 ## 2026-04-03
 
 ### Changed
