@@ -3,14 +3,18 @@ import { useNavigate } from "react-router-dom";
 import useSWR from "swr";
 import { ApiErrorNotice } from "../components/ApiErrorNotice";
 import { apiGetAllPages, apiSend } from "../lib/api";
+import { isHttpsDocumentReference } from "../lib/documentReferences";
 import type { ArrivalScheduleEntry } from "../lib/types";
 
 type ArrivalBucketFilter = "all" | "overdue" | "scheduled" | "no_eta";
 type SupplyScope = "all" | "generic" | "dedicated";
 type ArrivalViewMode = "timeline" | "calendar";
 
-function renderDocumentLink(url: string | null | undefined, label = "Open document") {
+function renderDocumentReference(url: string | null | undefined, label = "Open document") {
   if (!url) return "-";
+  if (!isHttpsDocumentReference(url)) {
+    return <span className="break-all text-slate-700">{url}</span>;
+  }
   return (
     <a className="text-sky-700 underline underline-offset-2" href={url} target="_blank" rel="noreferrer noopener">
       {label}
@@ -642,11 +646,11 @@ export function ArrivalPage() {
                     </div>
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Quotation Document</p>
-                      <p className="mt-1">{renderDocumentLink(selectedOrder.quotation_document_url)}</p>
+                      <p className="mt-1">{renderDocumentReference(selectedOrder.quotation_document_url)}</p>
                     </div>
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Purchase-order Document</p>
-                      <p className="mt-1">{renderDocumentLink(selectedOrder.purchase_order_document_url)}</p>
+                      <p className="mt-1">{renderDocumentReference(selectedOrder.purchase_order_document_url)}</p>
                     </div>
                   </div>
                 </div>

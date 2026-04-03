@@ -4,6 +4,7 @@ import useSWR from "swr";
 import { ApiErrorNotice } from "../components/ApiErrorNotice";
 import { CatalogPicker } from "../components/CatalogPicker";
 import { apiDownload, apiGet, apiGetAllPages, apiGetWithPagination, apiSend, apiSendForm } from "../lib/api";
+import { isHttpsDocumentReference } from "../lib/documentReferences";
 import { formatActionError, resolvePreviewSelection } from "../lib/previewState";
 import type {
   CatalogSearchResult,
@@ -298,8 +299,11 @@ function previewStatusTone(status: OrderImportPreviewStatus): string {
   }
 }
 
-function renderDocumentLink(url: string | null | undefined, label = "Open document") {
+function renderDocumentReference(url: string | null | undefined, label = "Open document") {
   if (!url) return "-";
+  if (!isHttpsDocumentReference(url)) {
+    return <span className="break-all text-slate-700">{url}</span>;
+  }
   return (
     <a
       className="text-sky-700 underline underline-offset-2"
@@ -1067,7 +1071,7 @@ export function OrdersPage() {
             <code>purchase_order_document_url</code>
           </p>
           <p className="mt-1">
-            Use full HTTPS document URLs, such as a SharePoint link, for quotation and purchase-order references.
+            Use normalized document references for quotation and purchase-order metadata. HTTPS values open as links.
           </p>
           <p>
             This import path is metadata-only. Documents remain in the external document system and are not uploaded into this application.
@@ -1592,11 +1596,11 @@ export function OrdersPage() {
                       </div>
                       <div>
                         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Quotation Document</p>
-                        <p className="mt-1">{renderDocumentLink(selectedOrder.quotation_document_url)}</p>
+                        <p className="mt-1">{renderDocumentReference(selectedOrder.quotation_document_url)}</p>
                       </div>
                       <div>
                         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Purchase-order Document</p>
-                        <p className="mt-1">{renderDocumentLink(selectedOrder.purchase_order_document_url)}</p>
+                        <p className="mt-1">{renderDocumentReference(selectedOrder.purchase_order_document_url)}</p>
                       </div>
                       <div>
                         <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Category</p>
@@ -1690,7 +1694,7 @@ export function OrdersPage() {
                     </div>
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Document</p>
-                      <p className="mt-1">{renderDocumentLink(selectedQuotation.quotation_document_url)}</p>
+                      <p className="mt-1">{renderDocumentReference(selectedQuotation.quotation_document_url)}</p>
                     </div>
                   </div>
                   <div className="mt-3 flex gap-2">
@@ -1707,7 +1711,7 @@ export function OrdersPage() {
                   {editingQuotationId === selectedQuotation.quotation_id && (
                     <div className="mt-3 grid gap-2">
                       <input className="input" value={editingQuotationIssueDate} onChange={(event) => setEditingQuotationIssueDate(event.target.value)} placeholder="YYYY-MM-DD" />
-                      <input className="input" value={editingQuotationDocumentUrl} onChange={(event) => setEditingQuotationDocumentUrl(event.target.value)} placeholder="https://..." />
+                      <input className="input" value={editingQuotationDocumentUrl} onChange={(event) => setEditingQuotationDocumentUrl(event.target.value)} placeholder="Document reference or https://..." />
                     </div>
                   )}
                 </div>
@@ -1783,7 +1787,7 @@ export function OrdersPage() {
                     </div>
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Document</p>
-                      <p className="mt-1">{renderDocumentLink(selectedPurchaseOrder.purchase_order_document_url)}</p>
+                      <p className="mt-1">{renderDocumentReference(selectedPurchaseOrder.purchase_order_document_url)}</p>
                     </div>
                   </div>
                   <div className="mt-3 flex gap-2">
@@ -1809,7 +1813,7 @@ export function OrdersPage() {
                         className="input"
                         value={editingPurchaseOrderDocumentUrl}
                         onChange={(event) => setEditingPurchaseOrderDocumentUrl(event.target.value)}
-                        placeholder="https://..."
+                        placeholder="Document reference or https://..."
                       />
                       <label className="flex items-center gap-2 text-sm text-slate-700">
                         <input
