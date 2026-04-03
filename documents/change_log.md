@@ -2,6 +2,23 @@
 
 ### Changed
 
+- Fixed the sidebar quick-search command palette crash.
+  - wrapped the command-palette dialog contents in the required `cmdk` root `<Command>` provider so opening the palette no longer throws `Cannot read properties of undefined (reading 'subscribe')`
+  - added a focused frontend regression test covering Ctrl+K palette open behavior
+
+### Tests
+
+- Frontend targeted Vitest:
+  - `npm run test -- tests/CommandPalette.test.tsx`
+  - result: `1 passed`
+- Frontend production build:
+  - `npm run build`
+  - result: successful
+
+## 2026-04-04
+
+### Changed
+
 - Migrated the frontend Tailwind setup from v3-style configuration to Tailwind CSS v4.
   - upgraded the frontend Tailwind dependency chain to `tailwindcss@4` with `@tailwindcss/postcss`
   - moved frontend theme tokens out of `frontend/tailwind.config.ts` and into the CSS-first `@theme inline` block in `frontend/src/index.css`

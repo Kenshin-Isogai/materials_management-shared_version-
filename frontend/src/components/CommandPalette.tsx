@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  Command,
   CommandDialog,
   CommandEmpty,
   CommandGroup,
@@ -60,26 +61,28 @@ export function CommandPalette() {
 
   return (
     <CommandDialog open={open} onOpenChange={setOpen}>
-      <CommandInput placeholder="Type to search pages..." />
-      <CommandList>
-        <CommandEmpty>No results found.</CommandEmpty>
-        {groups.map((group, idx) => (
-          <span key={group}>
-            {idx > 0 && <CommandSeparator />}
-            <CommandGroup heading={group}>
-              {NAV_ITEMS.filter((item) => item.group === group).map((item) => (
-                <CommandItem
-                  key={item.to}
-                  value={`${item.label} ${(item.keywords ?? []).join(" ")}`}
-                  onSelect={() => handleSelect(item.to)}
-                >
-                  {item.label}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </span>
-        ))}
-      </CommandList>
+      <Command>
+        <CommandInput placeholder="Type to search pages..." />
+        <CommandList>
+          <CommandEmpty>No results found.</CommandEmpty>
+          {groups.map((group, idx) => (
+            <span key={group}>
+              {idx > 0 && <CommandSeparator />}
+              <CommandGroup heading={group}>
+                {NAV_ITEMS.filter((item) => item.group === group).map((item) => (
+                  <CommandItem
+                    key={item.to}
+                    value={`${item.label} ${(item.keywords ?? []).join(" ")}`}
+                    onSelect={() => handleSelect(item.to)}
+                  >
+                    {item.label}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </span>
+          ))}
+        </CommandList>
+      </Command>
     </CommandDialog>
   );
 }
