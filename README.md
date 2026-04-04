@@ -242,6 +242,7 @@ For targeted backend slices from the repo root, keep the same `TEST_DATABASE_URL
   - `GET /api/inventory/import-reference`
   - `GET /api/purchase-order-lines/import-reference` (optional `?supplier_name=...`)
   - `GET /api/reservations/import-reference`
+  - the Items reference CSV now uses the same import columns as the Items template; alias rows are emitted as `row_type=alias` with the alias SKU in `item_number`
 - Movements CSV upload: `POST /api/inventory/import-csv`
   - columns: `operation_type,item_id,quantity,from_location,to_location,location,note`
 - Reservations CSV upload: `POST /api/reservations/import-csv`

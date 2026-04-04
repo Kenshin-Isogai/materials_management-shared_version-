@@ -380,6 +380,7 @@ Last updated: 2026-04-03 (JST)
   - `Items`, `Orders`, `Movements`, and `Reservations` each expose `Download Template CSV` and `Download Reference CSV`
   - template CSVs are header-only and encoded as UTF-8 with BOM
   - reference CSVs are generated from live DB state at request time
+  - Items `Download Reference CSV` now reuses the same column names as the import template so operators can correct and re-import directly; alias rows use `row_type=alias`, `item_number=<ordered alias SKU>`, and include `supplier`, `canonical_item_number`, and `units_per_order`
 - Table headers now stay sticky across the existing horizontally scrollable table wrappers, improving scanability on table-heavy browse pages without changing the default unscoped browse behavior.
 - Dashboard overdue section supports keyword filtering and shows a full-table view when more than eight overdue rows match the filter.
 - Build system: `npm run build` (Vite production build + TypeScript build).

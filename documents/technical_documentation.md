@@ -841,6 +841,7 @@ End-to-End tests are implemented using Playwright to verify the full-stack behav
 - Movement CSV rows are normalized into existing `batch_inventory_operations`, preserving transaction log semantics and undo behavior consistency.
 - Reservation CSV supports assembly references by assembly name/id and expands to component-level reservations; this reuses assembly data efficiently for planning input while keeping assembly behavior advisory.
 - Template CSV endpoints return header-only files encoded as UTF-8 with BOM for Excel compatibility; reference endpoints render live canonical DB values on demand so the frontend does not maintain duplicated template/reference logic.
+- Items import reference now mirrors the Items import template columns for import-compatible reuse: canonical item rows use `row_type=item`, alias rows use `row_type=alias`, alias SKU text is emitted in `item_number`, and alias rows include `supplier`, `canonical_item_number`, and `units_per_order`.
 - Orders import reference supports optional `supplier_name` scoping for focused alias lookup, but the browser write flow now requires `supplier` in each CSV row instead of a selected supplier outside the file.
 - Manual CSV imports now support preview-first reconciliation:
   - `POST /api/items/import-preview` classifies item rows as new-vs-duplicate and alias rows as create/update/review/unresolved before commit

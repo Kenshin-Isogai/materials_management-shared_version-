@@ -1,3 +1,17 @@
+## 2026-04-05
+
+### Changed
+
+- Fixed the Items page `Download Reference CSV` contract so it now matches the Items import template for reusable import/edit workflows.
+  - alias rows now export `row_type=alias` instead of the non-importable `reference_type=supplier_item_alias`
+  - alias SKU text now appears in `item_number`, and alias rows include `supplier`, `canonical_item_number`, and `units_per_order`
+  - canonical item rows and alias rows now share the template-aligned column set, reducing column-name mismatches between template/reference downloads
+
+### Tests
+
+- Backend targeted pytest:
+  - `uv run --project backend python -m pytest backend/tests/test_api_integration.py -q --import-mode=importlib -k items_import_reference_endpoint_includes_canonical_items_and_aliases`
+
 ## 2026-04-04
 
 ### Changed

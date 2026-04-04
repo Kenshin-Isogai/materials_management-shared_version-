@@ -3894,17 +3894,29 @@ def test_items_import_reference_endpoint_includes_canonical_items_and_aliases(cl
     response = client.get("/api/items/import-reference")
     assert response.status_code == 200
 
-    _, rows = read_csv_response(response)
+    fieldnames, rows = read_csv_response(response)
+    assert fieldnames == [
+        "row_type",
+        "item_number",
+        "manufacturer_name",
+        "category",
+        "url",
+        "description",
+        "supplier",
+        "canonical_item_number",
+        "units_per_order",
+    ]
     assert any(
-        row["reference_type"] == "item"
+        row["row_type"] == "item"
         and row["item_number"] == "API-ITEM-REF-001"
         and row["manufacturer_name"] == "API-ITEM-REF-MFG"
         for row in rows
     )
     assert any(
-        row["reference_type"] == "supplier_item_alias"
+        row["row_type"] == "alias"
         and row["supplier"] == "SupplierItemReference"
-        and row["ordered_item_number"] == "SUP-ITEM-REF-001"
+        and row["item_number"] == "SUP-ITEM-REF-001"
+        and row["canonical_item_number"] == "API-ITEM-REF-001"
         and row["units_per_order"] == "6"
         for row in rows
     )

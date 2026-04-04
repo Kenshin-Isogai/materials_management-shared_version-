@@ -2440,13 +2440,14 @@ def get_import_template_csv(flow_type: str) -> tuple[str, bytes]:
 
 def get_items_import_reference_csv(conn: sqlite3.Connection) -> tuple[str, bytes]:
     fieldnames = [
-        "reference_type",
-        "item_id",
+        "row_type",
         "item_number",
         "manufacturer_name",
         "category",
+        "url",
+        "description",
         "supplier",
-        "ordered_item_number",
+        "canonical_item_number",
         "units_per_order",
     ]
     item_rows = conn.execute(
@@ -2455,7 +2456,9 @@ def get_items_import_reference_csv(conn: sqlite3.Connection) -> tuple[str, bytes
             im.item_id,
             im.item_number,
             m.name AS manufacturer_name,
-            COALESCE(ca.canonical_category, im.category) AS category
+            COALESCE(ca.canonical_category, im.category) AS category,
+            im.url,
+            im.description
         FROM items_master im
         JOIN manufacturers m ON m.manufacturer_id = im.manufacturer_id
         LEFT JOIN category_aliases ca ON ca.alias_category = im.category
@@ -2469,6 +2472,8 @@ def get_items_import_reference_csv(conn: sqlite3.Connection) -> tuple[str, bytes
             im.item_number,
             m.name AS manufacturer_name,
             COALESCE(ca.canonical_category, im.category) AS category,
+            im.url,
+            im.description,
             s.name AS supplier,
             a.ordered_item_number,
             a.units_per_order
@@ -2482,26 +2487,28 @@ def get_items_import_reference_csv(conn: sqlite3.Connection) -> tuple[str, bytes
     ).fetchall()
     rows = [
         {
-            "reference_type": "item",
-            "item_id": int(row["item_id"]),
+            "row_type": "item",
             "item_number": row["item_number"],
             "manufacturer_name": row["manufacturer_name"],
             "category": row["category"],
+            "url": row["url"],
+            "description": row["description"],
             "supplier": "",
-            "ordered_item_number": "",
+            "canonical_item_number": "",
             "units_per_order": "",
         }
         for row in item_rows
     ]
     rows.extend(
         {
-            "reference_type": "supplier_item_alias",
-            "item_id": int(row["item_id"]),
-            "item_number": row["item_number"],
+            "row_type": "alias",
+            "item_number": row["ordered_item_number"],
             "manufacturer_name": row["manufacturer_name"],
             "category": row["category"],
+            "url": row["url"],
+            "description": row["description"],
             "supplier": row["supplier"],
-            "ordered_item_number": row["ordered_item_number"],
+            "canonical_item_number": row["item_number"],
             "units_per_order": int(row["units_per_order"]),
         }
         for row in alias_rows
