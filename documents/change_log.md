@@ -2,6 +2,21 @@
 
 ### Changed
 
+- Adjusted the Orders page `Import Purchase Order Lines CSV` preview so each raw-input row highlights both `item_number` and `quantity` at the top of the cell.
+  - `item_number` remains the primary identifier
+  - `quantity` now appears in its own emphasized pill so operators can verify SKU and count together before import
+  - the lower metadata line keeps supplier / PO / quotation context without burying quantity in the same sentence
+
+### Tests
+
+- Frontend targeted Vitest:
+  - `npm run test -- tests/OrdersPage.test.tsx`
+  - result: not run in this environment
+
+## 2026-04-05
+
+### Changed
+
 - Fixed the Items page `Download Reference CSV` contract so it now matches the Items import template for reusable import/edit workflows.
   - alias rows now export `row_type=alias` instead of the non-importable `reference_type=supplier_item_alias`
   - alias SKU text now appears in `item_number`, and alias rows include `supplier`, `canonical_item_number`, and `units_per_order`

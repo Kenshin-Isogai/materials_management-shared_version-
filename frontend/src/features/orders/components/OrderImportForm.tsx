@@ -261,10 +261,25 @@ export function OrderImportForm({
                         <td className="px-2 py-3 font-semibold text-slate-700">#{row.row}</td>
                         <td className="px-2 py-3">
                           <div className="space-y-1">
-                            <p className="font-semibold text-slate-900">{row.item_number}</p>
+                            <div className="flex flex-wrap items-start gap-2">
+                              <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                  Item Number
+                                </p>
+                                <p className="font-semibold text-slate-900">{row.item_number}</p>
+                              </div>
+                              <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2">
+                                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-700">
+                                  Quantity
+                                </p>
+                                <p className="text-lg font-semibold leading-none text-emerald-900">
+                                  {row.quantity}
+                                </p>
+                              </div>
+                            </div>
                             <p className="text-xs text-slate-500">
                               {row.source_name ? `${row.source_name} | ` : ""}
-                              {row.supplier_name} | PO {row.purchase_order_number} | qty {row.quantity} | quotation {row.quotation_number}
+                              {row.supplier_name} | PO {row.purchase_order_number} | quotation {row.quotation_number}
                             </p>
                             <p className="text-xs text-slate-500">
                               order {row.order_date}
