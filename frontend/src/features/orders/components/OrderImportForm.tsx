@@ -79,6 +79,7 @@ export function OrderImportForm({
   onConfirmImportPreview,
 }: OrderImportFormProps) {
   const navigate = useNavigate();
+  const unresolvedRows = unresolvedPreviewRows();
 
   return (
     <>
@@ -217,26 +218,33 @@ export function OrderImportForm({
               </div>
             )}
 
-            {unresolvedPreviewRows().length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                <button
-                  className="button-subtle"
-                  type="button"
-                  onClick={() =>
-                    downloadMissingRowsCsv(
-                      unresolvedPreviewRows(),
-                      "orders_preview_missing_items.csv"
-                    )
-                  }
-                >
-                  Download Missing Items CSV
-                </button>
-                <button className="button-subtle" type="button" onClick={() => navigate("/items")}>
-                  Open Items Page
-                </button>
-                <p className="self-center text-xs text-slate-500">
-                  Use this when the required canonical item is not in the catalog yet.
+            {unresolvedRows.length > 0 && (
+              <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-2">
+                <p className="text-sm font-semibold text-amber-900">
+                  {unresolvedRows.length} unresolved item(s) — not yet registered in the catalog
                 </p>
+                <ol className="list-decimal list-inside text-xs text-amber-800 space-y-1">
+                  <li>Download the missing-items CSV below.</li>
+                  <li>Go to the <span className="font-semibold">Items</span> page and import it to register the new items.</li>
+                  <li>Return here and <span className="font-semibold">re-import the same order file</span> — the newly registered items will now resolve.</li>
+                </ol>
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <button
+                    className="button-subtle"
+                    type="button"
+                    onClick={() =>
+                      downloadMissingRowsCsv(
+                        unresolvedRows,
+                        "orders_preview_missing_items.csv"
+                      )
+                    }
+                  >
+                    Download Missing Items CSV
+                  </button>
+                  <button className="button-subtle" type="button" onClick={() => navigate("/items")}>
+                    Open Items Page
+                  </button>
+                </div>
               </div>
             )}
 
@@ -415,6 +423,10 @@ export function OrderImportForm({
             <p className="mb-2 text-sm font-semibold text-amber-900">
               Unresolved item numbers in this upload
             </p>
+            <ol className="mb-2 list-decimal list-inside text-xs text-amber-800 space-y-1">
+              <li>Download the generated CSV and import it on the <span className="font-semibold">Items</span> page to register missing items.</li>
+              <li>Then <span className="font-semibold">re-import the same order file here</span> — previously unresolved rows will match.</li>
+            </ol>
             <div className="mb-2 flex flex-wrap gap-2">
               {latestGeneratedArtifact && (
                 <button

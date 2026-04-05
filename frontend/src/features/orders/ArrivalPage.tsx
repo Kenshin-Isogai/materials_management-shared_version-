@@ -61,6 +61,11 @@ function monthKeyFromDate(value: string): string {
   return value.slice(0, 7);
 }
 
+function currentMonthKey(): string {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+}
+
 function formatMonthLabel(monthKey: string): string {
   const [yearText, monthText] = monthKey.split("-");
   const parsed = new Date(Number(yearText), Number(monthText) - 1, 1);
@@ -143,15 +148,16 @@ function ArrivalRowCard({
       onClick={() => onSelect(row.order_id)}
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <p className="font-semibold text-slate-900">
-            Line #{row.order_id} · {row.canonical_item_number}
-          </p>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2">
+            <p className="font-semibold text-slate-900">{row.canonical_item_number}</p>
+            <span className="text-lg font-bold text-slate-900">×{row.order_amount}</span>
+          </div>
           <p className="text-sm text-slate-600">
             {row.supplier_name} · PO #{row.purchase_order_id} · Quote {row.quotation_number}
           </p>
           <p className="text-xs text-slate-500">
-            ETA {formatDate(row.expected_arrival)} · Qty {row.order_amount}
+            Line #{row.order_id} · ETA {formatDate(row.expected_arrival)}
             {row.project_name ? ` · ${row.project_name}` : ""}
           </p>
         </div>
@@ -267,7 +273,8 @@ export function ArrivalPage() {
       return;
     }
     if (!selectedMonth || !monthOptions.includes(selectedMonth)) {
-      setSelectedMonth(monthOptions[0]);
+      const now = currentMonthKey();
+      setSelectedMonth(monthOptions.includes(now) ? now : monthOptions[0]);
     }
   }, [monthOptions, selectedMonth]);
 
@@ -493,7 +500,7 @@ export function ArrivalPage() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h2 className="font-display text-lg font-semibold text-slate-900">Arrival Calendar</h2>
-                    <p className="mt-1 text-sm text-slate-500">Date-centric view of scheduled arrivals plus a separate bucket for unscheduled open lines.</p>
+                    <p className="mt-1 text-sm text-slate-500">Click a date to see its arrival lines. Select a line to process it in the detail panel on the right.</p>
                   </div>
                   <select
                     aria-label="Arrival month"

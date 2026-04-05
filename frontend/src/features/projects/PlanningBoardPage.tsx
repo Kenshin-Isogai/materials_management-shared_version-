@@ -127,13 +127,13 @@ function renderError(error: unknown, area: string) {
 
 /* ── Sub-components ── */
 
-function SummaryMetric({ label, value, tone = "slate" }: { label: string; value: number | string; tone?: "slate" | "amber" | "emerald" | "sky" }) {
+function SummaryMetric({ label, value, tone = "slate", tooltip }: { label: string; value: number | string; tone?: "slate" | "amber" | "emerald" | "sky"; tooltip?: string }) {
   const cls = tone === "amber" ? "border-amber-200 bg-amber-50 text-amber-900"
     : tone === "emerald" ? "border-emerald-200 bg-emerald-50 text-emerald-900"
     : tone === "sky" ? "border-sky-200 bg-sky-50 text-sky-900"
     : "border-slate-200 bg-slate-50 text-slate-900";
   return (
-    <div className={cn("rounded-2xl border px-4 py-3", cls)}>
+    <div className={cn("rounded-2xl border px-4 py-3", cls)} title={tooltip}>
       <p className="text-xs font-semibold uppercase tracking-wide opacity-70">{label}</p>
       <p className="mt-1 text-2xl font-bold">{value}</p>
     </div>
@@ -299,7 +299,7 @@ export function PlanningBoardPage() {
 
   async function executeConfirmAllocation() {
     if (!selectedProjectId || !allocationPreview) return;
-    if (!window.confirm("Confirm this allocation? Generic coverage → dedicated orders, stock → reservations.")) return;
+    if (!window.confirm("Apply this allocation? Generic coverage will become dedicated orders and stock will become reservations. This cannot be undone.")) return;
     setWorking(true); setActionMessage("");
     try {
       const payload = await apiSend<ConfirmAllocationResult>(`/projects/${selectedProjectId}/confirm-allocation`, {
@@ -314,7 +314,7 @@ export function PlanningBoardPage() {
   async function createRfqBatch() {
     if (!selectedProjectId) return;
     const isDraft = selectedProject?.status === "PLANNING";
-    if (!window.confirm(isDraft ? "Create procurement batch from gaps? This will confirm the draft project." : "Create procurement batch from gaps?")) return;
+    if (!window.confirm(isDraft ? "Create procurement batch from on-time gaps?\n\nThis will also promote the project from PLANNING → CONFIRMED. Confirmed projects consume capacity in the pipeline and affect later projects. This status change cannot be undone." : "Create procurement batch from on-time gaps?")) return;
     setWorking(true); setActionMessage("");
     try {
       const payload = await apiSend<{ batch_id: number }>("/shortage-inbox/to-procurement", {
@@ -397,7 +397,7 @@ export function PlanningBoardPage() {
               <SummaryMetric label="On-Time Gap" value={analysisData.summary.shortage_at_start_total} tone="amber" />
               <SummaryMetric label="Remaining" value={analysisData.summary.remaining_shortage_total} />
               <SummaryMetric label="Generic Committed" value={analysisData.summary.generic_committed_total} tone="sky" />
-              <SummaryMetric label="Generic Before" value={analysisData.summary.cumulative_generic_consumed_before_total} tone="sky" />
+              <SummaryMetric label="Used by Earlier Projects" value={analysisData.summary.cumulative_generic_consumed_before_total} tone="sky" tooltip="Total generic inventory consumed by confirmed projects scheduled before this one." />
             </div>
           )}
         </div>
@@ -407,13 +407,19 @@ export function PlanningBoardPage() {
       <section className="panel p-4">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <h3 className="font-display text-lg font-semibold">Actions</h3>
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* ── Flow actions ── */}
             {selectedProjectId && <Link className="button-subtle" to={projectEditorRoute(selectedProjectId)}>Open Project</Link>}
-            {selectedProjectId && <button className="button-subtle" type="button" disabled={working || !analysisData || !hasConfirmableAllocation} onClick={() => void previewConfirmAllocation()}>Preview Confirm</button>}
-            {selectedProjectId && <button className="button-subtle" type="button" disabled={working || previewDirty || !allocationPreview || allocationPreview.dry_run !== true} onClick={() => void executeConfirmAllocation()}>Confirm Allocation</button>}
-            {selectedProjectId && <button className="button-subtle" type="button" disabled={working || previewDirty || !analysisData} onClick={() => void downloadPlanningExport()}>Export CSV</button>}
-            {selectedProjectId && <button className="button-subtle" type="button" disabled={working || previewDirty || !analysisData} onClick={() => void downloadPipelineExport()}>Export Pipeline</button>}
+            {selectedProjectId && <button className="button-subtle" type="button" disabled={working || !analysisData || !hasConfirmableAllocation} onClick={() => void previewConfirmAllocation()}>Preview Allocation</button>}
             {selectedProjectId && <button className="button" type="button" disabled={working || previewDirty || !analysisData || analysisData.summary.shortage_at_start_total <= 0} onClick={createRfqBatch}>Create Procurement Batch</button>}
+            {/* ── Export actions ── */}
+            {selectedProjectId && (analysisData || !previewDirty) && (
+              <>
+                <span className="mx-1 hidden text-slate-300 sm:inline">|</span>
+                <button className="button-subtle" type="button" disabled={working || previewDirty || !analysisData} onClick={() => void downloadPlanningExport()}>Export CSV</button>
+                <button className="button-subtle" type="button" disabled={working || previewDirty || !analysisData} onClick={() => void downloadPipelineExport()}>Export Pipeline</button>
+              </>
+            )}
           </div>
         </div>
         {previewDirty && (
@@ -432,7 +438,12 @@ export function PlanningBoardPage() {
                   Split {allocationPreview.orders_split.length} | Reservations {allocationPreview.reservations_created.length}
                 </p>
               </div>
-              <button className="button-subtle" type="button" onClick={() => setAllocationPreview(null)}>Clear</button>
+              <div className="flex gap-2">
+                {allocationPreview.dry_run && (
+                  <button className="button" type="button" disabled={working || previewDirty} onClick={() => void executeConfirmAllocation()}>Apply Allocation</button>
+                )}
+                <button className="button-subtle" type="button" onClick={() => setAllocationPreview(null)}>Clear</button>
+              </div>
             </div>
             <div className="mt-3 grid gap-3 xl:grid-cols-2">
               <div>
@@ -475,7 +486,7 @@ export function PlanningBoardPage() {
               <p className={cn("mt-2 text-xs", row.project_id === selectedProjectId ? "text-slate-200" : "text-slate-500")}>{row.planned_start}{row.is_planning_preview ? " | preview" : ""}</p>
               <div className={cn("mt-3 grid grid-cols-2 gap-2 text-xs", row.project_id === selectedProjectId ? "text-slate-100" : "text-slate-600")}>
                 <div className="rounded-xl bg-black/5 px-2 py-2"><p className="font-semibold">On-Time Gap</p><p>{row.shortage_at_start_total}</p></div>
-                <div className="rounded-xl bg-black/5 px-2 py-2"><p className="font-semibold">Generic Before</p><p>{row.cumulative_generic_consumed_before_total}</p></div>
+                <div className="rounded-xl bg-black/5 px-2 py-2" title="Generic inventory consumed by confirmed projects scheduled before this one"><p className="font-semibold">Earlier Projects</p><p>{row.cumulative_generic_consumed_before_total}</p></div>
               </div>
             </button>
           ))}
