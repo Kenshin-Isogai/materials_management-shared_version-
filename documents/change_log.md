@@ -1,3 +1,23 @@
+## 2026-04-06
+
+### Changed
+
+- Refactored the frontend Orders page so feature-local state is split by responsibility instead of accumulating in one parent component.
+  - `OrdersPage.tsx` now keeps shared SWR fetches plus the import-preview workflow only
+  - purchase-order-line browsing/edit state moved into `OrderLinesSection`
+  - quotation browsing/edit state moved into `QuotationSection`
+  - purchase-order-header browsing/edit state moved into `PurchaseOrdersSection`
+  - removed dead parent-level sort state that was no longer used by the rendered tables
+
+### Tests
+
+- Frontend targeted Vitest:
+  - `npm run test -- tests/OrdersPage.test.tsx`
+  - result: successful (`15 passed`)
+- Frontend production build:
+  - `npm run build`
+  - result: successful
+
 ## 2026-04-05
 
 ### Changed

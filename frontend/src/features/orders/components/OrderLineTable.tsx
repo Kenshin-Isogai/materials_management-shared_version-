@@ -28,8 +28,6 @@ export type OrderLineTableProps = {
   projectsData: ProjectRow[] | undefined;
   orderPrimarySearch: string;
   orderFilter: string;
-  sortKey: "order_id" | "supplier_name" | "project_name" | "canonical_item_number" | "order_amount" | "expected_arrival" | "status";
-  sortDirection: "asc" | "desc";
   orderDetailsRef: React.Ref<HTMLDivElement>;
   setOrderPrimarySearch: (value: string) => void;
   setOrderFilter: (value: string) => void;
@@ -39,8 +37,6 @@ export type OrderLineTableProps = {
   setEditingOrderProjectId: (value: string) => void;
   openOrderDetails: (orderId: number) => void;
   openReservationPrefill: (order: Order) => void;
-  toggleSort: (key: OrderLineTableProps["sortKey"]) => void;
-  sortIndicator: (key: OrderLineTableProps["sortKey"]) => string;
   markArrived: (orderId: number) => void;
   deleteOrder: (orderId: number) => void;
   beginEditOrder: (row: Order) => void;

@@ -1,6 +1,6 @@
 # Source Current State
 
-Last updated: 2026-04-05 (JST)
+Last updated: 2026-04-06 (JST)
 
 ## 1. System Snapshot
 
@@ -35,8 +35,8 @@ Last updated: 2026-04-05 (JST)
     - `features/items/ItemsPage.tsx`: item catalog with import/search, decomposed into 7 sub-components
     - `features/items/ItemDetailPage.tsx`: standalone item detail page (replaces old drawer pattern)
     - `features/items/components/`: BulkItemEntry, BulkMetadataUpdate, ItemBrowseTable, ItemFlowTimeline, ItemImportForm, ItemImportHistory, ItemImportPreview
-    - `features/orders/OrdersPage.tsx`: purchase order management, decomposed into sub-components
-    - `features/orders/components/`: OrderImportForm, OrderLineTable, QuotationTable, PurchaseOrderTable
+    - `features/orders/OrdersPage.tsx`: purchase order management shell, now limited to SWR orchestration and import-preview state
+    - `features/orders/components/`: OrderImportForm, OrderLineTable, QuotationTable, PurchaseOrderTable, OrderLinesSection, QuotationSection, PurchaseOrdersSection
     - `features/inventory/`: LocationsPage, SnapshotPage, MovementsPage (renamed from InventoryPage), ReservationsPage
     - `features/procurement/ProcurementPage.tsx`, `features/bom/BomPage.tsx`
     - `features/admin/`: MasterPage, UsersPage, AuditLogPage (renamed from HistoryPage), LoginPage, RegistrationPage, VerifyEmailPage
