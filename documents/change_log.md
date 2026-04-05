@@ -2,6 +2,67 @@
 
 ### Changed
 
+- Fixed the Stock Snapshot CSV export follow-up issues from review.
+  - the Snapshot page now shows `Export CSV` only for `operator` / `admin` users, matching the backend operator-only permission on `GET /api/inventory/snapshot/export.csv`
+  - Snapshot-page frontend tests now freeze time and assert against the computed JST date instead of a hard-coded calendar day, so the suite stays stable across later runs
+
+### Tests
+
+- Frontend targeted Vitest:
+  - `npm run test -- tests/SnapshotPage.test.tsx`
+- Frontend production build:
+  - `npm run build`
+
+## 2026-04-05
+
+### Changed
+
+- Added CSV export for the frontend `Stock Snapshot` page.
+  - added `GET /api/inventory/snapshot/export.csv` using the same `date`, `mode`, and `basis` parameters as the snapshot JSON endpoint
+  - added an `Export CSV` action on the Snapshot page so users can download the selected snapshot directly from the browser
+  - exported rows include the snapshot context columns plus the `net_available` allocation summary fields when applicable
+
+### Tests
+
+- Backend targeted pytest:
+  - `uv run --project backend python -m pytest backend/tests/test_api_integration.py -q --import-mode=importlib -k inventory_snapshot`
+- Frontend targeted Vitest:
+  - `npm run test -- tests/SnapshotPage.test.tsx`
+
+## 2026-04-05
+
+### Changed
+
+- Adjusted the Arrivals page `Overdue` list so it scrolls independently within the timeline pane.
+  - the overdue section now uses its own capped scroll region instead of expanding the full left column
+  - added focused frontend regression coverage that locks in the capped-scroll container
+
+### Tests
+
+- Frontend targeted Vitest:
+  - `npm run test -- tests/ArrivalPage.test.tsx`
+  - result: not run in this environment
+
+## 2026-04-05
+
+### Changed
+
+- Changed the frontend `Stock Snapshot` tab to load a snapshot immediately on first open.
+  - the date field now defaults to the current JST day
+  - the basis now defaults to `net available`
+  - the page automatically fetches the initial snapshot instead of waiting for a manual `Generate Snapshot` click
+  - added focused frontend regression coverage for the initial auto-load request contract
+
+### Tests
+
+- Frontend targeted Vitest:
+  - `npm run test -- tests/SnapshotPage.test.tsx`
+  - result: blocked in this sandbox (`spawn EPERM` while loading `vitest.config.ts`)
+
+## 2026-04-05
+
+### Changed
+
 - Adjusted the Orders page `Import Purchase Order Lines CSV` preview so each raw-input row highlights both `item_number` and `quantity` at the top of the cell.
   - `item_number` remains the primary identifier
   - `quantity` now appears in its own emphasized pill so operators can verify SKU and count together before import

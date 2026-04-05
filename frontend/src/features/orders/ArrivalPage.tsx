@@ -438,7 +438,7 @@ export function ArrivalPage() {
                   {overdueRows.length === 0 ? (
                     <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-500">No overdue arrivals.</p>
                   ) : (
-                    <div className="space-y-2">
+                    <div aria-label="Overdue arrival list" className="max-h-[24rem] space-y-2 overflow-y-auto pr-1">
                       {overdueRows.map((row) => (
                         <ArrivalRowCard key={row.order_id} row={row} selected={row.order_id === selectedOrderId} onSelect={setSelectedOrderId} />
                       ))}

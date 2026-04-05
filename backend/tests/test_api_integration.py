@@ -322,6 +322,63 @@ def test_inventory_snapshot_endpoint_rejects_past_net_available_basis(client):
     assert payload["error"]["code"] == "SNAPSHOT_BASIS_MODE_UNSUPPORTED"
 
 
+def test_inventory_snapshot_export_csv_endpoint_downloads_selected_snapshot(client):
+    manufacturer = client.post("/api/manufacturers", json={"name": "API-SNAPSHOT-EXPORT-MFG"}).json()["data"]
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-SNAPSHOT-EXPORT-ITEM",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Lens",
+            "description": "Exportable snapshot row",
+        },
+    ).json()["data"]
+    client.post(
+        "/api/inventory/adjust",
+        json={
+            "item_id": item["item_id"],
+            "quantity_delta": 6,
+            "location": "STOCK",
+            "note": "seed snapshot export stock",
+        },
+    )
+
+    response = client.get(
+        f"/api/inventory/snapshot/export.csv?mode=future&basis=raw&date={FUTURE_TARGET_DATE}"
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert response.headers["content-disposition"].endswith(
+        f'filename="inventory_snapshot_{FUTURE_TARGET_DATE}_future_raw.csv"'
+    )
+    fieldnames, rows = read_csv_response(response)
+    assert fieldnames == [
+        "date",
+        "mode",
+        "basis",
+        "item_id",
+        "item_number",
+        "manufacturer_name",
+        "category",
+        "description",
+        "location",
+        "quantity",
+        "allocated_quantity",
+        "active_reservation_count",
+        "allocated_project_names",
+    ]
+    match = next(row for row in rows if row["item_id"] == str(item["item_id"]))
+    assert match["date"] == FUTURE_TARGET_DATE
+    assert match["mode"] == "future"
+    assert match["basis"] == "raw"
+    assert match["item_number"] == "API-SNAPSHOT-EXPORT-ITEM"
+    assert match["manufacturer_name"] == "API-SNAPSHOT-EXPORT-MFG"
+    assert match["description"] == "Exportable snapshot row"
+    assert match["location"] == "STOCK"
+    assert match["quantity"] == "6"
+
+
 def test_catalog_search_item_summary_includes_description(client):
     manufacturer = client.post("/api/manufacturers", json={"name": "API-CATALOG-MFG"}).json()["data"]
     item = client.post(

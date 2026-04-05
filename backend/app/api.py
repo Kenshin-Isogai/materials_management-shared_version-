@@ -111,6 +111,7 @@ from .schemas import (
 LOGGER = logging.getLogger("materials.api")
 _AUDITED_EXPORT_PATTERNS = (
     re.compile(r"^/api/artifacts/[^/]+/download$"),
+    re.compile(r"^/api/inventory/snapshot/export\.csv$"),
     re.compile(r"^/api/workspace/planning-export(?:-multi)?$"),
     re.compile(r"^/api/procurement-batches/[^/]+/export\.csv$"),
 )
@@ -1074,6 +1075,21 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         conn= db,
     ):
         return ok(service.get_inventory_snapshot(conn, target_date=date, mode=mode, basis=basis))
+
+    @app.get("/api/inventory/snapshot/export.csv")
+    def get_inventory_snapshot_export_csv(
+        date: str | None = None,
+        mode: str | None = None,
+        basis: str | None = None,
+        conn= db,
+    ):
+        filename, content = service.export_inventory_snapshot_csv(
+            conn,
+            target_date=date,
+            mode=mode,
+            basis=basis,
+        )
+        return csv_attachment(filename, content)
 
     @app.post("/api/inventory/move")
     def post_inventory_move(body: InventoryMoveRequest, conn= db):

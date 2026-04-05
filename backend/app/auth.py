@@ -42,6 +42,7 @@ OPERATOR_GET_PATTERNS = [
     re.compile(r"^/api/.+/import-template$"),
     re.compile(r"^/api/.+/import-reference$"),
     re.compile(r"^/api/.+/import-jobs(?:/[^/]+)?$"),
+    re.compile(r"^/api/inventory/snapshot/export\.csv$"),
     re.compile(r"^/api/workspace/planning-export(?:-multi)?$"),
     re.compile(r"^/api/procurement-batches/[^/]+/export\.csv$"),
 ]
@@ -149,6 +150,7 @@ def endpoint_policy_summary() -> dict[str, list[str]]:
         "/api/**/import-template",
         "/api/**/import-reference",
         "/api/**/import-jobs/**",
+        "/api/inventory/snapshot/export.csv",
         "/api/workspace/planning-export",
         "/api/workspace/planning-export-multi",
         "/api/procurement-batches/{batch_id}/export.csv",

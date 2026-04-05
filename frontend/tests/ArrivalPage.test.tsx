@@ -122,6 +122,8 @@ describe("ArrivalPage", () => {
     expect(screen.getAllByText(/Line #601/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Line #602/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Line #603/).length).toBeGreaterThan(0);
+    expect(screen.getByLabelText("Overdue arrival list").className).toContain("overflow-y-auto");
+    expect(screen.getByLabelText("Overdue arrival list").className).toContain("max-h-[24rem]");
   });
 
   it("marks an arrival from the detail pane and refreshes the schedule", async () => {

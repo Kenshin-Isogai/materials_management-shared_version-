@@ -85,12 +85,14 @@ This document explains the implemented architecture of the Materials Management 
   - order import jobs now persist `request_metadata` so `supplier_id`, `supplier_name`, `default_order_date`, `row_overrides`, `alias_saves`, and `unlock_purchase_orders` remain available for inspection and redo
   - `POST /api/purchase-order-lines/import-jobs/{import_job_id}/undo` and `POST /api/purchase-order-lines/import-jobs/{import_job_id}/redo` now provide the same safety-first operator pattern already used by item imports
 - Generated artifact delivery for batch-produced missing-item register CSVs:
-  - `GET /api/artifacts`, `GET /api/artifacts/{artifact_id}`, `GET /api/artifacts/{artifact_id}/download`
-  - storage-backed registry now goes through `backend/app/storage.py`
-  - current implementation persists generated artifacts under a local storage reference (`local://generated_artifacts/...`) so the API no longer depends on browser-visible workspace paths
-  - storage now supports both `local://...` and `gcs://...` refs; Cloud Run durable storage can use `STORAGE_BACKEND=gcs` with `GCS_BUCKET` and `GCS_OBJECT_PREFIX`
-  - the Orders UI now treats artifact entries as download-only records and no longer displays workspace-relative paths
-  - generated artifact lookups now require storage-backed refs; raw filesystem artifact paths are no longer part of the active runtime contract
+- `GET /api/artifacts`, `GET /api/artifacts/{artifact_id}`, `GET /api/artifacts/{artifact_id}/download`
+- storage-backed registry now goes through `backend/app/storage.py`
+- current implementation persists generated artifacts under a local storage reference (`local://generated_artifacts/...`) so the API no longer depends on browser-visible workspace paths
+- storage now supports both `local://...` and `gcs://...` refs; Cloud Run durable storage can use `STORAGE_BACKEND=gcs` with `GCS_BUCKET` and `GCS_OBJECT_PREFIX`
+- the Orders UI now treats artifact entries as download-only records and no longer displays workspace-relative paths
+- generated artifact lookups now require storage-backed refs; raw filesystem artifact paths are no longer part of the active runtime contract
+- Stock Snapshot CSV export now uses a direct response download endpoint (`GET /api/inventory/snapshot/export.csv`) that reuses the same `date`, `mode`, and `basis` parameters as the JSON snapshot view
+- the Snapshot page exposes that export as a browser download action beside `Generate Snapshot`; the exported rows stay aligned with the backend snapshot calculation, including `net_available` allocation summary columns
 - Manual Items CSV import archives now use the same storage boundary for their archive reference metadata, and the registered-month folder is treated as read-only history instead of a consolidation work queue.
 - Default durable move targets for registered item CSVs and registered order CSV/PDF files now also route through the storage layer, while request-scoped staging remains local-path based.
 - Retired order-batch compatibility internals have been removed.

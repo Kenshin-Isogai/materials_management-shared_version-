@@ -1,6 +1,6 @@
 # Source Current State
 
-Last updated: 2026-04-03 (JST)
+Last updated: 2026-04-05 (JST)
 
 ## 1. System Snapshot
 
@@ -163,6 +163,9 @@ Last updated: 2026-04-03 (JST)
   - project summary cards, item planning context, reservation links, and planning-board actions open the shared Projects editor via `/projects?edit=<project_id>`
   - board-specific navigation uses `/projects/board/:projectId`
 - Data fetching is SWR-based with typed API client wrappers.
+- The `/snapshot` inventory page now defaults to the current JST day with `net available` selected and auto-fetches the first snapshot on page open instead of waiting for a manual generate action.
+- The `/snapshot` inventory page now also exposes `Export CSV`, downloading the currently selected snapshot parameter set through `GET /api/inventory/snapshot/export.csv`.
+  - the export action is shown only to `operator` / `admin` users so the frontend matches the backend operator-only export policy
 - Added `/users` as the dedicated shared-server user administration route.
   - supports browser-side create, edit, activate, and deactivate flows against the existing `/api/users` endpoints
   - the global shell now stores a bearer token and resolves the mapped current user through `/api/users/me`
@@ -184,6 +187,7 @@ Last updated: 2026-04-03 (JST)
 - Shared-server browser CSV workflows are now preview-first on the main Items and Orders pages.
   - Items page uses one `General Items CSV Import` surface for regular item CSVs and order-generated missing-item CSVs
   - generated missing-item CSVs are downloaded from Orders and then edited/re-imported through the normal Items preview/import flow
+- Arrival page timeline view now keeps the `Overdue` list in its own capped scroll region, so large overdue sets do not force the whole page column to grow before users can inspect the detail pane.
 - Orders manual CSV import and quotation maintenance now use external document URLs as the primary contract.
   - `supplier` is required on every manual order CSV row
   - `quotation_document_url` is required for manual order CSV import

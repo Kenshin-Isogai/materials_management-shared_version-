@@ -1,5 +1,7 @@
-import { useMemo, useState } from "react";
-import { apiGet } from "@/lib/api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import useSWR from "swr";
+import { apiDownload, apiGet } from "@/lib/api";
+import type { User } from "@/lib/types";
 
 type SnapshotRow = {
   item_id: number;
@@ -20,10 +22,25 @@ type SnapshotResponse = {
   rows: SnapshotRow[];
 };
 
+function todayJst(): string {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  return formatter.format(new Date());
+}
+
+function canExportSnapshotCsv(user: User | undefined): boolean {
+  return user?.role === "operator" || user?.role === "admin";
+}
+
 export function SnapshotPage() {
-  const [date, setDate] = useState("");
+  const currentUserQuery = useSWR("/users/me", () => apiGet<User>("/users/me"));
+  const [date, setDate] = useState(() => todayJst());
   const [mode, setMode] = useState<"past" | "future">("future");
-  const [basis, setBasis] = useState<"raw" | "net_available">("raw");
+  const [basis, setBasis] = useState<"raw" | "net_available">("net_available");
   const [data, setData] = useState<SnapshotResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
@@ -36,6 +53,7 @@ export function SnapshotPage() {
   const [shortageThreshold, setShortageThreshold] = useState("0");
   const [sortKey, setSortKey] = useState<"item_number" | "location" | "quantity" | "category">("quantity");
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const hasLoadedInitialSnapshot = useRef(false);
 
   const locationOptions = useMemo(() => {
     const values = (data?.rows ?? []).map((row) => row.location);
@@ -78,6 +96,7 @@ export function SnapshotPage() {
 
     return rows;
   }, [categoryFilter, data?.rows, descriptionFilter, locationFilter, query, shortageOnly, shortageThreshold, sortDirection, sortKey]);
+  const exportAllowed = canExportSnapshotCsv(currentUserQuery.data);
 
   function toggleSort(nextKey: typeof sortKey) {
     if (nextKey === sortKey) {
@@ -93,21 +112,21 @@ export function SnapshotPage() {
     return sortDirection === "asc" ? "↑" : "↓";
   }
 
-  async function run() {
-    if (basis === "net_available" && mode === "past") {
+  async function loadSnapshot(nextDate: string, nextMode: "past" | "future", nextBasis: "raw" | "net_available") {
+    if (nextBasis === "net_available" && nextMode === "past") {
       setMessage("Net available is supported for current/future snapshots only. Switch mode to future.");
       return;
     }
     const params = new URLSearchParams();
-    if (date) params.set("date", date);
-    params.set("mode", mode);
-    params.set("basis", basis);
+    if (nextDate) params.set("date", nextDate);
+    params.set("mode", nextMode);
+    params.set("basis", nextBasis);
     setLoading(true);
     setMessage("");
     try {
       const result = await apiGet<SnapshotResponse>(`/inventory/snapshot?${params.toString()}`);
       setData(result);
-      if (basis === "net_available") {
+      if (nextBasis === "net_available") {
         setMessage(
           "Net available subtracts current active reservation allocations from on-hand inventory, then adds open orders due by the selected date.",
         );
@@ -116,6 +135,37 @@ export function SnapshotPage() {
       setLoading(false);
     }
   }
+
+  async function run() {
+    await loadSnapshot(date, mode, basis);
+  }
+
+  async function downloadSnapshotCsv() {
+    if (basis === "net_available" && mode === "past") {
+      setMessage("Net available is supported for current/future snapshots only. Switch mode to future.");
+      return;
+    }
+    const params = new URLSearchParams();
+    if (date) params.set("date", date);
+    params.set("mode", mode);
+    params.set("basis", basis);
+    setMessage("");
+    try {
+      await apiDownload(
+        `/inventory/snapshot/export.csv?${params.toString()}`,
+        `inventory_snapshot_${date || "snapshot"}_${mode}_${basis}.csv`,
+      );
+      setMessage("Snapshot CSV downloaded.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  useEffect(() => {
+    if (hasLoadedInitialSnapshot.current) return;
+    hasLoadedInitialSnapshot.current = true;
+    void loadSnapshot(date, mode, basis);
+  }, [basis, date, mode]);
 
   return (
     <div className="space-y-6">
@@ -127,7 +177,7 @@ export function SnapshotPage() {
       </section>
 
       <section className="panel p-4">
-        <div className="grid gap-3 md:grid-cols-5">
+        <div className="grid gap-3 md:grid-cols-6">
           <input
             className="input"
             type="date"
@@ -146,9 +196,14 @@ export function SnapshotPage() {
             <option value="raw">raw inventory</option>
             <option value="net_available">net available</option>
           </select>
-          <button className="button md:col-span-2" disabled={loading} onClick={run}>
+          <button className="button" disabled={loading} onClick={run}>
             Generate Snapshot
           </button>
+          {exportAllowed && (
+            <button className="button-secondary md:col-span-2" disabled={loading} onClick={() => void downloadSnapshotCsv()}>
+              Export CSV
+            </button>
+          )}
         </div>
         <p className="mt-3 text-xs text-slate-500">
           Use <strong>raw inventory</strong> for location state reconstruction. Use <strong>net available</strong> to focus on residual stock not currently occupied by active reservations.

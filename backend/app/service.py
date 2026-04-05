@@ -14358,6 +14358,58 @@ def get_inventory_snapshot(
     return {"date": normalized_target, "mode": effective_mode, "basis": effective_basis, "rows": rows}
 
 
+def export_inventory_snapshot_csv(
+    conn: sqlite3.Connection,
+    *,
+    target_date: str | None = None,
+    mode: str | None = None,
+    basis: str | None = None,
+) -> tuple[str, bytes]:
+    snapshot = get_inventory_snapshot(
+        conn,
+        target_date=target_date,
+        mode=mode,
+        basis=basis,
+    )
+    fieldnames = [
+        "date",
+        "mode",
+        "basis",
+        "item_id",
+        "item_number",
+        "manufacturer_name",
+        "category",
+        "description",
+        "location",
+        "quantity",
+        "allocated_quantity",
+        "active_reservation_count",
+        "allocated_project_names",
+    ]
+    rows = [
+        {
+            "date": snapshot["date"],
+            "mode": snapshot["mode"],
+            "basis": snapshot["basis"],
+            "item_id": row.get("item_id"),
+            "item_number": row.get("item_number"),
+            "manufacturer_name": row.get("manufacturer_name"),
+            "category": row.get("category"),
+            "description": row.get("description"),
+            "location": row.get("location"),
+            "quantity": row.get("quantity"),
+            "allocated_quantity": row.get("allocated_quantity"),
+            "active_reservation_count": row.get("active_reservation_count"),
+            "allocated_project_names": " | ".join(row.get("allocated_project_names") or []),
+        }
+        for row in snapshot["rows"]
+    ]
+    filename = (
+        f"inventory_snapshot_{snapshot['date']}_{snapshot['mode']}_{snapshot['basis']}.csv"
+    )
+    return filename, _csv_bytes(fieldnames, rows)
+
+
 def list_manufacturers(conn: sqlite3.Connection) -> list[dict[str, Any]]:
     rows = conn.execute(
         "SELECT manufacturer_id, name FROM manufacturers ORDER BY name"
