@@ -87,7 +87,13 @@ export function ProjectsPage() {
         <h2 className="mb-3 font-display text-lg font-semibold">Project List</h2>
         {isLoading && <p className="text-sm text-slate-500">Loading...</p>}
         {error && <ApiErrorNotice error={error} area="project data" />}
-        {data?.data && (
+        {data?.data && data.data.length === 0 && (
+          <div className="rounded-xl border border-dashed border-slate-300 px-5 py-6 text-sm text-slate-500">
+            <p className="font-semibold text-slate-700">No projects yet</p>
+            <p className="mt-1">Create a project above, then add requirements and use the <span className="font-semibold">Workspace</span> to review shortages.</p>
+          </div>
+        )}
+        {data?.data && data.data.length > 0 && (
           <div className="overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead>
@@ -107,7 +113,7 @@ export function ProjectsPage() {
                     <td className="px-2 py-2 font-semibold">{row.name}</td>
                     <td className="px-2 py-2">{row.status}</td>
                     <td className="px-2 py-2">{row.planned_start ?? "-"}</td>
-                    <td className="px-2 py-2">{row.requirement_count}</td>
+                    <td className="px-2 py-2">{row.requirement_count}{row.requirement_count === 0 && <span className="ml-1 text-xs text-amber-600">— add requirements to get started</span>}</td>
                     <td className="px-2 py-2">
                       <button
                         className="button-subtle mr-2"

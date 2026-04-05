@@ -193,8 +193,8 @@ export function SnapshotPage() {
             value={basis}
             onChange={(e) => setBasis(e.target.value as "raw" | "net_available")}
           >
-            <option value="raw">raw inventory</option>
-            <option value="net_available">net available</option>
+            <option value="raw" title="Physical inventory per location, before any reservation deductions">raw inventory</option>
+            <option value="net_available" title="On-hand minus active reservations, plus open orders due by the target date">net available</option>
           </select>
           <button className="button" disabled={loading} onClick={run}>
             Generate Snapshot

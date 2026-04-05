@@ -100,6 +100,8 @@ export function ProcurementPage() {
     if (!lineDraft) return;
     setWorking(true);
     setMessage("");
+    const prevStatus = line.status;
+    const nextStatus = lineDraft.status;
     try {
       await apiSend(`/procurement-lines/${line.line_id}`, {
         method: "PUT",
@@ -115,7 +117,15 @@ export function ProcurementPage() {
           note: lineDraft.note.trim() || null,
         }),
       });
-      setMessage(`Updated procurement line #${line.line_id}.`);
+      let feedback = `Updated procurement line #${line.line_id}.`;
+      if (prevStatus !== nextStatus) {
+        if (nextStatus === "QUOTED") {
+          feedback += " This line now counts as quoted supply in the Planning Board.";
+        } else if (nextStatus === "ORDERED") {
+          feedback += " This line is now linked to a purchase order and will appear in Arrival tracking.";
+        }
+      }
+      setMessage(feedback);
       cancelEditLine();
       await Promise.all([mutateDetail(), mutateBatches(), mutateInbox()]);
     } catch (error) {
