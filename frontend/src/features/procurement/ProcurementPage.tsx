@@ -122,7 +122,9 @@ export function ProcurementPage() {
         if (nextStatus === "QUOTED") {
           feedback += " This line now counts as quoted supply in the Planning Board.";
         } else if (nextStatus === "ORDERED") {
-          feedback += " This line is now linked to a purchase order and will appear in Arrival tracking.";
+          feedback += lineDraft.linked_purchase_order_line_id.trim()
+            ? " This line is now linked to a purchase order and will appear in Arrival tracking."
+            : " This line is now marked as ordered.";
         }
       }
       setMessage(feedback);

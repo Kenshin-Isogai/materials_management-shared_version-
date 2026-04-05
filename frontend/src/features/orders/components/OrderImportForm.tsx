@@ -79,6 +79,7 @@ export function OrderImportForm({
   onConfirmImportPreview,
 }: OrderImportFormProps) {
   const navigate = useNavigate();
+  const unresolvedRows = unresolvedPreviewRows();
 
   return (
     <>
@@ -217,10 +218,10 @@ export function OrderImportForm({
               </div>
             )}
 
-            {unresolvedPreviewRows().length > 0 && (
+            {unresolvedRows.length > 0 && (
               <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-2">
                 <p className="text-sm font-semibold text-amber-900">
-                  {unresolvedPreviewRows().length} unresolved item(s) — not yet registered in the catalog
+                  {unresolvedRows.length} unresolved item(s) — not yet registered in the catalog
                 </p>
                 <ol className="list-decimal list-inside text-xs text-amber-800 space-y-1">
                   <li>Download the missing-items CSV below.</li>
@@ -233,7 +234,7 @@ export function OrderImportForm({
                     type="button"
                     onClick={() =>
                       downloadMissingRowsCsv(
-                        unresolvedPreviewRows(),
+                        unresolvedRows,
                         "orders_preview_missing_items.csv"
                       )
                     }
