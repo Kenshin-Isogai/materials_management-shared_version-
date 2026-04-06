@@ -110,7 +110,7 @@
 
 /* ── Legacy utility classes (compat bridge, migrate away over time) ── */
 .input {
-  @apply w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-ink outline-none transition focus:border-signal focus:ring-2 focus:ring-signal/20;
+  @apply w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-ink outline-none transition focus:border-signal focus:ring-2 focus:ring-signal/20 disabled:cursor-not-allowed disabled:border-slate-100 disabled:bg-slate-50 disabled:text-slate-400;
 }
 .button {
   @apply inline-flex items-center justify-center rounded-xl border border-slate-700 bg-slatebrand px-4 py-2 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-60;

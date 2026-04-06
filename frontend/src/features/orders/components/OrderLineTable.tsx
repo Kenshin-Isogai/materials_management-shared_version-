@@ -95,7 +95,7 @@ export function OrderLineTable({
           className="input"
           value={orderPrimarySearch}
           onChange={(event) => setOrderPrimarySearch(event.target.value)}
-          placeholder="Search by order #, item, or quotation number"
+          placeholder="Search by order #, item, quotation, or PO number"
         />
         <input
           className="input"

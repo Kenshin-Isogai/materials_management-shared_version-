@@ -48,11 +48,13 @@ export const OrderLinesSection = forwardRef<OrderLinesSectionHandle, OrderLinesS
         const orderId = String(row.order_id);
         const itemNumber = row.canonical_item_number.toLowerCase();
         const quotationNumber = row.quotation_number.toLowerCase();
+        const poNumber = (row.purchase_order_number ?? "").toLowerCase();
         const matchesPrimary =
           !primaryQuery ||
           orderId.includes(primaryQuery) ||
           itemNumber.includes(primaryQuery) ||
-          quotationNumber.includes(primaryQuery);
+          quotationNumber.includes(primaryQuery) ||
+          poNumber.includes(primaryQuery);
         if (!matchesPrimary) return false;
 
         if (!filterQuery) return true;

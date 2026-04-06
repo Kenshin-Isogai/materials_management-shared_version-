@@ -28,6 +28,7 @@ import { CatalogPicker } from "@/components/CatalogPicker";
 import { ImportPreviewSummary } from "@/components/ImportPreviewSummary";
 import { ApiErrorNotice } from "@/components/ApiErrorNotice";
 import { BulkItemEntry } from "@/features/items/components/BulkItemEntry";
+import { ComboInput } from "@/components/ComboInput";
 import { ItemImportForm } from "@/features/items/components/ItemImportForm";
 import { ItemImportHistory } from "@/features/items/components/ItemImportHistory";
 import { BulkMetadataUpdate } from "@/features/items/components/BulkMetadataUpdate";
@@ -674,6 +675,7 @@ export function ItemsPage() {
         itemOptions={itemOptions}
         manufacturerOptions={manufacturerOptions}
         supplierOptions={supplierOptions}
+        categoryOptions={uniqueCategoryOptions}
         submitting={submitting}
         entryMessage={entryMessage}
         onCreateBulk={createBulk}
@@ -742,10 +744,7 @@ export function ItemsPage() {
             Preview Import
           </button>
         </form>
-        <p className="mt-2 text-xs text-slate-500">
-          You can select multiple CSV files; successful imports are archived under{" "}
-          <code>imports/items/registered/&lt;YYYY-MM&gt;/</code>.
-        </p>
+        <p className="mt-2 text-xs text-slate-500">You can select multiple CSV files.</p>
         {csvMessage && <p className="mt-3 text-sm text-signal">{csvMessage}</p>}
         {csvPreview && (
           <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
@@ -1243,14 +1242,15 @@ export function ItemsPage() {
                     </td>
                     <td className="px-2 py-2">
                       {editingItemId === item.item_id ? (
-                        <input
-                          className="input"
+                        <ComboInput
                           value={editDraft?.manufacturer_name ?? ""}
-                          onChange={(e) =>
+                          onChange={(v) =>
                             setEditDraft((prev) =>
-                              prev ? { ...prev, manufacturer_name: e.target.value } : prev
+                              prev ? { ...prev, manufacturer_name: v } : prev
                             )
                           }
+                          options={manufacturerOptions}
+                          placeholder="Manufacturer"
                         />
                       ) : (
                         item.manufacturer_name
@@ -1258,12 +1258,13 @@ export function ItemsPage() {
                     </td>
                     <td className="px-2 py-2">
                       {editingItemId === item.item_id ? (
-                        <input
-                          className="input"
+                        <ComboInput
                           value={editDraft?.category ?? ""}
-                          onChange={(e) =>
-                            setEditDraft((prev) => (prev ? { ...prev, category: e.target.value } : prev))
+                          onChange={(v) =>
+                            setEditDraft((prev) => (prev ? { ...prev, category: v } : prev))
                           }
+                          options={uniqueCategoryOptions}
+                          placeholder="Category"
                         />
                       ) : (
                         item.category ?? "-"

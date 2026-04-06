@@ -197,6 +197,7 @@ export function ArrivalPage() {
       return [
         row.order_id,
         row.purchase_order_id,
+        row.purchase_order_number ?? "",
         row.quotation_number,
         row.canonical_item_number,
         row.ordered_item_number,

@@ -44,6 +44,7 @@ Last updated: 2026-04-06 (JST)
   - `src/components/ui/`: 19 shadcn/ui components (button, table, tabs, card, badge, dialog, command, sidebar, breadcrumb, skeleton, tooltip, etc.)
   - `src/components/layout/`: shared layout components (PageHeader, StatusBadge, EmptyState)
   - `src/components/CommandPalette.tsx`: Ctrl+K command palette for quick page navigation
+  - `src/components/ComboInput.tsx`: shared lightweight combobox (Radix Popover-based) — free text input with filterable dropdown list, used in Bulk Item Entry and Item List inline editing
   - `src/lib/api.ts`: API client now normalizes `VITE_API_BASE`, supports absolute backend URLs for split Cloud Run services, and injects `Authorization: Bearer <JWT>` when a stored token exists
   - `src/lib/errorUtils.ts`: frontend error classification/presentation helpers distinguish auth errors, backend-unavailable cases, and generic API failures for cloud-hosted UX
   - `src/lib/workspaceState.ts`: board date synchronization utility (drawer state logic removed)

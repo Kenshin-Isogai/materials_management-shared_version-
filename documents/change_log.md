@@ -2,6 +2,21 @@
 
 ### Changed
 
+- Improved frontend UX across 4 areas in Items and Projects pages:
+  - **Bulk Item Entry disabled fields**: Disabled fields now show explicit "N/A for items" / "N/A for aliases" placeholder text, tooltip explanations, and styled disabled state (greyed background, not-allowed cursor) so users understand why fields are inactive
+  - **Bulk Item Entry manufacturer/category/supplier selection**: Replaced browser-native `<datalist>` with a new `ComboInput` component that provides a proper dropdown list with filtering, while still allowing free text input
+  - **Project requirements search dropdown**: CatalogPicker dropdown now renders via Radix Popover portal (escapes `overflow` clipping) with increased max-height (`max-h-96`, 384px), fixing search results being hidden below scroll boundaries
+  - **Item List inline editing**: Manufacturer and Category edit fields now use `ComboInput` with existing registered values as suggestions
+- Added global `.input` disabled styling (border-slate-100, bg-slate-50, text-slate-400, cursor-not-allowed)
+- New shared component: `src/components/ComboInput.tsx` — lightweight combobox (Radix Popover-based, free text + dropdown list)
+- Added `purchase_order_number` to search in Purchase Order Lines (primary search) and Arrivals (full-text search)
+  - Order Lines placeholder updated to "Search by order #, item, quotation, or PO number"
+  - Arrival search already mentioned PO # and now matches on the human-readable PO number string in addition to numeric PO ID
+
+## 2026-04-06
+
+### Changed
+
 - Removed the shared date input from the frontend `Import Purchase Order Lines CSV` form on the Orders page.
   - the UI now treats `order_date` as CSV-driven metadata instead of asking the operator for an extra ambiguous date outside the file
   - preview/import requests from the Orders page no longer append `default_order_date`

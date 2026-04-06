@@ -2,6 +2,7 @@ import type { Dispatch, SetStateAction } from "react";
 import type { Item } from "@/lib/types";
 import type { ItemEntryRow, ItemRowType } from "@/features/items/types";
 import { blankRow } from "@/features/items/utils";
+import { ComboInput } from "@/components/ComboInput";
 
 export interface BulkItemEntryProps {
   bulkRows: ItemEntryRow[];
@@ -9,6 +10,7 @@ export interface BulkItemEntryProps {
   itemOptions: Item[];
   manufacturerOptions: string[];
   supplierOptions: string[];
+  categoryOptions: string[];
   submitting: boolean;
   entryMessage: string;
   onCreateBulk: () => void;
@@ -20,6 +22,7 @@ export function BulkItemEntry({
   itemOptions,
   manufacturerOptions,
   supplierOptions,
+  categoryOptions,
   submitting,
   entryMessage,
   onCreateBulk,
@@ -38,16 +41,6 @@ export function BulkItemEntry({
     <>
       <section>
         <div className="panel space-y-3 p-4">
-          <datalist id="bulk-item-manufacturer-options">
-            {manufacturerOptions.map((name) => (
-              <option key={name} value={name} />
-            ))}
-          </datalist>
-          <datalist id="bulk-item-supplier-options">
-            {supplierOptions.map((name) => (
-              <option key={name} value={name} />
-            ))}
-          </datalist>
           <div className="flex items-center justify-between">
             <h2 className="font-display text-lg font-semibold">Bulk Item Entry</h2>
             <button
@@ -98,23 +91,23 @@ export function BulkItemEntry({
                       />
                     </td>
                     <td className="px-2 py-2">
-                      <input
-                        className="input"
+                      <ComboInput
                         value={row.manufacturer_name}
-                        onChange={(e) => updateBulkRow(idx, { manufacturer_name: e.target.value })}
-                        placeholder="Thorlabs"
-                        list="bulk-item-manufacturer-options"
+                        onChange={(v) => updateBulkRow(idx, { manufacturer_name: v })}
+                        options={manufacturerOptions}
+                        placeholder={row.row_type === "alias" ? "N/A for aliases" : "Thorlabs"}
                         disabled={row.row_type === "alias"}
+                        title={row.row_type === "alias" ? "Manufacturer is set via the canonical item for alias rows" : undefined}
                       />
                     </td>
                     <td className="px-2 py-2">
-                      <input
-                        className="input"
+                      <ComboInput
                         value={row.supplier}
-                        onChange={(e) => updateBulkRow(idx, { supplier: e.target.value })}
-                        placeholder="Supplier for alias"
-                        list="bulk-item-supplier-options"
+                        onChange={(v) => updateBulkRow(idx, { supplier: v })}
+                        options={supplierOptions}
+                        placeholder={row.row_type !== "alias" ? "N/A for items" : "Supplier for alias"}
                         disabled={row.row_type !== "alias"}
+                        title={row.row_type !== "alias" ? "Supplier is only used for alias rows" : undefined}
                       />
                     </td>
                     <td className="px-2 py-2">
@@ -123,8 +116,11 @@ export function BulkItemEntry({
                         value={row.canonical_item_number}
                         onChange={(e) => updateBulkRow(idx, { canonical_item_number: e.target.value })}
                         disabled={row.row_type !== "alias"}
+                        title={row.row_type !== "alias" ? "Canonical item is only used for alias rows" : undefined}
                       >
-                        <option value="">Select canonical item</option>
+                        <option value="">
+                          {row.row_type !== "alias" ? "N/A for items" : "Select canonical item"}
+                        </option>
                         {itemOptions.map((item) => (
                           <option key={item.item_id} value={item.item_number}>
                             {itemLabel(item)}
@@ -140,18 +136,19 @@ export function BulkItemEntry({
                         step={1}
                         value={row.units_per_order}
                         onChange={(e) => updateBulkRow(idx, { units_per_order: e.target.value })}
-                        placeholder="1"
+                        placeholder={row.row_type !== "alias" ? "N/A" : "1"}
                         disabled={row.row_type !== "alias"}
+                        title={row.row_type !== "alias" ? "Units/Order is only used for alias rows" : undefined}
                       />
                     </td>
                     <td className="px-2 py-2">
-                      <input
-                        className="input"
+                      <ComboInput
                         value={row.category}
-                        onChange={(e) => updateBulkRow(idx, { category: e.target.value })}
-                        placeholder="Lens"
+                        onChange={(v) => updateBulkRow(idx, { category: v })}
+                        options={categoryOptions}
+                        placeholder={row.row_type === "alias" ? "N/A for aliases" : "Lens"}
                         disabled={row.row_type === "alias"}
-                        list="category-options"
+                        title={row.row_type === "alias" ? "Category is set via the canonical item for alias rows" : undefined}
                       />
                     </td>
                     <td className="px-2 py-2">
@@ -159,8 +156,9 @@ export function BulkItemEntry({
                         className="input"
                         value={row.url}
                         onChange={(e) => updateBulkRow(idx, { url: e.target.value })}
-                        placeholder="https://..."
+                        placeholder={row.row_type === "alias" ? "N/A for aliases" : "https://..."}
                         disabled={row.row_type === "alias"}
+                        title={row.row_type === "alias" ? "URL is set via the canonical item for alias rows" : undefined}
                       />
                     </td>
                     <td className="px-2 py-2">
@@ -168,8 +166,9 @@ export function BulkItemEntry({
                         className="input"
                         value={row.description}
                         onChange={(e) => updateBulkRow(idx, { description: e.target.value })}
-                        placeholder="notes"
+                        placeholder={row.row_type === "alias" ? "N/A for aliases" : "notes"}
                         disabled={row.row_type === "alias"}
+                        title={row.row_type === "alias" ? "Description is set via the canonical item for alias rows" : undefined}
                       />
                     </td>
                     <td className="px-2 py-2">
@@ -183,7 +182,7 @@ export function BulkItemEntry({
             </table>
           </div>
           <p className="text-xs text-slate-500">
-            Manufacturer and Alias Supplier accept free text, and the browser will also suggest existing registered names.
+            Manufacturer, Alias Supplier, and Category accept free text. Select from the dropdown or type a new value.
           </p>
           <button className="button w-full" disabled={submitting} onClick={onCreateBulk}>
             Submit Bulk Rows

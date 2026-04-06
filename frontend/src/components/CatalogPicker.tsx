@@ -7,6 +7,7 @@ import {
   useState,
 } from "react";
 import useSWR from "swr";
+import { Popover as PopoverPrimitive } from "radix-ui";
 import { apiGet } from "../lib/api";
 import { presentApiError } from "../lib/errorUtils";
 import type {
@@ -159,10 +160,10 @@ export function CatalogPicker(props: CatalogPickerProps) {
         }
       }
     }
-    if (!isOpen) return;
+    if (!isOpen || presentation === "popover") return;
     window.addEventListener("mousedown", handlePointerDown);
     return () => window.removeEventListener("mousedown", handlePointerDown);
-  }, [isOpen, props.mode, singleDisplayValue]);
+  }, [isOpen, presentation, props.mode, singleDisplayValue]);
 
   const searchPath =
     isOpen && deferredQuery
@@ -290,116 +291,143 @@ export function CatalogPicker(props: CatalogPickerProps) {
     }
   }
 
-  const panelClassName =
-    presentation === "inline"
-      ? "mt-2 rounded-2xl border border-slate-200 bg-white shadow-panel"
-      : "absolute left-0 right-0 top-full z-30 mt-2 rounded-2xl border border-slate-200 bg-white shadow-panel";
+  const resultsContent = (
+    <>
+      {!deferredQuery && recentSelections.length > 0 && (
+        <p className="px-2 pb-2 pt-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
+          Recent Selections
+        </p>
+      )}
+      {isLoading && <p className="px-2 py-3 text-sm text-slate-500">Searching…</p>}
+      {!isLoading && error && (
+        <p className="px-2 py-3 text-sm text-red-600">{presentApiError(error)}</p>
+      )}
+      {!isLoading && !error && groupedResults.length === 0 && (
+        <p className="px-2 py-3 text-sm text-slate-500">
+          {deferredQuery
+            ? "No matches found."
+            : "Type to search (space = AND) or use a recent selection."}
+        </p>
+      )}
+      {!isLoading &&
+        !error &&
+        groupedResults.map((group) => {
+          let localIndexOffset = 0;
+          const priorCount = groupedResults
+            .filter((candidate) => allowedTypes.indexOf(candidate.type) < allowedTypes.indexOf(group.type))
+            .reduce((total, candidate) => total + candidate.items.length, 0);
+          return (
+            <div key={group.type} className="pb-2 last:pb-0">
+              <p className="px-2 pb-1 pt-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
+                {group.label}
+              </p>
+              <div className="space-y-1">
+                {group.items.map((item) => {
+                  const itemIndex = priorCount + localIndexOffset;
+                  localIndexOffset += 1;
+                  const isHighlighted = itemIndex === highlightedIndex;
+                  return (
+                    <button
+                      key={resultKey(item)}
+                      className={`flex w-full flex-col rounded-xl px-3 py-2 text-left transition ${
+                        isHighlighted ? "bg-signal/10 text-signal" : "hover:bg-slate-50"
+                      }`}
+                      onClick={() => handleSelect(item)}
+                      onMouseDown={(event) => event.preventDefault()}
+                      type="button"
+                    >
+                      <span className="text-sm font-semibold">{item.display_label}</span>
+                      {item.summary && (
+                        <span className="text-xs text-slate-500">{item.summary}</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+    </>
+  );
 
   return (
-    <div className="relative" ref={rootRef} onKeyDownCapture={handleRootKeyDownCapture}>
-      {props.mode === "multi" && props.value.length > 0 && (
-        <div className="mb-2 flex flex-wrap gap-2">
-          {props.value.map((item) => (
-            <button
-              key={resultKey(item)}
-              className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700"
-              onClick={() => removeMultiSelection(item)}
-              type="button"
-            >
-              <span>{item.display_label}</span>
-              <span className="text-slate-400">x</span>
-            </button>
-          ))}
-        </div>
-      )}
-      <div className="flex items-center gap-2">
-        <input
-          className="input"
-          disabled={disabled}
-          onChange={(event) => {
-            const nextValue = event.target.value;
-            setQuery(nextValue);
-            onQueryChange?.(nextValue);
-            setIsOpen(true);
-          }}
-          onFocus={() => setIsOpen(true)}
-          onKeyDown={handleKeyDown}
-          placeholder={placeholder ?? "Search catalog"}
-          value={query}
-        />
-        {(props.mode === "multi" ? props.value.length > 0 : !!selectedSingle || query.trim()) && (
-          <button
-            className="button-subtle shrink-0"
-            onClick={() => {
-              handleClear();
-              onQueryChange?.("");
-            }}
-            type="button"
-          >
-            Clear
-          </button>
-        )}
-      </div>
-      {isOpen && (
-        <div className={panelClassName}>
-          <div className="max-h-80 overflow-y-auto p-2">
-            {!deferredQuery && recentSelections.length > 0 && (
-              <p className="px-2 pb-2 pt-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
-                Recent Selections
-              </p>
+    <PopoverPrimitive.Root open={isOpen && presentation === "popover"}>
+      <PopoverPrimitive.Anchor asChild>
+        <div className="relative" ref={rootRef} onKeyDownCapture={handleRootKeyDownCapture}>
+          {props.mode === "multi" && props.value.length > 0 && (
+            <div className="mb-2 flex flex-wrap gap-2">
+              {props.value.map((item) => (
+                <button
+                  key={resultKey(item)}
+                  className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700"
+                  onClick={() => removeMultiSelection(item)}
+                  type="button"
+                >
+                  <span>{item.display_label}</span>
+                  <span className="text-slate-400">x</span>
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="flex items-center gap-2">
+            <input
+              className="input"
+              disabled={disabled}
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                setQuery(nextValue);
+                onQueryChange?.(nextValue);
+                setIsOpen(true);
+              }}
+              onFocus={() => setIsOpen(true)}
+              onKeyDown={handleKeyDown}
+              placeholder={placeholder ?? "Search catalog"}
+              value={query}
+            />
+            {(props.mode === "multi" ? props.value.length > 0 : !!selectedSingle || query.trim()) && (
+              <button
+                className="button-subtle shrink-0"
+                onClick={() => {
+                  handleClear();
+                  onQueryChange?.("");
+                }}
+                type="button"
+              >
+                Clear
+              </button>
             )}
-            {isLoading && <p className="px-2 py-3 text-sm text-slate-500">Searching…</p>}
-            {!isLoading && error && (
-              <p className="px-2 py-3 text-sm text-red-600">{presentApiError(error)}</p>
-            )}
-            {!isLoading && !error && groupedResults.length === 0 && (
-              <p className="px-2 py-3 text-sm text-slate-500">
-                {deferredQuery
-                  ? "No matches found."
-                  : "Type to search (space = AND) or use a recent selection."}
-              </p>
-            )}
-            {!isLoading &&
-              !error &&
-              groupedResults.map((group) => {
-                let localIndexOffset = 0;
-                const priorCount = groupedResults
-                  .filter((candidate) => allowedTypes.indexOf(candidate.type) < allowedTypes.indexOf(group.type))
-                  .reduce((total, candidate) => total + candidate.items.length, 0);
-                return (
-                  <div key={group.type} className="pb-2 last:pb-0">
-                    <p className="px-2 pb-1 pt-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-400">
-                      {group.label}
-                    </p>
-                    <div className="space-y-1">
-                      {group.items.map((item) => {
-                        const itemIndex = priorCount + localIndexOffset;
-                        localIndexOffset += 1;
-                        const isHighlighted = itemIndex === highlightedIndex;
-                        return (
-                          <button
-                            key={resultKey(item)}
-                            className={`flex w-full flex-col rounded-xl px-3 py-2 text-left transition ${
-                              isHighlighted ? "bg-signal/10 text-signal" : "hover:bg-slate-50"
-                            }`}
-                            onClick={() => handleSelect(item)}
-                            onMouseDown={(event) => event.preventDefault()}
-                            type="button"
-                          >
-                            <span className="text-sm font-semibold">{item.display_label}</span>
-                            {item.summary && (
-                              <span className="text-xs text-slate-500">{item.summary}</span>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })}
           </div>
+          {/* Inline presentation: render dropdown in-place */}
+          {isOpen && presentation === "inline" && (
+            <div className="mt-2 rounded-2xl border border-slate-200 bg-white shadow-panel">
+              <div className="max-h-96 overflow-y-auto p-2">
+                {resultsContent}
+              </div>
+            </div>
+          )}
         </div>
-      )}
-    </div>
+      </PopoverPrimitive.Anchor>
+      {/* Popover presentation: render in a portal to escape overflow clipping */}
+      <PopoverPrimitive.Portal>
+        <PopoverPrimitive.Content
+          align="start"
+          sideOffset={8}
+          className="z-50 w-[var(--radix-popover-trigger-width)] rounded-2xl border border-slate-200 bg-white shadow-panel"
+          onOpenAutoFocus={(e) => e.preventDefault()}
+          onCloseAutoFocus={(e) => e.preventDefault()}
+          onEscapeKeyDown={(e) => e.preventDefault()}
+          onInteractOutside={() => {
+            setIsOpen(false);
+            if (props.mode !== "multi") {
+              setQuery(singleDisplayValue);
+            }
+          }}
+        >
+          <div className="max-h-96 overflow-y-auto p-2">
+            {resultsContent}
+          </div>
+        </PopoverPrimitive.Content>
+      </PopoverPrimitive.Portal>
+    </PopoverPrimitive.Root>
   );
 }
