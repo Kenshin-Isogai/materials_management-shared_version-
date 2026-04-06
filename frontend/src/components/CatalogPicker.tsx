@@ -391,6 +391,11 @@ export function CatalogPicker(props: CatalogPickerProps) {
                   handleClear();
                   onQueryChange?.("");
                 }}
+                onKeyDownCapture={(event) => {
+                  if (event.key === "Escape") {
+                    dismissPicker(event);
+                  }
+                }}
                 type="button"
               >
                 Clear

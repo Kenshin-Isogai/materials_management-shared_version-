@@ -71,7 +71,7 @@ This document explains the implemented architecture of the Materials Management 
   - order-generated missing-item CSVs are downloaded to the browser, edited, and re-imported through `POST /api/items/import-preview` + `POST /api/items/import`
   - the Items page no longer exposes a dedicated missing-item resolver or batch-upload section
   - bulk alias entry now uses a dedicated alias upsert-by-supplier-name API instead of the older `register-missing` compatibility endpoints
-  - Bulk Item Entry manufacturer and alias-supplier fields remain free-text, but now also expose browser-native suggestions from the registered manufacturer and supplier masters
+  - Bulk Item Entry manufacturer and alias-supplier fields remain free-text, but now also expose a shared accessible combobox with filterable suggestions from the registered manufacturer and supplier masters
   - the Orders page no longer exposes or depends on ZIP/PDF batch upload behavior
   - item import jobs are finalized in the DB before the registered-history archive copy is written, so a failed request commit cannot leave a history archive behind without the matching DB mutation/import-job state
 - Manual Orders CSV import now uses external document URLs as the primary contract.

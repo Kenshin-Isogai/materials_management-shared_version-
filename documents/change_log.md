@@ -2,6 +2,22 @@
 
 ### Changed
 
+- Fixed the shared frontend `ComboInput` accessibility and keyboard interaction regression.
+  - ArrowUp / ArrowDown now move through suggestions, Enter commits the highlighted option, and Escape closes the popup
+  - the input now exposes combobox/listbox ARIA semantics (`role="combobox"`, `aria-expanded`, `aria-controls`, `aria-activedescendant`) so assistive tech can announce the suggestion state correctly
+  - added targeted frontend regression coverage for keyboard selection and combobox accessibility semantics
+
+### Tests
+
+- Frontend targeted Vitest:
+  - `npm run test -- tests/ComboInput.test.tsx tests/CatalogPicker.test.tsx`
+- Frontend production build:
+  - `npm run build`
+
+## 2026-04-06
+
+### Changed
+
 - Improved frontend UX across 4 areas in Items and Projects pages:
   - **Bulk Item Entry disabled fields**: Disabled fields now show explicit "N/A for items" / "N/A for aliases" placeholder text, tooltip explanations, and styled disabled state (greyed background, not-allowed cursor) so users understand why fields are inactive
   - **Bulk Item Entry manufacturer/category/supplier selection**: Replaced browser-native `<datalist>` with a new `ComboInput` component that provides a proper dropdown list with filtering, while still allowing free text input
