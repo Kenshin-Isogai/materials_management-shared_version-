@@ -2,6 +2,20 @@
 
 ### Changed
 
+- Fixed the frontend registration holding flow so pending applicants re-check approval state without signing out.
+  - `AppShell` now revalidates signed-in unmapped identities on window focus, page-show, and a short interval while they remain blocked on `/registration`
+  - admin approval from another browser/session can now move the applicant into the app without requiring the tab to be closed and the session to be recreated
+  - added router regression coverage for the pending-to-approved transition
+
+### Tests
+
+- Frontend targeted Vitest:
+  - `npm run test -- tests/AppRouter.test.tsx`
+
+## 2026-04-06
+
+### Changed
+
 - Hardened the frontend `Bulk Item Entry` submit flow on the Items page.
   - successful rows now continue even if another row fails, instead of aborting the whole bulk submit on the first error
   - the UI now shows an explicit completion summary after submit so successful item/alias registration is visible immediately

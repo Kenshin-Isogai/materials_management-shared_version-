@@ -165,6 +165,7 @@ describe("app router", () => {
     while (activeRouters.length) {
       activeRouters.pop()?.dispose();
     }
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     cleanup();
   });
@@ -304,6 +305,96 @@ describe("app router", () => {
     expect(screen.getByRole("heading", { name: "Register for access" })).toBeTruthy();
   });
 
+  it("re-checks pending registration sessions and leaves /registration after approval", async () => {
+    let approved = false;
+
+    apiGetMock.mockImplementation(async (path: string) => {
+      if (path === "/users/me") {
+        if (!approved) {
+          throw new ApiClientError({
+            message: "User not found",
+            statusCode: 403,
+            code: "USER_NOT_FOUND",
+          });
+        }
+        return {
+          user_id: 9,
+          username: "pending.user",
+          display_name: "Pending User",
+          role: "viewer",
+          is_active: true,
+          created_at: "2026-03-08T00:00:00+09:00",
+          updated_at: "2026-03-08T00:00:00+09:00",
+          email: "pending@example.com",
+          external_subject: "sub-pending",
+          identity_provider: "identity_platform",
+          hosted_domain: null,
+        };
+      }
+      if (path === "/auth/registration-status") {
+        return {
+          state: approved ? "approved" : "pending",
+          email: "pending@example.com",
+          identity_provider: "identity_platform",
+          external_subject: "sub-pending",
+          current_user: approved
+            ? {
+                user_id: 9,
+                username: "pending.user",
+                display_name: "Pending User",
+                role: "viewer",
+                is_active: true,
+                created_at: "2026-03-08T00:00:00+09:00",
+                updated_at: "2026-03-08T00:00:00+09:00",
+                email: "pending@example.com",
+                external_subject: "sub-pending",
+                identity_provider: "identity_platform",
+                hosted_domain: null,
+              }
+            : null,
+          request: approved
+            ? null
+            : {
+                request_id: 1,
+                email: "pending@example.com",
+                username: "pending.user",
+                display_name: "Pending User",
+                memo: null,
+                requested_role: "viewer",
+                status: "pending",
+                rejection_reason: null,
+                reviewed_by_user_id: null,
+                approved_user_id: null,
+                created_at: "2026-03-08T00:00:00+09:00",
+                updated_at: "2026-03-08T00:00:00+09:00",
+                reviewed_at: null,
+              },
+        };
+      }
+      return defaultApiGet(path);
+    });
+
+    act(() => {
+      window.sessionStorage.setItem("materials.auth-session", JSON.stringify({ accessToken: "token" }));
+    });
+
+    const router = renderRouter("/registration");
+
+    await waitFor(() => {
+      expect(screen.getByText("Waiting for admin approval")).toBeTruthy();
+    });
+
+    approved = true;
+    act(() => {
+      window.dispatchEvent(new Event("focus"));
+    });
+
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe("/");
+    });
+    expect(screen.getByRole("heading", { name: "Dashboard" })).toBeTruthy();
+  });
+
   it("redirects signed-in but unverified identities to /verify-email", async () => {
     apiGetMock.mockImplementation(async (path: string) => {
       if (path === "/users/me") {
@@ -360,7 +451,7 @@ describe("app router", () => {
     });
   });
 
-  it("shows an approved-access callout on /registration for mapped users", async () => {
+  it("redirects mapped approved identities away from /registration", async () => {
     apiGetMock.mockImplementation(async (path: string) => {
       if (path === "/auth/registration-status") {
         return {
@@ -394,10 +485,9 @@ describe("app router", () => {
     const router = renderRouter("/registration");
 
     await waitFor(() => {
-      expect(router.state.location.pathname).toBe("/registration");
+      expect(router.state.location.pathname).toBe("/");
     });
-    expect(screen.getByText("Access already approved")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Open dashboard" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Dashboard" })).toBeTruthy();
   });
 
   it("clears a stale signup error after switching to sign-in and logging in successfully", async () => {

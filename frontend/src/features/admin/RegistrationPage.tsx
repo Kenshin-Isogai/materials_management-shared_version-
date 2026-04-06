@@ -1,6 +1,6 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import useSWR from "swr";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { apiGet, apiSend } from "@/lib/api";
 import { ApiErrorNotice } from "@/components/ApiErrorNotice";
 import { StatusCallout } from "@/components/StatusCallout";
@@ -10,6 +10,7 @@ import type { RegistrationRequest, RegistrationStatus, UserRole } from "@/lib/ty
 const REQUESTABLE_ROLES: UserRole[] = ["viewer", "operator", "admin"];
 
 export function RegistrationPage() {
+  const navigate = useNavigate();
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [requestedRole, setRequestedRole] = useState<UserRole>("viewer");
@@ -27,6 +28,31 @@ export function RegistrationPage() {
   const canSubmit =
     !status?.current_user &&
     (status?.state === "not_requested" || status?.state === "rejected" || status?.state === "approved");
+
+  useEffect(() => {
+    if (status?.current_user) {
+      navigate("/", { replace: true });
+    }
+  }, [navigate, status?.current_user]);
+
+  useEffect(() => {
+    if (status?.current_user) return;
+
+    const revalidate = () => {
+      void statusQuery.mutate();
+    };
+    const intervalId = window.setInterval(revalidate, 10000);
+    window.addEventListener("focus", revalidate);
+    window.addEventListener("pageshow", revalidate);
+    document.addEventListener("visibilitychange", revalidate);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", revalidate);
+      window.removeEventListener("pageshow", revalidate);
+      document.removeEventListener("visibilitychange", revalidate);
+    };
+  }, [status?.current_user, statusQuery]);
 
   const title = useMemo(() => {
     switch (status?.state) {

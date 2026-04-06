@@ -286,6 +286,26 @@ export function AppShell() {
     [],
   );
 
+  /* ── Re-check approval state while signed-in identities are waiting ── */
+  useEffect(() => {
+    if (!isSignedIn || currentUser || verificationRequired) return;
+
+    const revalidate = () => {
+      setAuthVersion((v) => v + 1);
+    };
+    const intervalId = window.setInterval(revalidate, 10000);
+    window.addEventListener("focus", revalidate);
+    window.addEventListener("pageshow", revalidate);
+    document.addEventListener("visibilitychange", revalidate);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", revalidate);
+      window.removeEventListener("pageshow", revalidate);
+      document.removeEventListener("visibilitychange", revalidate);
+    };
+  }, [currentUser, isSignedIn, verificationRequired]);
+
   /* ── Sign out handler ── */
   const clearToken = () => {
     clearStoredAuthSession();
