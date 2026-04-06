@@ -60,6 +60,7 @@ import {
   isEmailVerificationRequiredError,
   presentApiError,
 } from "@/lib/errorUtils";
+import { shouldPollRegistrationStatus } from "@/lib/registrationStatus";
 import type { RegistrationStatus, User } from "@/lib/types";
 
 /* ------------------------------------------------------------------ */
@@ -288,7 +289,14 @@ export function AppShell() {
 
   /* ── Re-check approval state while signed-in identities are waiting ── */
   useEffect(() => {
-    if (!isSignedIn || currentUser || verificationRequired) return;
+    if (
+      !isSignedIn ||
+      currentUser ||
+      verificationRequired ||
+      !shouldPollRegistrationStatus(registrationStatus)
+    ) {
+      return;
+    }
 
     const revalidate = () => {
       setAuthVersion((v) => v + 1);
@@ -304,7 +312,7 @@ export function AppShell() {
       window.removeEventListener("pageshow", revalidate);
       document.removeEventListener("visibilitychange", revalidate);
     };
-  }, [currentUser, isSignedIn, verificationRequired]);
+  }, [currentUser, isSignedIn, registrationStatus, verificationRequired]);
 
   /* ── Sign out handler ── */
   const clearToken = () => {

@@ -395,6 +395,68 @@ describe("app router", () => {
     expect(screen.getByRole("heading", { name: "Dashboard" })).toBeTruthy();
   });
 
+  it("does not poll registration status forever on /registration when no signed-in session exists", async () => {
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    apiGetMock.mockImplementation(async (path: string) => {
+      if (path === "/auth/registration-status") {
+        throw new ApiClientError({
+          message: "Bearer token is required",
+          statusCode: 401,
+          code: "AUTH_REQUIRED",
+        });
+      }
+      return defaultApiGet(path);
+    });
+
+    renderRouter("/registration");
+
+    await waitFor(() => {
+      expect(screen.getByText("Sign in or create an account first")).toBeTruthy();
+    });
+    expect(apiGetMock).toHaveBeenCalledTimes(1);
+    expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 10000);
+  });
+
+  it("does not keep retrying signed-in auth errors when registration status cannot confirm a recoverable hold", async () => {
+    const setIntervalSpy = vi.spyOn(window, "setInterval");
+    apiGetMock.mockImplementation(async (path: string) => {
+      if (path === "/dashboard/summary") {
+        throw new ApiClientError({
+          message: "Bearer token is required",
+          statusCode: 401,
+          code: "AUTH_REQUIRED",
+        });
+      }
+      if (path === "/users/me") {
+        throw new ApiClientError({
+          message: "Bearer token is required",
+          statusCode: 401,
+          code: "AUTH_REQUIRED",
+        });
+      }
+      if (path === "/auth/registration-status") {
+        throw new ApiClientError({
+          message: "Could not load registration status",
+          statusCode: 503,
+          code: "SERVICE_UNAVAILABLE",
+        });
+      }
+      return defaultApiGet(path);
+    });
+
+    act(() => {
+      window.sessionStorage.setItem("materials.auth-session", JSON.stringify({ accessToken: "token" }));
+    });
+
+    renderRouter("/");
+
+    await waitFor(() => {
+      expect(apiGetMock.mock.calls.filter(([path]) => path === "/users/me")).toHaveLength(1);
+      expect(apiGetMock.mock.calls.filter(([path]) => path === "/auth/registration-status")).toHaveLength(1);
+    });
+    expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 10000);
+  });
+
   it("redirects signed-in but unverified identities to /verify-email", async () => {
     apiGetMock.mockImplementation(async (path: string) => {
       if (path === "/users/me") {
@@ -487,7 +549,9 @@ describe("app router", () => {
     await waitFor(() => {
       expect(router.state.location.pathname).toBe("/");
     });
-    expect(screen.getByRole("heading", { name: "Dashboard" })).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Dashboard" })).toBeTruthy();
+    });
   });
 
   it("clears a stale signup error after switching to sign-in and logging in successfully", async () => {

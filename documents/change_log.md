@@ -2,6 +2,20 @@
 
 ### Changed
 
+- Fixed the frontend approval-refresh polling guards for registration-hold pages and the shared app shell.
+  - `/registration` now installs approval polling only for confirmed waiting states (`pending` and inactive previously `approved` identities)
+  - `AppShell` now revalidates signed-in sessions only when registration status confirms a recoverable approval hold, instead of retrying anonymous, rejected, and generic auth/backend error states forever
+  - added router regression coverage for anonymous `/registration` access and signed-in auth/status failure states so the 10-second retry loop does not regress
+
+### Tests
+
+- Frontend targeted Vitest:
+  - `npm run test -- tests/AppRouter.test.tsx`
+
+## 2026-04-06
+
+### Changed
+
 - Fixed the frontend registration holding flow so pending applicants re-check approval state without signing out.
   - `AppShell` now revalidates signed-in unmapped identities on window focus, page-show, and a short interval while they remain blocked on `/registration`
   - admin approval from another browser/session can now move the applicant into the app without requiring the tab to be closed and the session to be recreated

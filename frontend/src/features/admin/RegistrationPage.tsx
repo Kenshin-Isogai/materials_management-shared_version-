@@ -5,6 +5,7 @@ import { apiGet, apiSend } from "@/lib/api";
 import { ApiErrorNotice } from "@/components/ApiErrorNotice";
 import { StatusCallout } from "@/components/StatusCallout";
 import { presentApiError } from "@/lib/errorUtils";
+import { shouldPollRegistrationStatus } from "@/lib/registrationStatus";
 import type { RegistrationRequest, RegistrationStatus, UserRole } from "@/lib/types";
 
 const REQUESTABLE_ROLES: UserRole[] = ["viewer", "operator", "admin"];
@@ -36,7 +37,7 @@ export function RegistrationPage() {
   }, [navigate, status?.current_user]);
 
   useEffect(() => {
-    if (status?.current_user) return;
+    if (!shouldPollRegistrationStatus(status)) return;
 
     const revalidate = () => {
       void statusQuery.mutate();
@@ -52,7 +53,7 @@ export function RegistrationPage() {
       window.removeEventListener("pageshow", revalidate);
       document.removeEventListener("visibilitychange", revalidate);
     };
-  }, [status?.current_user, statusQuery]);
+  }, [status, statusQuery]);
 
   const title = useMemo(() => {
     switch (status?.state) {

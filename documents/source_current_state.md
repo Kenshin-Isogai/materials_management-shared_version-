@@ -185,7 +185,7 @@ Last updated: 2026-04-06 (JST)
   - once signed in, the header collapses to account status plus sign-out instead of leaving email/password inputs visible
   - signed-in but unverified users are redirected to `/verify-email` and blocked from reaching `/registration` or the normal app pages until verification is complete
   - successful login and verify-email flows now land on `/registration` first, and signed-in identities without an active app-user mapping remain there instead of briefly opening the dashboard first
-  - signed-in identities left on `/registration` now re-check approval state on focus/page show and at a short interval, so approval from another browser/session can unlock the app without requiring a manual sign-out cycle
+  - signed-in identities left on `/registration` now re-check approval state on focus/page show and at a short interval only while they are in a confirmed waiting state (`pending` or inactive `approved`), so approval from another browser/session can unlock the app without requiring a manual sign-out cycle while anonymous and hard-error states avoid background retry loops
   - anonymous users now see explicit dashboard sign-in guidance instead of a misleading backend-unavailable message, and the header exposes a dedicated registration-guidance link for first-time users
   - `/registration` now handles first-time self-service onboarding with `username`, required `display_name`, requested role, and optional memo
   - pending applicants only see registration-status UX; they do not access normal app pages until approved
