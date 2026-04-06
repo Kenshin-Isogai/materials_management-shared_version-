@@ -1,3 +1,4 @@
+import { Suspense, lazy } from "react";
 import {
   createBrowserRouter,
   createRoutesFromElements,
@@ -8,64 +9,85 @@ import {
 import { AppShell } from "@/app/layouts/AppShell";
 import { AuthLayout } from "@/app/layouts/AuthLayout";
 
-/* ── Feature modules ── */
-import { DashboardPage } from "@/features/dashboard/DashboardPage";
-import { ProjectsPage } from "@/features/projects/ProjectsPage";
-import { ProjectOverviewPage } from "@/features/projects/ProjectOverviewPage";
-import { PlanningBoardPage } from "@/features/projects/PlanningBoardPage";
-import { ProcurementPage } from "@/features/procurement/ProcurementPage";
-import { BomPage } from "@/features/bom/BomPage";
-import { ItemsPage } from "@/features/items/ItemsPage";
-import { ItemDetailPage } from "@/features/items/ItemDetailPage";
-import { LocationsPage } from "@/features/inventory/LocationsPage";
-import { SnapshotPage } from "@/features/inventory/SnapshotPage";
-import { InventoryPage as MovementsPage } from "@/features/inventory/MovementsPage";
-import { ReservationsPage } from "@/features/inventory/ReservationsPage";
-import { OrdersPage } from "@/features/orders/OrdersPage";
-import { ArrivalPage } from "@/features/orders/ArrivalPage";
-import { MasterPage } from "@/features/admin/MasterPage";
-import { UsersPage } from "@/features/admin/UsersPage";
-import { HistoryPage as AuditLogPage } from "@/features/admin/AuditLogPage";
-import { LoginPage } from "@/features/admin/LoginPage";
-import { RegistrationPage } from "@/features/admin/RegistrationPage";
-import { VerifyEmailPage } from "@/features/admin/VerifyEmailPage";
+function lazyNamed<TModule, TKey extends keyof TModule & string>(
+  loader: () => Promise<TModule>,
+  exportName: TKey,
+) {
+  return lazy(async () => {
+    const mod = await loader();
+    return { default: mod[exportName] as React.ComponentType };
+  });
+}
+
+function RouteFallback() {
+  return <div className="panel p-6 text-sm text-slate-500">Loading...</div>;
+}
+
+function routeElement(Component: React.ComponentType) {
+  return (
+    <Suspense fallback={<RouteFallback />}>
+      <Component />
+    </Suspense>
+  );
+}
+
+const DashboardPage = lazyNamed(() => import("@/features/dashboard/DashboardPage"), "DashboardPage");
+const ProjectsPage = lazyNamed(() => import("@/features/projects/ProjectsPage"), "ProjectsPage");
+const ProjectOverviewPage = lazyNamed(() => import("@/features/projects/ProjectOverviewPage"), "ProjectOverviewPage");
+const PlanningBoardPage = lazyNamed(() => import("@/features/projects/PlanningBoardPage"), "PlanningBoardPage");
+const ProcurementPage = lazyNamed(() => import("@/features/procurement/ProcurementPage"), "ProcurementPage");
+const BomPage = lazyNamed(() => import("@/features/bom/BomPage"), "BomPage");
+const ItemsPage = lazyNamed(() => import("@/features/items/ItemsPage"), "ItemsPage");
+const ItemDetailPage = lazyNamed(() => import("@/features/items/ItemDetailPage"), "ItemDetailPage");
+const LocationsPage = lazyNamed(() => import("@/features/inventory/LocationsPage"), "LocationsPage");
+const SnapshotPage = lazyNamed(() => import("@/features/inventory/SnapshotPage"), "SnapshotPage");
+const MovementsPage = lazyNamed(() => import("@/features/inventory/MovementsPage"), "InventoryPage");
+const ReservationsPage = lazyNamed(() => import("@/features/inventory/ReservationsPage"), "ReservationsPage");
+const OrdersPage = lazyNamed(() => import("@/features/orders/OrdersPage"), "OrdersPage");
+const ArrivalPage = lazyNamed(() => import("@/features/orders/ArrivalPage"), "ArrivalPage");
+const MasterPage = lazyNamed(() => import("@/features/admin/MasterPage"), "MasterPage");
+const UsersPage = lazyNamed(() => import("@/features/admin/UsersPage"), "UsersPage");
+const AuditLogPage = lazyNamed(() => import("@/features/admin/AuditLogPage"), "HistoryPage");
+const LoginPage = lazyNamed(() => import("@/features/admin/LoginPage"), "LoginPage");
+const RegistrationPage = lazyNamed(() => import("@/features/admin/RegistrationPage"), "RegistrationPage");
+const VerifyEmailPage = lazyNamed(() => import("@/features/admin/VerifyEmailPage"), "VerifyEmailPage");
 
 export const appRoutes = createRoutesFromElements(
   <>
     {/* Auth pages — standalone, no sidebar */}
     <Route element={<AuthLayout />}>
-      <Route path="/login" element={<LoginPage />} />
-      <Route path="/registration" element={<RegistrationPage />} />
-      <Route path="/verify-email" element={<VerifyEmailPage />} />
+      <Route path="/login" element={routeElement(LoginPage)} />
+      <Route path="/registration" element={routeElement(RegistrationPage)} />
+      <Route path="/verify-email" element={routeElement(VerifyEmailPage)} />
     </Route>
 
     {/* Main app — sidebar layout */}
     <Route element={<AppShell />}>
       {/* ── Planning ── */}
-      <Route path="/" element={<DashboardPage />} />
-      <Route path="/projects" element={<ProjectsPage />} />
-      <Route path="/projects/overview" element={<ProjectOverviewPage />} />
-      <Route path="/projects/board" element={<PlanningBoardPage />} />
-      <Route path="/projects/board/:projectId" element={<PlanningBoardPage />} />
-      <Route path="/procurement" element={<ProcurementPage />} />
-      <Route path="/bom" element={<BomPage />} />
+      <Route path="/" element={routeElement(DashboardPage)} />
+      <Route path="/projects" element={routeElement(ProjectsPage)} />
+      <Route path="/projects/overview" element={routeElement(ProjectOverviewPage)} />
+      <Route path="/projects/board" element={routeElement(PlanningBoardPage)} />
+      <Route path="/projects/board/:projectId" element={routeElement(PlanningBoardPage)} />
+      <Route path="/procurement" element={routeElement(ProcurementPage)} />
+      <Route path="/bom" element={routeElement(BomPage)} />
 
       {/* ── Inventory ── */}
-      <Route path="/items" element={<ItemsPage />} />
-      <Route path="/items/:itemId" element={<ItemDetailPage />} />
-      <Route path="/locations" element={<LocationsPage />} />
-      <Route path="/snapshot" element={<SnapshotPage />} />
-      <Route path="/movements" element={<MovementsPage />} />
-      <Route path="/reservations" element={<ReservationsPage />} />
+      <Route path="/items" element={routeElement(ItemsPage)} />
+      <Route path="/items/:itemId" element={routeElement(ItemDetailPage)} />
+      <Route path="/locations" element={routeElement(LocationsPage)} />
+      <Route path="/snapshot" element={routeElement(SnapshotPage)} />
+      <Route path="/movements" element={routeElement(MovementsPage)} />
+      <Route path="/reservations" element={routeElement(ReservationsPage)} />
 
       {/* ── Purchasing ── */}
-      <Route path="/orders" element={<OrdersPage />} />
-      <Route path="/arrival" element={<ArrivalPage />} />
+      <Route path="/orders" element={routeElement(OrdersPage)} />
+      <Route path="/arrival" element={routeElement(ArrivalPage)} />
 
       {/* ── Admin ── */}
-      <Route path="/master" element={<MasterPage />} />
-      <Route path="/users" element={<UsersPage />} />
-      <Route path="/history" element={<AuditLogPage />} />
+      <Route path="/master" element={routeElement(MasterPage)} />
+      <Route path="/users" element={routeElement(UsersPage)} />
+      <Route path="/history" element={routeElement(AuditLogPage)} />
 
       {/* ── Redirects for old routes ── */}
       <Route path="/dashboard" element={<Navigate to="/" replace />} />

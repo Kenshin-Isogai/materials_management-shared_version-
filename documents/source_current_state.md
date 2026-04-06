@@ -159,6 +159,10 @@ Last updated: 2026-04-06 (JST)
 ## 4. Frontend State
 
 - SPA navigation now boots through a React Router data router (`createBrowserRouter` + `RouterProvider`) with `AppShell` as the shared layout route.
+- Route pages now load lazily at the router boundary instead of being bundled into one eager startup import set.
+  - `frontend/src/app/router.tsx` wraps page elements in `React.Suspense`
+  - feature pages are loaded through named-export `lazy()` imports on first navigation
+  - production builds now emit per-page route chunks instead of a single oversized initial application chunk
 - Project-context navigation now avoids the removed standalone project-detail route.
   - project summary cards, item planning context, reservation links, and planning-board actions open the shared Projects editor via `/projects?edit=<project_id>`
   - board-specific navigation uses `/projects/board/:projectId`
@@ -166,6 +170,10 @@ Last updated: 2026-04-06 (JST)
 - The `/snapshot` inventory page now defaults to the current JST day with `net available` selected and auto-fetches the first snapshot on page open instead of waiting for a manual generate action.
 - The `/snapshot` inventory page now also exposes `Export CSV`, downloading the currently selected snapshot parameter set through `GET /api/inventory/snapshot/export.csv`.
   - the export action is shown only to `operator` / `admin` users so the frontend matches the backend operator-only export policy
+- Dashboard detail panels now use capped independent scroll regions.
+  - `Overdue Orders`, `Low Stock`, `Expiring Reservations`, and `Recent Activity` each use a `max-h-[24rem] overflow-y-auto` list region
+  - the dashboard no longer relies on unbounded panel growth for large result sets
+  - `Low Stock`, `Expiring Reservations`, and `Recent Activity` now render the full fetched list inside the capped scroll region instead of truncating to eight rows
 - Added `/users` as the dedicated shared-server user administration route.
   - supports browser-side create, edit, activate, and deactivate flows against the existing `/api/users` endpoints
   - the global shell now stores a bearer token and resolves the mapped current user through `/api/users/me`

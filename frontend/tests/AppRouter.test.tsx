@@ -332,7 +332,9 @@ describe("app router", () => {
     await waitFor(() => {
       expect(router.state.location.pathname).toBe("/verify-email");
     });
-    expect(screen.getByRole("heading", { name: "Verify your email" })).toBeTruthy();
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Verify your email" })).toBeTruthy();
+    });
   });
 
   it("sends successful login flows to /registration first", async () => {

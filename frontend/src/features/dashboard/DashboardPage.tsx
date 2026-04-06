@@ -15,6 +15,8 @@ type Summary = {
   pending_registration_requests: number;
 };
 
+const dashboardPanelScrollClass = "mt-3 max-h-[24rem] overflow-y-auto pr-1";
+
 function QuickActionCard({ to, icon, label, description }: { to: string; icon: string; label: string; description: string }) {
   return (
     <Link
@@ -121,30 +123,32 @@ export function DashboardPage() {
               {!filteredOverdueOrders.length ? (
                 <p className="mt-3 text-sm text-slate-500">None</p>
               ) : showOverdueTable ? (
-                <div className="mt-3 overflow-x-auto rounded-lg border border-slate-200">
-                  <table className="min-w-[560px] text-sm">
-                    <thead>
-                      <tr className="border-b border-slate-200 text-left text-slate-500">
-                        <th className="px-2 py-2">Order</th>
-                        <th className="px-2 py-2">Item</th>
-                        <th className="px-2 py-2">Supplier</th>
-                        <th className="px-2 py-2">Expected Arrival</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredOverdueOrders.map((order, idx) => (
-                        <tr key={`${String(order.order_id)}-${idx}`} className="border-b border-slate-100">
-                          <td className="px-2 py-2">#{String(order.order_id)}</td>
-                          <td className="px-2 py-2">{String(order.item_number)}</td>
-                          <td className="px-2 py-2">{String(order.supplier_name)}</td>
-                          <td className="px-2 py-2">{String(order.expected_arrival)}</td>
+                <div aria-label="Dashboard overdue orders list" className={dashboardPanelScrollClass}>
+                  <div className="overflow-x-auto rounded-lg border border-slate-200">
+                    <table className="min-w-[560px] text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-200 text-left text-slate-500">
+                          <th className="px-2 py-2">Order</th>
+                          <th className="px-2 py-2">Item</th>
+                          <th className="px-2 py-2">Supplier</th>
+                          <th className="px-2 py-2">Expected Arrival</th>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      </thead>
+                      <tbody>
+                        {filteredOverdueOrders.map((order, idx) => (
+                          <tr key={`${String(order.order_id)}-${idx}`} className="border-b border-slate-100">
+                            <td className="px-2 py-2">#{String(order.order_id)}</td>
+                            <td className="px-2 py-2">{String(order.item_number)}</td>
+                            <td className="px-2 py-2">{String(order.supplier_name)}</td>
+                            <td className="px-2 py-2">{String(order.expected_arrival)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               ) : (
-                <ul className="mt-3 space-y-2 text-sm">
+                <ul aria-label="Dashboard overdue orders list" className={`${dashboardPanelScrollClass} space-y-2 text-sm`}>
                   {filteredOverdueOrders.map((order, idx) => (
                     <li key={idx} className="rounded-lg bg-slate-50 px-3 py-2">
                       #{String(order.order_id)} {String(order.item_number)} ({String(order.supplier_name)}) -{" "}
@@ -157,8 +161,8 @@ export function DashboardPage() {
 
             <article className="panel p-4">
               <h2 className="font-display text-lg font-semibold">Low Stock</h2>
-              <ul className="mt-3 space-y-2 text-sm">
-                {data.low_stock_alerts.slice(0, 8).map((row, idx) => (
+              <ul aria-label="Dashboard low stock list" className={`${dashboardPanelScrollClass} space-y-2 text-sm`}>
+                {data.low_stock_alerts.map((row, idx) => (
                   <li key={idx} className="rounded-lg bg-slate-50 px-3 py-2">
                     {String(row.item_number)} - {String(row.quantity)}
                   </li>
@@ -169,8 +173,8 @@ export function DashboardPage() {
 
             <article className="panel p-4">
               <h2 className="font-display text-lg font-semibold">Expiring Reservations</h2>
-              <ul className="mt-3 space-y-2 text-sm">
-                {data.expiring_reservations.slice(0, 8).map((row, idx) => (
+              <ul aria-label="Dashboard expiring reservations list" className={`${dashboardPanelScrollClass} space-y-2 text-sm`}>
+                {data.expiring_reservations.map((row, idx) => (
                   <li key={idx} className="rounded-lg bg-slate-50 px-3 py-2">
                     {String(row.item_number ?? row.canonical_item_number ?? "")} - expires {String(row.expiration_date ?? "")}
                   </li>
@@ -181,8 +185,8 @@ export function DashboardPage() {
 
             <article className="panel p-4">
               <h2 className="font-display text-lg font-semibold">Recent Activity</h2>
-              <ul className="mt-3 space-y-2 text-sm">
-                {data.recent_activity.slice(0, 8).map((row, idx) => (
+              <ul aria-label="Dashboard recent activity list" className={`${dashboardPanelScrollClass} space-y-2 text-sm`}>
+                {data.recent_activity.map((row, idx) => (
                   <li key={idx} className="rounded-lg bg-slate-50 px-3 py-2">
                     <span className="font-medium">{String(row.action ?? row.event_type ?? "")}</span>
                     {row.entity_type ? <span className="text-slate-500"> · {String(row.entity_type)}</span> : null}

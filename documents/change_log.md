@@ -2,6 +2,35 @@
 
 ### Changed
 
+- Reduced the frontend startup bundle by converting route pages to lazy-loaded chunks.
+  - `frontend/src/app/router.tsx` now resolves feature pages through named-export `lazy()` imports wrapped in `Suspense`
+  - the initial production `index` JavaScript bundle dropped below Vite's 500 kB chunk-size warning threshold
+  - router tests were adjusted to wait for lazy route rendering where needed
+
+### Tests
+
+- Frontend targeted Vitest:
+  - `npm run test -- tests/AppRouter.test.tsx`
+- Frontend production build:
+  - `npm run build`
+
+## 2026-04-06
+
+### Changed
+
+- Adjusted the Dashboard detail panels so each list scrolls independently inside its card.
+  - `Overdue Orders`, `Low Stock`, `Expiring Reservations`, and `Recent Activity` now use a capped `max-h-[24rem] overflow-y-auto` region
+  - `Low Stock`, `Expiring Reservations`, and `Recent Activity` no longer truncate at eight rows; they render the full fetched dataset inside the scroll region
+
+### Tests
+
+- Frontend targeted Vitest:
+  - `npm run test -- tests/DashboardPage.test.tsx`
+
+## 2026-04-06
+
+### Changed
+
 - Refactored the frontend Orders page so feature-local state is split by responsibility instead of accumulating in one parent component.
   - `OrdersPage.tsx` now keeps shared SWR fetches plus the import-preview workflow only
   - purchase-order-line browsing/edit state moved into `OrderLinesSection`
