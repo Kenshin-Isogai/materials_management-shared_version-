@@ -1224,7 +1224,6 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         file: UploadFile = File(...),
         supplier_id: int | None = Form(default=None),
         supplier_name: str | None = Form(default=None),
-        default_order_date: str | None = Form(default=None),
         conn= db,
     ):
         content = await file.read()
@@ -1233,7 +1232,6 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
             supplier_id=supplier_id,
             supplier_name=supplier_name,
             content=content,
-            default_order_date=default_order_date,
             source_name=file.filename or "order_import.csv",
         )
         return ok(result)
@@ -1243,7 +1241,6 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         file: UploadFile = File(...),
         supplier_id: int | None = Form(default=None),
         supplier_name: str | None = Form(default=None),
-        default_order_date: str | None = Form(default=None),
         row_overrides: str | None = Form(default=None),
         alias_saves: str | None = Form(default=None),
         unlock_purchase_orders: str | None = Form(default=None),
@@ -1256,7 +1253,6 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
                 supplier_id=supplier_id,
                 supplier_name=supplier_name,
                 content=content,
-                default_order_date=default_order_date,
                 source_name=file.filename or "order_import.csv",
                 missing_output_dir=None,
                 row_overrides=_parse_optional_json_form(row_overrides, "row_overrides"),

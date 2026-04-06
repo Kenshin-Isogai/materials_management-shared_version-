@@ -1299,12 +1299,12 @@ Compatibility rule:
 | quantity | Yes | Integer > 0 |
 | quotation_number | Yes | String |
 | issue_date | Yes | YYYY-MM-DD |
-| order_date | Conditional* | YYYY-MM-DD |
+| order_date | No | YYYY-MM-DD |
 | expected_arrival | No | YYYY-MM-DD |
 | quotation_document_url | Yes | Normalized non-empty document reference string |
 | purchase_order_document_url | No | Normalized non-empty document reference string |
 
-*Required unless shared order date provided.
+If `order_date` is blank, the backend falls back to the import-day JST date.
 
 Browser/shared-server contract:
 - `supplier` is required on every order-import CSV row; browser flows should not rely on supplier folder names or a top-level supplier form field

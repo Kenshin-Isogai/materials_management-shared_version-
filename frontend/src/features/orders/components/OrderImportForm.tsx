@@ -21,8 +21,6 @@ import {
 export type OrderImportFormProps = {
   files: File[];
   setFiles: (files: File[]) => void;
-  defaultDate: string;
-  setDefaultDate: (date: string) => void;
   loading: boolean;
   message: string;
   latestGeneratedArtifact: GeneratedArtifact | null;
@@ -52,8 +50,6 @@ export type OrderImportFormProps = {
 export function OrderImportForm({
   files,
   setFiles,
-  defaultDate,
-  setDefaultDate,
   loading,
   message,
   latestGeneratedArtifact,
@@ -124,15 +120,6 @@ export function OrderImportForm({
         <form className="grid gap-3 md:grid-cols-3" onSubmit={onPreviewImport}>
           <input
             className="input"
-            type="date"
-            value={defaultDate}
-            onChange={(e) => {
-              setDefaultDate(e.target.value);
-              onResetImportPreview();
-            }}
-          />
-          <input
-            className="input"
             type="file"
             accept=".csv,text/csv"
             multiple
@@ -142,14 +129,14 @@ export function OrderImportForm({
             }}
             required
           />
-          <button className="button" disabled={loading} type="submit">
+          <button className="button md:justify-self-start" disabled={loading} type="submit">
             Preview Import
           </button>
         </form>
         <p className="mt-2 text-xs text-slate-500">
           {files.length > 0
             ? `${files.length} file(s) selected`
-            : "Select one or more order CSV files. Supplier must be present in every row."}
+            : "Select one or more order CSV files. Supplier must be present in every row, and any needed order date should come from the CSV."}
         </p>
         {message && (
           <div className="mt-3 space-y-2">

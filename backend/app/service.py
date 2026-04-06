@@ -7644,7 +7644,6 @@ def preview_orders_import_from_rows(
     supplier_id: int | None = None,
     supplier_name: str | None = None,
     rows: list[dict[str, str]],
-    default_order_date: str | None = None,
     source_name: str = "order_import.csv",
 ) -> dict[str, Any]:
     default_supplier_context = None
@@ -7654,7 +7653,6 @@ def preview_orders_import_from_rows(
             supplier_id=supplier_id,
             supplier_name=supplier_name,
         )
-    normalized_default_date = normalize_optional_date(default_order_date, "default_order_date")
     preview_rows: list[dict[str, Any]] = []
     row_supplier_contexts: list[dict[str, Any]] = []
     preview_candidate_cache: dict[int | None, list[dict[str, Any]]] = {}
@@ -7722,7 +7720,7 @@ def preview_orders_import_from_rows(
         )
         order_date = normalize_optional_date(row.get("order_date"), f"order_date (row {row_number})")
         if order_date is None:
-            order_date = normalized_default_date or today_jst()
+            order_date = today_jst()
         expected_arrival = normalize_optional_date(
             row.get("expected_arrival"),
             f"expected_arrival (row {row_number})",
@@ -7829,7 +7827,6 @@ def _process_order_rows_for_import(
     supplier_id: int | None = None,
     supplier_name: str | None = None,
     rows: list[dict[str, str]],
-    default_order_date: str | None = None,
     row_overrides: dict[int, dict[str, int]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     resolved: list[dict[str, Any]] = []
@@ -7842,7 +7839,6 @@ def _process_order_rows_for_import(
             supplier_id=supplier_id,
             supplier_name=supplier_name,
         )
-    normalized_default_date = normalize_optional_date(default_order_date, "default_order_date")
     for idx, row in enumerate(rows, start=2):
         if not any(str(value or "").strip() for value in row.values()):
             continue
@@ -7928,7 +7924,7 @@ def _process_order_rows_for_import(
             continue
         order_date = normalize_optional_date(row.get("order_date"), f"order_date (row {idx})")
         if order_date is None:
-            order_date = normalized_default_date or today_jst()
+            order_date = today_jst()
         quotation_number = require_non_empty(
             str(row.get("quotation_number", "")),
             f"quotation_number (row {idx})",
@@ -7963,7 +7959,6 @@ def import_orders_from_rows(
     supplier_id: int | None = None,
     supplier_name: str | None = None,
     rows: list[dict[str, str]],
-    default_order_date: str | None = None,
     source_name: str = "order_import.csv",
     missing_output_dir: str | Path | None = None,
     row_overrides: dict[str | int, Any] | None = None,
@@ -7993,7 +7988,6 @@ def import_orders_from_rows(
         supplier_id=supplier_id,
         supplier_name=supplier_name,
         rows=rows,
-        default_order_date=default_order_date,
         row_overrides=normalized_overrides,
     )
     if missing:
@@ -8327,7 +8321,6 @@ def import_orders_from_content(
     supplier_id: int | None = None,
     supplier_name: str | None = None,
     content: bytes,
-    default_order_date: str | None = None,
     source_name: str = "order_import.csv",
     missing_output_dir: str | Path | None = None,
     row_overrides: dict[str | int, Any] | None = None,
@@ -8341,7 +8334,6 @@ def import_orders_from_content(
         supplier_id=supplier_id,
         supplier_name=supplier_name,
         rows=rows,
-        default_order_date=default_order_date,
         source_name=source_name,
         missing_output_dir=missing_output_dir,
         row_overrides=row_overrides,
@@ -8357,7 +8349,6 @@ def import_orders_from_content_with_job(
     supplier_id: int | None = None,
     supplier_name: str | None = None,
     content: bytes,
-    default_order_date: str | None = None,
     source_name: str = "order_import.csv",
     missing_output_dir: str | Path | None = None,
     row_overrides: dict[str | int, Any] | None = None,
@@ -8376,7 +8367,6 @@ def import_orders_from_content_with_job(
         request_metadata={
             "supplier_id": supplier_id,
             "supplier_name": supplier_name,
-            "default_order_date": default_order_date,
             "row_overrides": row_overrides or None,
             "alias_saves": alias_saves or None,
             "unlock_purchase_orders": unlock_purchase_orders or None,
@@ -8389,7 +8379,6 @@ def import_orders_from_content_with_job(
             supplier_id=supplier_id,
             supplier_name=supplier_name,
             content=content,
-            default_order_date=default_order_date,
             source_name=source_name,
             missing_output_dir=missing_output_dir,
             row_overrides=row_overrides,
@@ -8918,7 +8907,6 @@ def redo_orders_import_job(conn: sqlite3.Connection, import_job_id: int) -> dict
         supplier_id=request_metadata.get("supplier_id"),
         supplier_name=request_metadata.get("supplier_name"),
         content=source_text.encode("utf-8"),
-        default_order_date=request_metadata.get("default_order_date"),
         source_name=str(job_row["source_name"]),
         missing_output_dir=None,
         row_overrides=request_metadata.get("row_overrides"),
@@ -8944,7 +8932,6 @@ def preview_orders_import_from_content(
     supplier_id: int | None = None,
     supplier_name: str | None = None,
     content: bytes,
-    default_order_date: str | None = None,
     source_name: str = "order_import.csv",
 ) -> dict[str, Any]:
     rows = _load_csv_rows_from_content(content)
@@ -8953,7 +8940,6 @@ def preview_orders_import_from_content(
         supplier_id=supplier_id,
         supplier_name=supplier_name,
         rows=rows,
-        default_order_date=default_order_date,
         source_name=source_name,
     )
 
@@ -8963,7 +8949,6 @@ def import_orders_from_csv_path(
     *,
     supplier_name: str,
     csv_path: str | Path,
-    default_order_date: str | None = None,
     missing_output_dir: str | Path | None = None,
 ) -> dict[str, Any]:
     rows = _load_csv_rows_from_path(csv_path)
@@ -8971,7 +8956,6 @@ def import_orders_from_csv_path(
         conn,
         supplier_name=supplier_name,
         rows=rows,
-        default_order_date=default_order_date,
         source_name=Path(csv_path).name,
         missing_output_dir=missing_output_dir,
     )
@@ -8983,7 +8967,6 @@ def _import_unregistered_order_csv_file(
     roots: OrderImportRoots,
     csv_path: Path,
     supplier_name: str,
-    default_order_date: str | None = None,
     items_unregistered_root: Path | None = None,
 ) -> dict[str, Any]:
     unregistered_items_root = items_unregistered_root if items_unregistered_root else ITEMS_IMPORT_UNREGISTERED_ROOT
@@ -8992,7 +8975,6 @@ def _import_unregistered_order_csv_file(
         conn,
         supplier_name=supplier_name,
         rows=rows,
-        default_order_date=default_order_date,
         source_name=f"{_safe_filename_component(supplier_name)}__{csv_path.name}",
         missing_output_dir=unregistered_items_root,
     )

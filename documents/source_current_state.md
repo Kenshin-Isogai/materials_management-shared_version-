@@ -216,7 +216,7 @@ Last updated: 2026-04-06 (JST)
   - `GET /api/purchase-order-lines/import-jobs` lists `import_type='orders'` jobs
   - `GET /api/purchase-order-lines/import-jobs/{import_job_id}` returns row-level effects such as `order_created`, `order_missing_item`, and `order_duplicate_quotation`
   - `POST /api/purchase-order-lines/import-jobs/{import_job_id}/undo` safely removes imported orders and restores/deletes related quotations and supplier aliases when current state still matches the recorded snapshots
-  - `POST /api/purchase-order-lines/import-jobs/{import_job_id}/redo` replays the original CSV plus stored request metadata such as `supplier_id`, `supplier_name`, `default_order_date`, `row_overrides`, and `alias_saves`
+  - `POST /api/purchase-order-lines/import-jobs/{import_job_id}/redo` replays the original CSV plus stored request metadata such as `supplier_id`, `supplier_name`, `row_overrides`, and `alias_saves`
   - order import jobs now persist `request_metadata` in `import_jobs`, so preview-confirm decisions remain replayable and operator-auditable
   - job status uses `ok` / `partial` / `error`, while the immediate import response can still return `status="missing_items"`
 - Generated missing-item register CSVs are now browser-downloadable managed artifacts.
@@ -386,6 +386,7 @@ Last updated: 2026-04-06 (JST)
   - Orders and Arrival are now separate user questions: purchase traceability vs. incoming-schedule operations
 - Orders page loads all pages of the purchase-order-lines, quotations, and purchase-orders APIs for this screen so header counts remain correct even when older linked rows fall outside the first API page.
 - Orders page mutation flows (manual import, arrival processing, line edits, quotation edits, purchase-order edits) revalidate purchase-order-lines, quotations, and purchase-orders datasets together to avoid stale header/line counts.
+- Orders page `Import Purchase Order Lines CSV` no longer shows a shared order-date input; operators are expected to provide `order_date` in the CSV when needed, and the preview/import request now relies on per-row CSV values only.
 - The line pane now uses dense card rows plus a side detail panel instead of a long single-column field stack, reducing vertical scroll cost when each line carries many attributes.
 - Quotation and purchase-order browsing now use searchable card lists plus dedicated detail panes rather than the older `Imported Quotations` expandable table / `View Orders` workflow.
 - Item List now includes a row-level `Flow` action that opens an item-specific increase/decrease timeline (when/how many/why) combining transaction logs, expected order arrivals, and active reservation deadlines.

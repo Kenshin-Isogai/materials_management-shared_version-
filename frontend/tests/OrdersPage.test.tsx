@@ -680,6 +680,96 @@ describe("OrdersPage", () => {
     });
   });
 
+  it("does not show or submit a shared order-date field for CSV import", async () => {
+    const user = userEvent.setup();
+    apiSendFormMock.mockImplementation(async (path: string, form: FormData) => {
+      if (path === "/purchase-order-lines/import-preview") {
+        expect(form.get("default_order_date")).toBeNull();
+        return {
+          can_auto_accept: true,
+          blocking_errors: [],
+          duplicate_quotation_numbers: [],
+          locked_purchase_orders: [],
+          source_name: "orders.csv",
+          supplier: {
+            supplier_id: null,
+            supplier_name: "Per-row supplier",
+            exists: false,
+            mode: "per_row",
+          },
+          thresholds: {
+            auto_accept: 100,
+            review: 80,
+          },
+          summary: {
+            total_rows: 1,
+            exact: 1,
+            high_confidence: 0,
+            needs_review: 0,
+            unresolved: 0,
+          },
+          rows: [
+            {
+              row: 1,
+              source_index: 0,
+              source_name: "orders.csv",
+              supplier_id: 3,
+              supplier_name: "オーテックス",
+              item_number: "AOMO3080-125",
+              quantity: 15,
+              purchase_order_number: "PO-41",
+              quotation_number: "0000001809",
+              issue_date: "2025-10-20",
+              order_date: "2025-10-21",
+              expected_arrival: "2025-11-30",
+              quotation_document_url: "https://example.sharepoint.com/sites/procurement/0000001809",
+              purchase_order_document_url: "https://example.sharepoint.com/sites/procurement/po-41",
+              status: "exact",
+              confidence_score: 100,
+              warnings: [],
+              candidates: [],
+              suggested_match: {
+                item_id: 1,
+                canonical_item_number: "AOMO3080-125",
+                manufacturer_name: "AUTEX",
+                item_number: "AOMO3080-125",
+                units_per_order: 1,
+                display_label: "AOMO3080-125",
+                value_text: "AOMO3080-125",
+                summary: "Autex test optic",
+                match_source: "exact_item_number",
+                match_reason: "Exact item-number match",
+                confidence_score: 100,
+              },
+              order_amount: 15,
+            },
+          ],
+        };
+      }
+      throw new Error(`Unexpected apiSendForm path: ${path}`);
+    });
+
+    renderPage();
+
+    expect(document.querySelector('input[type="date"]')).toBeNull();
+    expect(
+      screen.getByText(/any needed order date should come from the CSV/i),
+    ).toBeTruthy();
+
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement | null;
+    expect(fileInput).toBeTruthy();
+    const file = new File(["supplier,item_number,quantity\nオーテックス,AOMO3080-125,15\n"], "orders.csv", {
+      type: "text/csv",
+    });
+    await user.upload(fileInput as HTMLInputElement, file);
+
+    fireEvent.submit(screen.getByRole("button", { name: "Preview Import" }).closest("form") as HTMLFormElement);
+
+    await waitFor(() => {
+      expect(apiSendFormMock).toHaveBeenCalledWith("/purchase-order-lines/import-preview", expect.any(FormData));
+    });
+  });
+
   it("highlights item number and quantity in the import preview raw input", async () => {
     const user = userEvent.setup();
     apiSendFormMock.mockImplementation(async (path: string) => {

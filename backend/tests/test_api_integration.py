@@ -1927,7 +1927,7 @@ def test_order_import_returns_missing_item_details(client, database_url):
     response = client.post(
         "/api/purchase-order-lines/import",
         files={"file": ("orders.csv", output.getvalue().encode("utf-8"), "text/csv")},
-        data={"supplier_name": "SupplierMissing", "default_order_date": "2026-02-22"},
+        data={"supplier_name": "SupplierMissing"},
     )
     assert response.status_code == 200
     data = response.json()["data"]

@@ -461,10 +461,10 @@ export function ArrivalPage() {
                   {timelineGroups.length === 0 ? (
                     <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-500">No dated arrivals match the current filters.</p>
                   ) : (
-                    <div className="space-y-4">
+                    <div className="max-h-[36rem] space-y-4 overflow-y-auto pr-1">
                       {timelineGroups.map((group) => (
                         <div key={group.date} className="space-y-2">
-                          <div className="flex items-center justify-between gap-3">
+                          <div className="sticky top-0 z-10 flex items-center justify-between gap-3 bg-white/95 py-1 backdrop-blur-sm">
                             <h3 className="text-sm font-semibold text-slate-900">{formatDate(group.date)}</h3>
                             <span className="text-xs text-slate-500">{group.rows.length} lines</span>
                           </div>
@@ -487,7 +487,7 @@ export function ArrivalPage() {
                   {noEtaRows.length === 0 ? (
                     <p className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-500">All remaining open lines have an ETA.</p>
                   ) : (
-                    <div className="space-y-2">
+                    <div className="max-h-[24rem] space-y-2 overflow-y-auto pr-1">
                       {noEtaRows.map((row) => (
                         <ArrivalRowCard key={row.order_id} row={row} selected={row.order_id === selectedOrderId} onSelect={setSelectedOrderId} />
                       ))}

@@ -2,6 +2,21 @@
 
 ### Changed
 
+- Removed the shared date input from the frontend `Import Purchase Order Lines CSV` form on the Orders page.
+  - the UI now treats `order_date` as CSV-driven metadata instead of asking the operator for an extra ambiguous date outside the file
+  - preview/import requests from the Orders page no longer append `default_order_date`
+  - backend order-import preview/import/redo paths no longer accept or persist `default_order_date`; missing row-level `order_date` values now fall back to the import-day JST date only
+  - added frontend regression coverage to lock in the CSV-only import form behavior
+
+### Tests
+
+- Frontend targeted Vitest:
+  - `npm run test -- tests/OrdersPage.test.tsx`
+
+## 2026-04-06
+
+### Changed
+
 - Fixed the frontend approval-refresh polling guards for registration-hold pages and the shared app shell.
   - `/registration` now installs approval polling only for confirmed waiting states (`pending` and inactive previously `approved` identities)
   - `AppShell` now revalidates signed-in sessions only when registration status confirms a recoverable approval hold, instead of retrying anonymous, rejected, and generic auth/backend error states forever

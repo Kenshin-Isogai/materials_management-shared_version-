@@ -32,7 +32,6 @@ import { QuotationSection } from "@/features/orders/components/QuotationSection"
 import { PurchaseOrdersSection } from "@/features/orders/components/PurchaseOrdersSection";
 
 export function OrdersPage() {
-  const [defaultDate, setDefaultDate] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [message, setMessage] = useState<string>("");
   const [latestGeneratedArtifact, setLatestGeneratedArtifact] = useState<GeneratedArtifact | null>(null);
@@ -161,7 +160,6 @@ export function OrdersPage() {
       for (const file of files) {
         const form = new FormData();
         form.append("file", file);
-        if (defaultDate.trim()) form.append("default_order_date", defaultDate.trim());
         previews.push(await apiSendForm<OrderImportPreview>("/purchase-order-lines/import-preview", form));
       }
       const result = mergeOrderImportPreviews(previews);
@@ -247,7 +245,6 @@ export function OrdersPage() {
 
         const form = new FormData();
         form.append("file", file);
-        if (defaultDate.trim()) form.append("default_order_date", defaultDate.trim());
         if (Object.keys(rowOverrides).length > 0) {
           form.append("row_overrides", JSON.stringify(rowOverrides));
         }
@@ -318,8 +315,6 @@ export function OrdersPage() {
       <OrderImportForm
         files={files}
         setFiles={setFiles}
-        defaultDate={defaultDate}
-        setDefaultDate={setDefaultDate}
         loading={loading}
         message={message}
         latestGeneratedArtifact={latestGeneratedArtifact}
