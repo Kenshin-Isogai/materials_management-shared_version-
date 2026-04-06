@@ -195,6 +195,7 @@ Last updated: 2026-04-06 (JST)
 - Shared-server browser CSV workflows are now preview-first on the main Items and Orders pages.
   - Items page uses one `General Items CSV Import` surface for regular item CSVs and order-generated missing-item CSVs
   - generated missing-item CSVs are downloaded from Orders and then edited/re-imported through the normal Items preview/import flow
+  - Bulk Item Entry keeps free-text manufacturer and alias-supplier entry, but now also suggests registered manufacturer/supplier names through browser-native datalist options to reduce normalization drift
 - Arrival page timeline view now keeps the `Overdue` list in its own capped scroll region, so large overdue sets do not force the whole page column to grow before users can inspect the detail pane.
 - Orders manual CSV import and quotation maintenance now use external document URLs as the primary contract.
   - `supplier` is required on every manual order CSV row

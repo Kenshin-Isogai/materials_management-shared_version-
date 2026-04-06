@@ -99,6 +99,16 @@ export type Item = {
   description?: string | null;
 };
 
+export type Manufacturer = {
+  manufacturer_id: number;
+  name: string;
+};
+
+export type Supplier = {
+  supplier_id: number;
+  name: string;
+};
+
 export type InventoryRow = {
   ledger_id: number;
   item_id: number;

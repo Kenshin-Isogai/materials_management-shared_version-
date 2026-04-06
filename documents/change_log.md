@@ -2,6 +2,19 @@
 
 ### Changed
 
+- Added registered-name suggestions to the frontend `Bulk Item Entry` manufacturer and alias-supplier inputs.
+  - both fields remain free-text so new names can still be entered inline
+  - existing `manufacturers` and `suppliers` are now exposed through browser-native suggestion lists to reduce normalization mistakes during bulk entry
+
+### Tests
+
+- Frontend targeted Vitest:
+  - `npm run test -- tests/ItemsPage.test.tsx`
+
+## 2026-04-06
+
+### Changed
+
 - Reduced the frontend startup bundle by converting route pages to lazy-loaded chunks.
   - `frontend/src/app/router.tsx` now resolves feature pages through named-export `lazy()` imports wrapped in `Suspense`
   - the initial production `index` JavaScript bundle dropped below Vite's 500 kB chunk-size warning threshold

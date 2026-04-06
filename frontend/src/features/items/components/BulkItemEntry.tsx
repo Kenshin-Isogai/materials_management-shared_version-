@@ -7,6 +7,8 @@ export interface BulkItemEntryProps {
   bulkRows: ItemEntryRow[];
   setBulkRows: Dispatch<SetStateAction<ItemEntryRow[]>>;
   itemOptions: Item[];
+  manufacturerOptions: string[];
+  supplierOptions: string[];
   submitting: boolean;
   entryMessage: string;
   onCreateBulk: () => void;
@@ -16,6 +18,8 @@ export function BulkItemEntry({
   bulkRows,
   setBulkRows,
   itemOptions,
+  manufacturerOptions,
+  supplierOptions,
   submitting,
   entryMessage,
   onCreateBulk,
@@ -34,6 +38,16 @@ export function BulkItemEntry({
     <>
       <section>
         <div className="panel space-y-3 p-4">
+          <datalist id="bulk-item-manufacturer-options">
+            {manufacturerOptions.map((name) => (
+              <option key={name} value={name} />
+            ))}
+          </datalist>
+          <datalist id="bulk-item-supplier-options">
+            {supplierOptions.map((name) => (
+              <option key={name} value={name} />
+            ))}
+          </datalist>
           <div className="flex items-center justify-between">
             <h2 className="font-display text-lg font-semibold">Bulk Item Entry</h2>
             <button
@@ -89,6 +103,7 @@ export function BulkItemEntry({
                         value={row.manufacturer_name}
                         onChange={(e) => updateBulkRow(idx, { manufacturer_name: e.target.value })}
                         placeholder="Thorlabs"
+                        list="bulk-item-manufacturer-options"
                         disabled={row.row_type === "alias"}
                       />
                     </td>
@@ -98,6 +113,7 @@ export function BulkItemEntry({
                         value={row.supplier}
                         onChange={(e) => updateBulkRow(idx, { supplier: e.target.value })}
                         placeholder="Supplier for alias"
+                        list="bulk-item-supplier-options"
                         disabled={row.row_type !== "alias"}
                       />
                     </td>
@@ -167,7 +183,7 @@ export function BulkItemEntry({
             </table>
           </div>
           <p className="text-xs text-slate-500">
-            Alias supplier means the supplier namespace where the ordered SKU alias is defined.
+            Manufacturer and Alias Supplier accept free text, and the browser will also suggest existing registered names.
           </p>
           <button className="button w-full" disabled={submitting} onClick={onCreateBulk}>
             Submit Bulk Rows
