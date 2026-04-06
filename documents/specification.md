@@ -64,30 +64,46 @@ When statements conflict, interpret in this order:
 - Transaction log is append-only for full audit trail
 - Should satisfy Third Normal Form (3NF) at least to minimize redundancy and update anomalies
 
-### **2.2 Table Summary**
+### **2.2 Table Summary (Current Implementation)**
 
-| Table | Purpose | Key Fields |
-|-------|---------|------------|
-| `manufacturers` | Manufacturer registry | manufacturer_id, name |
-| `suppliers` | Supplier registry (Vendors) | supplier_id, name |
-| `items_master` | Component definitions | item_id, item_number, manufacturer_id |
-| `inventory_ledger` | Current inventory by location | item_id, location, quantity |
-| `quotations` | Quotation headers | quotation_id, quotation_number |
-| `purchase_orders` | Purchase order headers | purchase_order_id, supplier_id |
-| `orders` | Purchase order lines | order_id, purchase_order_id, item_id |
-| `external_item_mirrors` | Future external item mirror cache | mirror_id, source_system, external_item_id |
-| `external_order_mirrors` | Future external order mirror cache | mirror_id, source_system, external_order_id |
-| `local_order_splits` | Local split metadata for externally reconcilable order operations | split_id, root_order_id, child_order_id |
-| `supplier_item_aliases` | Supplier SKU alias mappings | alias_id, supplier_id, ordered_item_number |
-| `category_aliases` | Category soft-merge aliases | alias_category, canonical_category |
-| `transaction_log` | All inventory operations | log_id, operation_type, item_id |
-| `reservations` | Structured reservations | reservation_id, item_id, purpose |
-| `projects` | Project definitions | project_id, name, status |
-| `project_requirements` | Project component needs | requirement_id, project_id |
-| `procurement_batches` | Cross-project procurement batches | batch_id, title, status |
-| `procurement_lines` | Procurement line items | line_id, batch_id, item_id |
+| Domain | Table | Purpose | Key Fields |
+|-------|-------|---------|------------|
+| Auth | `users` | Application user master | user_id, username, role, is_active |
+| Auth | `registration_requests` | Self-registration review queue and history | request_id, email, username, status |
+| Master | `manufacturers` | Manufacturer registry | manufacturer_id, name |
+| Master | `suppliers` | Supplier registry (vendors) | supplier_id, name |
+| Master | `items_master` | Component definitions + ownership boundary | item_id, item_number, source_system |
+| Master | `supplier_item_aliases` | Supplier SKU alias mappings | alias_id, supplier_id, ordered_item_number |
+| Master | `category_aliases` | Category soft-merge aliases | alias_category, canonical_category |
+| Inventory | `inventory_ledger` | Current inventory by location | ledger_id, item_id, location, quantity |
+| Inventory | `transaction_log` | Inventory operation audit log + undo chain | log_id, operation_type, item_id |
+| Inventory | `reservations` | Reservation header/lifecycle | reservation_id, item_id, status |
+| Inventory | `reservation_allocations` | Per-location reservation allocations | allocation_id, reservation_id, item_id, location |
+| Purchasing | `quotations` | Quotation headers | quotation_id, supplier_id, quotation_number |
+| Purchasing | `purchase_orders` | Purchase-order headers | purchase_order_id, supplier_id, purchase_order_number |
+| Purchasing | `orders` | Purchase-order lines | order_id, purchase_order_id, item_id |
+| Purchasing | `order_lineage_events` | ETA/split lineage events | event_id, event_type, source_purchase_order_line_id |
+| Planning | `projects` | Project definitions | project_id, name, status |
+| Planning | `project_requirements` | Project requirement rows | requirement_id, project_id, item_id / assembly_id |
+| Planning | `assemblies` | Assembly templates | assembly_id, name |
+| Planning | `assembly_components` | Assembly BOM rows | assembly_id, item_id |
+| Planning | `location_assembly_usage` | Assembly deployment state by location | usage_id, location, assembly_id |
+| Procurement | `procurement_batches` | Cross-project procurement batches | batch_id, title, status |
+| Procurement | `procurement_lines` | Procurement batch line items | line_id, batch_id, item_id |
+| Procurement (compat) | `rfq_batches` | Legacy RFQ batch compatibility | rfq_id, project_id |
+| Procurement (compat) | `rfq_lines` | Legacy RFQ line compatibility | line_id, rfq_id, item_id |
+| Procurement (compat) | `purchase_candidates` | Legacy shortage candidate compatibility | candidate_id, source_type, item_id |
+| Import/Audit | `import_jobs` | Import job headers (items/orders) | import_job_id, import_type, status |
+| Import/Audit | `import_job_effects` | Row-level import effects for undo/redo safety | effect_id, import_job_id, effect_type |
+| Artifacts | `generated_artifacts` | Managed downloadable generated files | artifact_id, artifact_type, filename |
+| External Sync Foundation | `external_item_mirrors` | Future external item mirror cache | mirror_id, source_system, external_item_id |
+| External Sync Foundation | `external_order_mirrors` | Future external order mirror cache | mirror_id, source_system, external_order_id |
+| External Sync Foundation | `local_order_splits` | Local split overlay metadata | split_id, root_order_id, child_order_id |
 
-### **2.3 ER Diagram (Mermaid)**
+### **2.3 ER Diagram (Core Domain, Mermaid)**
+
+The ER diagram below focuses on core purchasing/inventory/planning entities.
+Authentication (`users`, `registration_requests`), import/artifact operational tables (`import_jobs`, `import_job_effects`, `generated_artifacts`), and external-sync foundation tables are documented in Section 3.
 
 ```mermaid
 erDiagram
@@ -614,6 +630,173 @@ Maps raw category names to canonical category names for soft-merge behavior.
 - `alias_category` and `canonical_category` cannot be identical.
 - Soft-merge does not rewrite `items_master.category`; resolution is applied at read time.
 - Removing an alias restores original category behavior immediately.
+
+### **3.19 users**
+
+Stores active application users resolved from verified bearer-token identity.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| user_id | INTEGER | PK, AUTOINCREMENT | Internal user ID |
+| username | TEXT | UNIQUE, NOT NULL | Login/display handle used in operations |
+| display_name | TEXT | NOT NULL | UI-facing user display name |
+| role | TEXT | NOT NULL | `admin`, `operator`, `viewer` |
+| is_active | BOOLEAN | NOT NULL, default TRUE | Soft activation flag |
+| email | TEXT | Nullable, unique when present (case-insensitive) | Verified identity email mapping |
+| identity_provider | TEXT | Nullable | OIDC provider label |
+| external_subject | TEXT | Nullable | OIDC `sub` mapping |
+| hosted_domain | TEXT | Nullable | Optional domain mapping boundary |
+| created_at | TIMESTAMP | NOT NULL | Creation timestamp |
+| updated_at | TIMESTAMP | Nullable | Last update timestamp |
+
+### **3.20 registration_requests**
+
+Stores pending/approved/rejected self-service registration requests separately from `users`.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| request_id | INTEGER | PK, AUTOINCREMENT | Internal request ID |
+| email | TEXT | NOT NULL | Verified token email |
+| username | TEXT | NOT NULL | Requested username |
+| display_name | TEXT | NOT NULL | Requested display name |
+| memo | TEXT | Nullable | Applicant memo |
+| requested_role | TEXT | NOT NULL, default `viewer` | Requested role |
+| identity_provider | TEXT | Nullable | OIDC provider label |
+| external_subject | TEXT | Nullable | OIDC `sub` mapping |
+| status | TEXT | NOT NULL, default `pending` | `pending`, `approved`, `rejected` |
+| rejection_reason | TEXT | Nullable | Required when rejected |
+| reviewed_by_user_id | INTEGER | FK -> users, Nullable | Reviewer |
+| approved_user_id | INTEGER | FK -> users, Nullable | Created/linked user |
+| reviewed_at | TIMESTAMP | Nullable | Review timestamp |
+| created_at | TIMESTAMP | NOT NULL | Creation timestamp |
+| updated_at | TIMESTAMP | NOT NULL | Last update timestamp |
+
+### **3.21 reservation_allocations**
+
+Tracks per-location reservation allocations without moving stock into a synthetic `RESERVED` bucket.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| allocation_id | INTEGER | PK, AUTOINCREMENT | Internal allocation ID |
+| reservation_id | INTEGER | FK -> reservations, NOT NULL | Parent reservation |
+| item_id | INTEGER | FK -> items_master, NOT NULL | Allocated item |
+| location | TEXT | NOT NULL | Physical inventory location |
+| quantity | INTEGER | NOT NULL, CHECK > 0 | Allocated quantity |
+| status | TEXT | NOT NULL, default `ACTIVE` | `ACTIVE`, `RELEASED`, `CONSUMED` |
+| created_at | TIMESTAMP | NOT NULL | Allocation creation timestamp |
+| released_at | TIMESTAMP | Nullable | Release/consume timestamp |
+| note | TEXT | Nullable | Optional note |
+
+### **3.22 order_lineage_events**
+
+Stores traceability events for order ETA update/split/merge transitions.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| event_id | INTEGER | PK, AUTOINCREMENT | Internal lineage event ID |
+| event_type | TEXT | NOT NULL | `ETA_UPDATE`, `ETA_SPLIT`, `ETA_MERGE`, `ARRIVAL_SPLIT` |
+| source_purchase_order_line_id | INTEGER | NOT NULL | Source order-line ID |
+| target_purchase_order_line_id | INTEGER | Nullable | Target order-line ID for split/merge |
+| quantity | INTEGER | Nullable | Quantity affected by the event |
+| previous_expected_arrival | DATE | Nullable | Previous ETA |
+| new_expected_arrival | DATE | Nullable | Updated ETA |
+| note | TEXT | Nullable | Event note |
+| created_at | TIMESTAMP | NOT NULL | Event timestamp |
+
+### **3.23 import_jobs**
+
+Tracks import executions and metadata required for safe undo/redo.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| import_job_id | INTEGER | PK, AUTOINCREMENT | Internal import job ID |
+| import_type | TEXT | NOT NULL | `items`, `orders` |
+| source_name | TEXT | Nullable | Operator-provided import source label |
+| source_hash | TEXT | Nullable | Input content hash |
+| request_metadata | TEXT | Nullable | Persisted import request metadata |
+| status | TEXT | NOT NULL | `ok`, `partial`, `error` |
+| executed_at | TIMESTAMP | NOT NULL | Execution timestamp |
+| executed_by | INTEGER | FK -> users, Nullable | Executor user |
+| undoable | BOOLEAN | NOT NULL | Undo availability flag |
+| undone_at | TIMESTAMP | Nullable | Undo timestamp |
+| undone_by | INTEGER | FK -> users, Nullable | Undo actor |
+
+### **3.24 import_job_effects**
+
+Stores row-level import side effects for operator inspection and guarded undo/redo.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| effect_id | INTEGER | PK, AUTOINCREMENT | Internal effect ID |
+| import_job_id | INTEGER | FK -> import_jobs, NOT NULL | Parent import job |
+| row_number | INTEGER | Nullable | Source row number |
+| effect_type | TEXT | NOT NULL | `item_created`, `order_created`, `order_missing_item`, etc. |
+| before_snapshot | TEXT | Nullable | Serialized pre-state |
+| after_snapshot | TEXT | Nullable | Serialized post-state |
+| created_at | TIMESTAMP | NOT NULL | Effect timestamp |
+
+### **3.25 generated_artifacts**
+
+Registry for browser-downloadable generated files (for example missing-item CSV artifacts).
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| artifact_id | TEXT | PK | Opaque artifact identifier |
+| artifact_type | TEXT | NOT NULL | Artifact category |
+| filename | TEXT | NOT NULL | Download filename |
+| storage_path | TEXT | NOT NULL | Storage-layer reference (`local://...` or `gcs://...`) |
+| size_bytes | INTEGER | NOT NULL, CHECK >= 0 | File size |
+| created_at | TIMESTAMP | NOT NULL | Creation timestamp |
+| source_job_type | TEXT | Nullable | Related job category |
+| source_job_id | TEXT | Nullable | Related job identifier |
+
+### **3.26 external_item_mirrors**
+
+Future-facing mirror table for externally managed item master synchronization.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| mirror_id | INTEGER | PK, AUTOINCREMENT | Internal mirror row ID |
+| source_system | TEXT | NOT NULL | External source label |
+| external_item_id | TEXT | NOT NULL | External item identifier |
+| local_item_id | INTEGER | FK -> items_master, Nullable | Linked local item |
+| mirror_payload | JSONB | Nullable | Raw mirror payload |
+| sync_state | TEXT | NOT NULL, default `pending` | Synchronization state |
+| last_webhook_at | TEXT | Nullable | Last webhook timestamp |
+| last_synced_at | TEXT | Nullable | Last sync timestamp |
+| created_at | TEXT | NOT NULL | Creation timestamp |
+
+### **3.27 external_order_mirrors**
+
+Future-facing mirror table for externally managed order synchronization.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| mirror_id | INTEGER | PK, AUTOINCREMENT | Internal mirror row ID |
+| source_system | TEXT | NOT NULL | External source label |
+| external_order_id | TEXT | NOT NULL | External order identifier |
+| local_order_id | INTEGER | FK -> orders, Nullable | Linked local order |
+| mirror_payload | JSONB | Nullable | Raw mirror payload |
+| sync_state | TEXT | NOT NULL, default `pending` | Synchronization state |
+| last_webhook_at | TEXT | Nullable | Last webhook timestamp |
+| last_synced_at | TEXT | Nullable | Last sync timestamp |
+| created_at | TEXT | NOT NULL | Creation timestamp |
+
+### **3.28 local_order_splits**
+
+Stores local split metadata so split behavior is explicit and externally reconcilable.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| split_id | INTEGER | PK, AUTOINCREMENT | Internal split ID |
+| split_type | TEXT | NOT NULL | Local split mode label |
+| root_order_id | INTEGER | FK -> orders, NOT NULL | Root order line |
+| child_order_id | INTEGER | FK -> orders, NOT NULL, UNIQUE | Child split order line |
+| split_quantity | INTEGER | NOT NULL, CHECK > 0 | Split quantity |
+| root_expected_arrival | TEXT | Nullable | Root ETA snapshot |
+| child_expected_arrival | TEXT | Nullable | Child ETA snapshot |
+| reconciliation_mode | TEXT | NOT NULL | External reconciliation behavior |
+| created_at | TEXT | NOT NULL | Creation timestamp |
 
 ---
 
