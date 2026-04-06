@@ -2,6 +2,20 @@
 
 ### Changed
 
+- Hardened the frontend `Bulk Item Entry` submit flow on the Items page.
+  - successful rows now continue even if another row fails, instead of aborting the whole bulk submit on the first error
+  - the UI now shows an explicit completion summary after submit so successful item/alias registration is visible immediately
+  - failed rows remain in the editor for correction while successfully submitted rows are cleared
+
+### Tests
+
+- Frontend targeted Vitest:
+  - `npm run test -- tests/ItemsPage.test.tsx`
+
+## 2026-04-06
+
+### Changed
+
 - Added registered-name suggestions to the frontend `Bulk Item Entry` manufacturer and alias-supplier inputs.
   - both fields remain free-text so new names can still be entered inline
   - existing `manufacturers` and `suppliers` are now exposed through browser-native suggestion lists to reduce normalization mistakes during bulk entry

@@ -1,10 +1,11 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { SWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const apiGetMock = vi.fn();
 const apiGetWithPaginationMock = vi.fn();
+const apiSendMock = vi.fn();
 
 vi.mock("../src/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../src/lib/api")>();
@@ -12,6 +13,7 @@ vi.mock("../src/lib/api", async (importOriginal) => {
     ...actual,
     apiGet: (...args: unknown[]) => apiGetMock(...args),
     apiGetWithPagination: (...args: unknown[]) => apiGetWithPaginationMock(...args),
+    apiSend: (...args: unknown[]) => apiSendMock(...args),
   };
 });
 
@@ -55,6 +57,15 @@ describe("ItemsPage", () => {
       }
       throw new Error(`Unexpected apiGetWithPagination path: ${path}`);
     });
+    apiSendMock.mockReset();
+    apiSendMock.mockResolvedValue({
+      item_id: 1,
+      item_number: "LENS-001",
+      manufacturer_name: "Thorlabs",
+      category: "Lens",
+      url: null,
+      description: null,
+    });
   });
 
   afterEach(() => {
@@ -87,5 +98,28 @@ describe("ItemsPage", () => {
       "Misumi",
       "Digikey",
     ]);
+  });
+
+  it("shows a completion summary after bulk item submit", async () => {
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Bulk Item Entry" })).toBeTruthy();
+    });
+
+    fireEvent.change(screen.getAllByPlaceholderText("LENS-001")[0], {
+      target: { value: "LENS-001" },
+    });
+    fireEvent.change(screen.getAllByPlaceholderText("Thorlabs")[0], {
+      target: { value: "Thorlabs" },
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Submit Bulk Rows" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Bulk submit completed: created 1 item(s), upserted 0 alias row(s).")).toBeTruthy();
+    });
+
+    expect(apiSendMock).toHaveBeenCalledWith("/items", expect.objectContaining({ method: "POST" }));
   });
 });

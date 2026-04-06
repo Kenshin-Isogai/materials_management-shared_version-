@@ -93,13 +93,13 @@ export function ItemsPage() {
   } = useSWR(selectedImportJobKey, () =>
     apiGet<ItemImportJobDetail>(`/items/import-jobs/${selectedImportJobId ?? ""}`)
   );
-  const { data: itemOptionsData } = useSWR("/items-options-missing-resolver", () =>
+  const { data: itemOptionsData, mutate: mutateItemOptions } = useSWR("/items-options-missing-resolver", () =>
     apiGetWithPagination<Item[]>("/items?per_page=1000")
   );
-  const { data: manufacturersData } = useSWR("/manufacturers-options-bulk-entry", () =>
+  const { data: manufacturersData, mutate: mutateManufacturers } = useSWR("/manufacturers-options-bulk-entry", () =>
     apiGet<Manufacturer[]>("/manufacturers")
   );
-  const { data: suppliersData } = useSWR("/suppliers-options-bulk-entry", () =>
+  const { data: suppliersData, mutate: mutateSuppliers } = useSWR("/suppliers-options-bulk-entry", () =>
     apiGet<Supplier[]>("/suppliers")
   );
   const { data: categories } = useSWR("/category-options-missing-resolver", () =>
@@ -207,36 +207,67 @@ export function ItemsPage() {
   }
 
   async function createBulk() {
-    const rows = bulkRows.filter((row) => row.item_number.trim());
-    if (!rows.length) return;
+    const submittedRows = bulkRows
+      .map((row, index) => ({ row, index }))
+      .filter(({ row }) => row.item_number.trim());
+    if (!submittedRows.length) {
+      setEntryMessage("Enter at least one row with item_number before submitting.");
+      return;
+    }
     setSubmitting(true);
     setEntryMessage("");
     try {
-      for (const row of rows) {
-        if (row.row_type === "alias") {
-          await registerAliasRow(
-            row.item_number,
-            row.supplier,
-            row.canonical_item_number,
-            row.units_per_order
-          );
-        } else {
-          await apiSend<Item>("/items", {
-            method: "POST",
-            body: JSON.stringify({
-              item_number: row.item_number.trim(),
-              manufacturer_name: row.manufacturer_name.trim() || "UNKNOWN",
-              category: row.category.trim() || null,
-              url: row.url.trim() || null,
-              description: row.description.trim() || null
-            })
-          });
+      let createdItemCount = 0;
+      let upsertedAliasCount = 0;
+      const failedRows = new Set<number>();
+      const errorMessages: string[] = [];
+
+      for (const { row, index } of submittedRows) {
+        try {
+          if (row.row_type === "alias") {
+            await registerAliasRow(
+              row.item_number,
+              row.supplier,
+              row.canonical_item_number,
+              row.units_per_order
+            );
+            upsertedAliasCount += 1;
+          } else {
+            await apiSend<Item>("/items", {
+              method: "POST",
+              body: JSON.stringify({
+                item_number: row.item_number.trim(),
+                manufacturer_name: row.manufacturer_name.trim() || "UNKNOWN",
+                category: row.category.trim() || null,
+                url: row.url.trim() || null,
+                description: row.description.trim() || null
+              })
+            });
+            createdItemCount += 1;
+          }
+        } catch (error) {
+          failedRows.add(index);
+          errorMessages.push(`row ${index + 1}: ${String(error instanceof Error ? error.message : error)}`);
         }
       }
-      setBulkRows([blankRow(), blankRow(), blankRow()]);
-      await mutate();
-    } catch (error) {
-      setEntryMessage(String(error instanceof Error ? error.message : error));
+
+      if (createdItemCount > 0 || upsertedAliasCount > 0) {
+        const nextRows = bulkRows.filter((row, index) => !failedRows.has(index) && !row.item_number.trim());
+        const remainingFailedRows = bulkRows.filter((row, index) => failedRows.has(index));
+        const resetRows = [...remainingFailedRows, ...nextRows];
+        while (resetRows.length < 3) {
+          resetRows.push(blankRow());
+        }
+        setBulkRows(resetRows);
+        await Promise.all([mutate(), mutateItemOptions(), mutateManufacturers(), mutateSuppliers()]);
+      }
+
+      const summary = `created ${createdItemCount} item(s), upserted ${upsertedAliasCount} alias row(s)`;
+      if (errorMessages.length > 0) {
+        setEntryMessage(`Bulk submit partially completed: ${summary}; failed ${errorMessages.length} row(s) (${errorMessages.join(" | ")}).`);
+      } else {
+        setEntryMessage(`Bulk submit completed: ${summary}.`);
+      }
     } finally {
       setSubmitting(false);
     }
