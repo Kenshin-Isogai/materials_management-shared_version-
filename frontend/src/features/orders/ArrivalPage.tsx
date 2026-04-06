@@ -154,7 +154,8 @@ function ArrivalRowCard({
             <span className="text-lg font-bold text-slate-900">×{row.order_amount}</span>
           </div>
           <p className="text-sm text-slate-600">
-            {row.supplier_name} · PO #{row.purchase_order_id} · Quote {row.quotation_number}
+            {row.supplier_name} · PO {row.purchase_order_number ?? `#${row.purchase_order_id}`} · Quote{" "}
+            {row.quotation_number}
           </p>
           <p className="text-xs text-slate-500">
             Line #{row.order_id} · ETA {formatDate(row.expected_arrival)}

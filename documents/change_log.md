@@ -2,6 +2,8 @@
 
 ### Changed
 
+- Arrivals overdue/scheduled cards now display the human-readable PO number (`purchase_order_number`) when available, with numeric PO ID fallback.
+
 - Fixed the shared frontend `ComboInput` accessibility and keyboard interaction regression.
   - ArrowUp / ArrowDown now move through suggestions, Enter commits the highlighted option, and Escape closes the popup
   - the input now exposes combobox/listbox ARIA semantics (`role="combobox"`, `aria-expanded`, `aria-controls`, `aria-activedescendant`) so assistive tech can announce the suggestion state correctly
