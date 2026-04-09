@@ -379,7 +379,7 @@ Last updated: 2026-04-06 (JST)
   - `PUT /api/purchase-candidates/{id}`
 - Orders page now uses a document-first browse layout around three entities:
   - `Purchase Order Lines` remains the operational pane for ETA, arrival, split, delete, and manual project assignment
-  - `Quotations` lists quotation headers with linked-line counts and header-level edit/delete actions
+  - `Quotations` lists quotation headers with linked-line counts, and the detail pane now also enumerates the included purchase-order lines with direct jump-back into line details
   - `Purchase Orders` lists purchase-order headers with linked-line counts and header-level edit/delete actions
 - Arrival page is now a dedicated route backed by `/api/arrival-schedule` instead of reusing the Orders page.
   - the page monitors only open (`Ordered`) lines
@@ -391,6 +391,7 @@ Last updated: 2026-04-06 (JST)
 - Orders page mutation flows (manual import, arrival processing, line edits, quotation edits, purchase-order edits) revalidate purchase-order-lines, quotations, and purchase-orders datasets together to avoid stale header/line counts.
 - Orders page `Import Purchase Order Lines CSV` no longer shows a shared order-date input; operators are expected to provide `order_date` in the CSV when needed, and the preview/import request now relies on per-row CSV values only.
 - The line pane now uses dense card rows plus a side detail panel instead of a long single-column field stack, reducing vertical scroll cost when each line carries many attributes.
+- The open-order inline edit row now labels the date input as `Expected Arrival` so the ETA field remains understandable even when only the native browser date control is visible.
 - Quotation and purchase-order browsing now use searchable card lists plus dedicated detail panes rather than the older `Imported Quotations` expandable table / `View Orders` workflow.
 - Item List now includes a row-level `Flow` action that opens an item-specific increase/decrease timeline (when/how many/why) combining transaction logs, expected order arrivals, and active reservation deadlines.
 - Items page `Item List` now supports expand/collapse and auto-collapses when `Flow` is opened, reducing scroll overhead to reach the timeline panel.

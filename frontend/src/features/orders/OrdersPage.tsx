@@ -359,6 +359,7 @@ export function OrdersPage() {
           quotationsError={quotationsError}
           refreshOrderViews={refreshOrderViews}
           setMessage={setMessage}
+          onOpenOrderDetails={(orderId) => orderLinesSectionRef.current?.openOrderDetails(orderId)}
         />
 
         <PurchaseOrdersSection

@@ -10,6 +10,7 @@ type QuotationSectionProps = {
   quotationsError: unknown;
   refreshOrderViews: () => Promise<unknown>;
   setMessage: (value: string) => void;
+  onOpenOrderDetails: (orderId: number) => void;
 };
 
 export function QuotationSection({
@@ -19,6 +20,7 @@ export function QuotationSection({
   quotationsError,
   refreshOrderViews,
   setMessage,
+  onOpenOrderDetails,
 }: QuotationSectionProps) {
   const [loading, setLoading] = useState(false);
   const [editingQuotationId, setEditingQuotationId] = useState<number | null>(null);
@@ -150,6 +152,7 @@ export function QuotationSection({
       setEditingQuotationDocumentUrl={setEditingQuotationDocumentUrl}
       setEditingQuotationIssueDate={setEditingQuotationIssueDate}
       openQuotationDetails={openQuotationDetails}
+      openOrderDetails={onOpenOrderDetails}
       beginEditQuotation={beginEditQuotation}
       saveQuotationEdit={(id) => void saveQuotationEdit(id)}
       deleteQuotation={(id) => void deleteQuotation(id)}

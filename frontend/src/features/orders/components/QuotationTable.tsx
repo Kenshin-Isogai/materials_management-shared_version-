@@ -26,6 +26,7 @@ export type QuotationTableProps = {
   setEditingQuotationDocumentUrl: (value: string) => void;
   setEditingQuotationIssueDate: (value: string) => void;
   openQuotationDetails: (quotationId: number) => void;
+  openOrderDetails: (orderId: number) => void;
   beginEditQuotation: (row: Quotation) => void;
   saveQuotationEdit: (quotationId: number) => void;
   deleteQuotation: (quotationId: number) => void;
@@ -54,6 +55,7 @@ export function QuotationTable({
   setEditingQuotationDocumentUrl,
   setEditingQuotationIssueDate,
   openQuotationDetails,
+  openOrderDetails,
   beginEditQuotation,
   saveQuotationEdit,
   deleteQuotation,
@@ -140,11 +142,39 @@ export function QuotationTable({
               </div>
               {editingQuotationId === selectedQuotation.quotation_id && (
                 <div className="mt-3 grid gap-2">
-                  <input className="input" value={editingQuotationIssueDate} onChange={(event) => setEditingQuotationIssueDate(event.target.value)} placeholder="YYYY-MM-DD" />
-                  <input className="input" value={editingQuotationDocumentUrl} onChange={(event) => setEditingQuotationDocumentUrl(event.target.value)} placeholder="Document reference or https://..." />
+                  <label className="grid gap-1">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Issue Date</span>
+                    <input className="input" value={editingQuotationIssueDate} onChange={(event) => setEditingQuotationIssueDate(event.target.value)} placeholder="YYYY-MM-DD" />
+                  </label>
+                  <label className="grid gap-1">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Document Reference</span>
+                    <input className="input" value={editingQuotationDocumentUrl} onChange={(event) => setEditingQuotationDocumentUrl(event.target.value)} placeholder="Document reference or https://..." />
+                  </label>
                 </div>
               )}
             </div>
+            {quotationOrders.length ? (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Included Lines</p>
+                <div className="space-y-2">
+                  {quotationOrders.map((row) => (
+                    <div key={`quotation-line-${row.order_id}`} className="rounded-xl border border-slate-200 px-3 py-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="font-semibold">Line #{row.order_id} · {row.canonical_item_number}</p>
+                          <p className="text-sm text-slate-600">
+                            PO {row.purchase_order_number ?? "-"} · Qty {row.order_amount} · ETA {row.expected_arrival ?? "-"}
+                          </p>
+                        </div>
+                        <button className="button-subtle" type="button" onClick={() => openOrderDetails(row.order_id)}>Line Details</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">No purchase-order lines are linked to this quotation.</p>
+            )}
           </div>
         )}
       </div>

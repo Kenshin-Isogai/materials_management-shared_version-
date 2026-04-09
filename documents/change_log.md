@@ -1,3 +1,16 @@
+## 2026-04-09
+
+### Changed
+
+- Improved the Orders page quotation and line-edit UX.
+  - `Quotation Details` now lists the purchase-order lines linked to the selected quotation, matching the purchase-order detail pane's included-lines visibility and allowing direct jump-back into line details
+  - `Purchase Order Lines` inline `Edit Order` now labels the date field as `Expected Arrival`, plus explicit labels for split quantity and project assignment, so the native date input is no longer ambiguous
+
+### Tests
+
+- Frontend targeted Vitest:
+  - `npm run test -- tests/OrdersPage.test.tsx`
+
 ## 2026-04-07
 
 ### Changed

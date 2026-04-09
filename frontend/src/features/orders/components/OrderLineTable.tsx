@@ -151,16 +151,31 @@ export function OrderLineTable({
                   </div>
                   {editingOrderId === row.order_id ? (
                     <div className="mt-2.5 grid gap-2 md:grid-cols-3">
-                      <input className="input" type="date" value={editingOrderExpectedArrival} onChange={(event) => setEditingOrderExpectedArrival(event.target.value)} />
-                      <input className="input" type="number" min={1} max={row.order_amount - 1} placeholder={`Split qty (1-${row.order_amount - 1})`} value={editingOrderSplitQuantity} onChange={(event) => setEditingOrderSplitQuantity(event.target.value)} />
-                      <select className="input" value={editingOrderProjectId} onChange={(event) => setEditingOrderProjectId(event.target.value)}>
-                        <option value="">No project assignment</option>
-                        {(projectsData ?? []).map((project) => (
-                          <option key={project.project_id} value={project.project_id}>
-                            #{project.project_id} {project.name} ({project.status})
-                          </option>
-                        ))}
-                      </select>
+                      <label className="grid gap-1">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Expected Arrival</span>
+                        <input
+                          aria-label={`Expected Arrival for line #${row.order_id}`}
+                          className="input"
+                          type="date"
+                          value={editingOrderExpectedArrival}
+                          onChange={(event) => setEditingOrderExpectedArrival(event.target.value)}
+                        />
+                      </label>
+                      <label className="grid gap-1">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Split Quantity</span>
+                        <input className="input" type="number" min={1} max={row.order_amount - 1} placeholder={`Split qty (1-${row.order_amount - 1})`} value={editingOrderSplitQuantity} onChange={(event) => setEditingOrderSplitQuantity(event.target.value)} />
+                      </label>
+                      <label className="grid gap-1">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Project Assignment</span>
+                        <select className="input" value={editingOrderProjectId} onChange={(event) => setEditingOrderProjectId(event.target.value)}>
+                          <option value="">No project assignment</option>
+                          {(projectsData ?? []).map((project) => (
+                            <option key={project.project_id} value={project.project_id}>
+                              #{project.project_id} {project.name} ({project.status})
+                            </option>
+                          ))}
+                        </select>
+                      </label>
                     </div>
                   ) : null}
                 </div>

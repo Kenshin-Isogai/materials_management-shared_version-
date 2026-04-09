@@ -236,6 +236,9 @@ describe("OrdersPage", () => {
       expect((quotationDetailsSection as HTMLElement).textContent).toContain("0000001809");
       expect((quotationDetailsSection as HTMLElement).textContent).toContain("2025-10-20");
       expect(within(quotationDetailsSection as HTMLElement).getByRole("link", { name: "Open document" })).toBeTruthy();
+      expect(within(quotationDetailsSection as HTMLElement).getByText("Included Lines")).toBeTruthy();
+      expect(within(quotationDetailsSection as HTMLElement).getByText("Line #304 · AOMO3080-125")).toBeTruthy();
+      expect(within(quotationDetailsSection as HTMLElement).getByText("Line #305 · BETA-200")).toBeTruthy();
     });
   });
 
@@ -269,7 +272,7 @@ describe("OrdersPage", () => {
     const orderListSection = sectionByHeading("Purchase Order Lines");
     expect(orderListSection).toBeTruthy();
 
-    await user.type(screen.getByPlaceholderText("Search by order #, item, or quotation number"), "BETA");
+    await user.type(screen.getByPlaceholderText("Search by order #, item, quotation, or PO number"), "BETA");
 
     await waitFor(() => {
       expect(within(orderListSection as HTMLElement).getByText("Showing 1 / 2 orders")).toBeTruthy();
@@ -453,9 +456,8 @@ describe("OrdersPage", () => {
     await user.click(within(orderRow as HTMLElement).getByRole("button", { name: "Edit Order" }));
 
     const inputs = within(orderRow as HTMLElement);
-    const dateInput = (orderRow as HTMLElement).querySelector('input[type="date"]') as HTMLInputElement | null;
-    expect(dateInput).toBeTruthy();
-    fireEvent.change(dateInput as HTMLInputElement, { target: { value: "2025-12-15" } });
+    const dateInput = inputs.getByLabelText("Expected Arrival for line #304");
+    fireEvent.change(dateInput, { target: { value: "2025-12-15" } });
     await user.type(inputs.getByPlaceholderText("Split qty (1-14)"), "5");
     await user.selectOptions(inputs.getByRole("combobox"), "12");
     await user.click(inputs.getByRole("button", { name: "Save Order" }));
@@ -555,9 +557,8 @@ describe("OrdersPage", () => {
     await user.click(within(orderRow as HTMLElement).getByRole("button", { name: "Edit Order" }));
 
     const inputs = within(orderRow as HTMLElement);
-    const dateInput = (orderRow as HTMLElement).querySelector('input[type="date"]') as HTMLInputElement | null;
-    expect(dateInput).toBeTruthy();
-    fireEvent.change(dateInput as HTMLInputElement, { target: { value: "2025-12-22" } });
+    const dateInput = inputs.getByLabelText("Expected Arrival for line #305");
+    fireEvent.change(dateInput, { target: { value: "2025-12-22" } });
     await user.type(inputs.getByPlaceholderText("Split qty (1-7)"), "3");
     await user.selectOptions(inputs.getByRole("combobox"), "");
     await user.click(inputs.getByRole("button", { name: "Save Order" }));
@@ -576,6 +577,21 @@ describe("OrdersPage", () => {
         }),
       }),
     );
+  });
+
+  it("labels the edit-order fields so the date input is self-describing", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    const orderRow = (await screen.findByText(/Line #304 .* AOMO3080-125/)).closest(".rounded-2xl");
+    expect(orderRow).toBeTruthy();
+    await user.click(within(orderRow as HTMLElement).getByRole("button", { name: "Edit Order" }));
+
+    const row = within(orderRow as HTMLElement);
+    expect(row.getByText("Expected Arrival")).toBeTruthy();
+    expect(row.getByLabelText("Expected Arrival for line #304")).toBeTruthy();
+    expect(row.getByText("Split Quantity")).toBeTruthy();
+    expect(row.getByText("Project Assignment")).toBeTruthy();
   });
 
   it("revalidates purchase-order headers after confirming an import", async () => {

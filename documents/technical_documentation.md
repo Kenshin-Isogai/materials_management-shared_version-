@@ -824,6 +824,7 @@ End-to-End tests are implemented using Playwright to verify the full-stack behav
 - Frontend UX note: the Orders screen is now intentionally split by domain level rather than one long row-form.
   - `Purchase Order Lines` is the operational pane for ETA, arrival, split, delete, and manual project assignment.
   - `Quotations` and `Purchase Orders` are header panes with searchable card lists, linked-line counts, and dedicated detail editors.
+  - quotation and purchase-order detail panes both enumerate their linked purchase-order lines so operators can inspect header context without losing line-level drill-in.
   - The line pane uses a denser card + side-detail layout to reduce vertical scrolling when line records carry many fields.
 - Arrival-page read model note: `/api/arrival-schedule` is now the dedicated open-arrival read model for the `/arrival` route.
   - it only returns `Ordered` lines
