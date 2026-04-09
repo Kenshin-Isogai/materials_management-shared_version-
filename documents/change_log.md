@@ -37,6 +37,15 @@
 
 ### Changed
 
+- Synchronized `documents/specification.md` database documentation with the current Alembic-backed implementation.
+  - expanded Section 2 table summary to include auth (`users`, `registration_requests`), reservation allocation, import/effect tracking, generated artifacts, and external-sync foundation tables
+  - clarified that the Mermaid ER diagram is focused on core domain entities and that operational/auth tables are defined in Section 3
+  - added missing table-definition sections for `users`, `registration_requests`, `reservation_allocations`, `order_lineage_events`, `import_jobs`, `import_job_effects`, `generated_artifacts`, `external_item_mirrors`, `external_order_mirrors`, and `local_order_splits`
+
+## 2026-04-06
+
+### Changed
+
 - Arrivals overdue/scheduled cards now display the human-readable PO number (`purchase_order_number`) when available, with numeric PO ID fallback.
 
 - Fixed the shared frontend `ComboInput` accessibility and keyboard interaction regression.
