@@ -9,7 +9,12 @@ import {
   isBackendUnavailableError,
   presentApiError,
 } from "@/lib/errorUtils";
-import { nextSynchronizedBoardDate } from "@/lib/workspaceState";
+import {
+  derivePlanningBoardDate,
+  getExplicitBoardTargetDate,
+  nextSynchronizedBoardDate,
+  todayJstDateString,
+} from "@/lib/workspaceState";
 import { projectEditorRoute } from "@/features/projects/routes";
 import type {
   ConfirmAllocationResult,
@@ -196,6 +201,7 @@ function PlanningBoardRow({ row, projectId }: { row: PlanningAnalysisRow; projec
 
 export function PlanningBoardPage() {
   const { projectId: urlProjectId } = useParams<{ projectId?: string }>();
+  const todayDate = todayJstDateString();
 
   const [selectedProjectId, setSelectedProjectId] = useState<number | null>(
     urlProjectId ? Number(urlProjectId) : null,
@@ -216,27 +222,39 @@ export function PlanningBoardPage() {
     if (selectedStillExists) return;
     const defaultProject = pickDefaultProject(projects);
     if (!defaultProject) { setSelectedProjectId(null); setAnalysisDateDraft(""); setAnalysisDateApplied(""); return; }
+    const nextBoardDate = derivePlanningBoardDate({ projectPlannedStart: defaultProject.planned_start, today: todayDate });
     setSelectedProjectId(defaultProject.project_id);
-    setAnalysisDateDraft(defaultProject.planned_start ?? "");
-    setAnalysisDateApplied(defaultProject.planned_start ?? "");
-  }, [projects, selectedProjectId]);
+    setAnalysisDateDraft(nextBoardDate);
+    setAnalysisDateApplied(nextBoardDate);
+  }, [projects, selectedProjectId, todayDate]);
 
   const selectedProject = useMemo(() => projects.find((p) => p.project_id === selectedProjectId) ?? null, [projects, selectedProjectId]);
 
   useEffect(() => {
     if (!selectedProject) return;
-    setAnalysisDateDraft(selectedProject.planned_start ?? "");
-    setAnalysisDateApplied(selectedProject.planned_start ?? "");
+    const nextBoardDate = derivePlanningBoardDate({ projectPlannedStart: selectedProject.planned_start, today: todayDate });
+    setAnalysisDateDraft(nextBoardDate);
+    setAnalysisDateApplied(nextBoardDate);
     setActionMessage("");
-  }, [selectedProject?.project_id]);
+  }, [selectedProject?.project_id, selectedProject?.planned_start, todayDate]);
+
+  const explicitBoardTargetDate = useMemo(
+    () =>
+      getExplicitBoardTargetDate({
+        analysisDateApplied,
+        projectPlannedStart: selectedProject?.planned_start,
+        today: todayDate,
+      }),
+    [analysisDateApplied, selectedProject?.planned_start, todayDate],
+  );
 
   const analysisKey = useMemo(() => {
     if (!selectedProject) return null;
     const params = new URLSearchParams();
-    if (analysisDateApplied.trim()) params.set("target_date", analysisDateApplied.trim());
+    if (explicitBoardTargetDate) params.set("target_date", explicitBoardTargetDate);
     const query = params.toString();
     return `/projects/${selectedProject.project_id}/planning-analysis${query ? `?${query}` : ""}`;
-  }, [analysisDateApplied, selectedProject?.project_id]);
+  }, [explicitBoardTargetDate, selectedProject?.project_id]);
 
   const { data: analysisData, error: analysisError, isLoading: analysisLoading, mutate: mutateAnalysis } = useSWR(analysisKey, () => apiGet<PlanningAnalysisResult>(analysisKey ?? ""));
 
@@ -244,7 +262,9 @@ export function PlanningBoardPage() {
   const boardPipeline = analysisData?.pipeline ?? pipeline;
   const previewDirty = analysisDateDraft.trim() !== analysisDateApplied.trim();
   const persistedDate = selectedProject?.planned_start ?? "";
-  const canPersistDate = analysisDateDraft.trim() !== "" && analysisDateDraft.trim() !== persistedDate;
+  const canPersistDate =
+    analysisDateDraft.trim() !== "" &&
+    analysisDateDraft.trim() !== persistedDate;
   const hasConfirmableAllocation = useMemo(() => (analysisData?.rows ?? []).some((row) => (row.supply_sources_by_start ?? []).some(isConfirmablePlanningSource)), [analysisData?.rows]);
 
   useEffect(() => {
@@ -266,9 +286,10 @@ export function PlanningBoardPage() {
 
   function selectProject(projectId: number) {
     const project = projects.find((p) => p.project_id === projectId);
+    const nextBoardDate = derivePlanningBoardDate({ projectPlannedStart: project?.planned_start, today: todayDate });
     setSelectedProjectId(projectId);
-    setAnalysisDateDraft(project?.planned_start ?? "");
-    setAnalysisDateApplied(project?.planned_start ?? "");
+    setAnalysisDateDraft(nextBoardDate);
+    setAnalysisDateApplied(nextBoardDate);
     setAllocationPreview(null);
   }
 
@@ -290,7 +311,7 @@ export function PlanningBoardPage() {
     setWorking(true); setActionMessage("");
     try {
       const payload = await apiSend<ConfirmAllocationResult>(`/projects/${selectedProjectId}/confirm-allocation`, {
-        method: "POST", body: JSON.stringify({ target_date: selectedAnalysisTargetDate ?? (analysisDateApplied.trim() || null), dry_run: true }),
+        method: "POST", body: JSON.stringify({ target_date: explicitBoardTargetDate, dry_run: true }),
       });
       setAllocationPreview(payload);
       setActionMessage("Allocation preview generated.");
@@ -303,7 +324,7 @@ export function PlanningBoardPage() {
     setWorking(true); setActionMessage("");
     try {
       const payload = await apiSend<ConfirmAllocationResult>(`/projects/${selectedProjectId}/confirm-allocation`, {
-        method: "POST", body: JSON.stringify({ target_date: selectedAnalysisTargetDate ?? (analysisDateApplied.trim() || null), dry_run: false, expected_snapshot_signature: allocationPreview.snapshot_signature }),
+        method: "POST", body: JSON.stringify({ target_date: explicitBoardTargetDate, dry_run: false, expected_snapshot_signature: allocationPreview.snapshot_signature }),
       });
       setAllocationPreview(payload);
       setActionMessage(`Confirmed: ${payload.orders_assigned.length} assigned, ${payload.orders_split.length} split, ${payload.reservations_created.length} reservations.`);
@@ -321,7 +342,7 @@ export function PlanningBoardPage() {
         method: "POST", body: JSON.stringify({
           create_batch_title: `${selectedProject?.name ?? "Project"} procurement`,
           confirm_project_id: isDraft ? selectedProjectId : null,
-          confirm_target_date: isDraft ? selectedAnalysisTargetDate ?? (analysisDateApplied.trim() || null) : null,
+          confirm_target_date: isDraft ? explicitBoardTargetDate : null,
           lines: (analysisData?.rows ?? []).filter((r) => r.shortage_at_start > 0).map((r) => ({
             item_id: r.item_id, requested_quantity: r.shortage_at_start, source_type: "PROJECT", source_project_id: selectedProjectId,
             expected_arrival: selectedAnalysisTargetDate ?? (analysisDateApplied.trim() || null), note: "From workspace planning gap",
@@ -336,14 +357,14 @@ export function PlanningBoardPage() {
   async function downloadPlanningExport() {
     if (!selectedProjectId) return;
     const params = new URLSearchParams({ project_id: String(selectedProjectId) });
-    if (selectedAnalysisTargetDate) params.set("target_date", selectedAnalysisTargetDate);
+    if (explicitBoardTargetDate) params.set("target_date", explicitBoardTargetDate);
     try { await apiDownload(`/workspace/planning-export?${params}`, `planning_project_${selectedProjectId}.csv`); setActionMessage("Export downloaded."); }
     catch (e) { setActionMessage(`Export failed: ${String(e ?? "")}`); }
   }
 
   async function downloadPipelineExport() {
     const params = new URLSearchParams();
-    if (selectedProjectId) { params.set("project_id", String(selectedProjectId)); if (selectedAnalysisTargetDate) params.set("target_date", selectedAnalysisTargetDate); }
+    if (selectedProjectId) { params.set("project_id", String(selectedProjectId)); if (explicitBoardTargetDate) params.set("target_date", explicitBoardTargetDate); }
     const query = params.toString();
     try { await apiDownload(`/workspace/planning-export-multi${query ? `?${query}` : ""}`, `pipeline_export.csv`); setActionMessage("Pipeline export downloaded."); }
     catch (e) { setActionMessage(`Export failed: ${String(e ?? "")}`); }
@@ -381,10 +402,15 @@ export function PlanningBoardPage() {
               <select className="input" value={selectedProjectId ?? ""} onChange={(e) => selectProject(Number(e.target.value))}>
                 {projects.map((p) => <option key={p.project_id} value={p.project_id}>#{p.project_id} {p.name} ({p.status})</option>)}
               </select>
-              <input className="input" type="date" value={analysisDateDraft} onChange={(e) => setAnalysisDateDraft(e.target.value)} />
+              <input className="input" type="date" min={todayDate} value={analysisDateDraft} onChange={(e) => setAnalysisDateDraft(e.target.value)} />
               <button className="button-subtle" type="button" disabled={!selectedProjectId} onClick={previewImpact}>Preview Impact</button>
               <button className="button" type="button" disabled={!canPersistDate || working} onClick={savePlannedStartFromBoard}>Save Planned Start</button>
             </div>
+            {selectedProject?.planned_start && selectedProject.planned_start < todayDate && (
+              <p className="text-xs text-slate-500">
+                Stored planned start is {formatPlanningDate(selectedProject.planned_start)}. Use <span className="font-semibold">Save Planned Start</span> to update it to today ({todayDate}), or choose a later date.
+              </p>
+            )}
             {previewDirty && <p className="text-xs text-amber-700">Date changed. Use <span className="font-semibold">Preview Impact</span> to refresh.</p>}
             {!!actionMessage && <p className="text-sm text-slate-700">{actionMessage}</p>}
             {analysisError && renderError(analysisError, "planning analysis")}

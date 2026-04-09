@@ -1,3 +1,38 @@
+## 2026-04-07
+
+### Changed
+
+- Planning Board "Save Planned Start" button is now enabled for delayed projects when the board date equals today, allowing operators to catch up a project's stored planned start to today in one click.
+  - removed the `implicitBoardDate` guard from `canPersistDate`; the button now enables whenever the draft date differs from the persisted `planned_start`
+  - updated the delayed-project hint text to explicitly suggest using "Save Planned Start" to update the stored date
+  - removed the now-unused `implicitBoardDate` variable
+
+- Fixed the delayed-project Planning Board target-date regression.
+  - frontend board actions now continue sending `target_date=today_jst()` when a stored project `planned_start` is already in the past
+  - planning analysis, allocation preview/confirm, procurement batch creation, and CSV export now stay aligned with the date shown in the board UI for overdue projects
+  - added frontend regression coverage for delayed-project and unscheduled-project target-date behavior
+
+### Tests
+
+- Frontend targeted Vitest:
+  - `npm run test -- tests/workspaceState.test.ts`
+
+## 2026-04-06
+
+### Changed
+
+- Planning Board now keeps delayed project `planned_start` values intact while automatically analyzing from today (JST) when the stored start date is already in the past.
+  - the board no longer sends a past `target_date` override just because a persisted start date has aged past today
+  - delayed projects continue to support preview, allocation preview, procurement batch creation, and export flows without requiring operators to overwrite the original planned start
+  - added frontend regression coverage for the delayed-date board-state helpers
+
+### Tests
+
+- Frontend targeted Vitest:
+  - `npm run test -- tests/workspaceState.test.ts`
+- Frontend production build:
+  - `npm run build`
+
 ## 2026-04-06
 
 ### Changed

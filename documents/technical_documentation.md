@@ -161,6 +161,7 @@ This document explains the implemented architecture of the Materials Management 
   - item planning context cards now include a chronological recovery burndown table showing how the initial start-date gap burns down across dated recovery sources
   - legacy RFQ drawer paths are being reduced in favor of the dedicated `/procurement` page and procurement summary links
   - board date state re-syncs to the effective planning `target_date` when the same project refreshes and no local preview edit is pending
+  - when a project's stored `planned_start` is already in the past, the Planning Board keeps that persisted value unchanged but initializes the board analysis date to `today_jst()` so future-only planning endpoints remain usable without erasing the delay history
   - drawer close, breadcrumb back, route leave, and drawer-stack truncation flows now guard unsaved project/RFQ drafts
   - item-scoped RFQ drawers keep the full batch visible while surfacing the focused item rows first
   - RFQ save flows selectively rehydrate the saved rows from refreshed server detail so backend-normalized values replace stale local drafts without discarding other unsaved rows
@@ -728,6 +729,7 @@ End-to-End tests are implemented using Playwright to verify the full-stack behav
   - committed projects are those with status `CONFIRMED` or `ACTIVE`
   - committed projects are processed in `planned_start` order
   - committed projects remain in the pipeline after their `planned_start` passes; missing committed start dates are treated as `today_jst()` for sequencing until a date is persisted
+  - the Planning Board frontend only sends an explicit `target_date` override when the operator selects a date later than the board's implicit effective date (`max(planned_start, today_jst())`)
   - current stock starts from `inventory_ledger.on_hand - active_allocations`
   - generic future supply comes only from open orders with `project_id IS NULL`
   - project-dedicated supply comes from:

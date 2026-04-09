@@ -1152,6 +1152,7 @@ Base URL: `http://localhost:8000/api`
 `GET /projects/{project_id}/planning-analysis` is the canonical future-planning view:
 - committed projects (`CONFIRMED`, `ACTIVE`) are processed in planned-start order
 - committed projects stay in the planning pipeline even after their stored `planned_start` passes; if a committed project has no persisted `planned_start`, planning treats it as `today_jst()` for sequencing
+- the Planning Board UI preserves the stored `planned_start`, but when that stored date is earlier than today it analyzes the project from `today_jst()` unless the operator explicitly chooses a later override date
 - earlier shortages become backlog demand that consumes later generic arrivals before newer projects can use them
 - dedicated project supply comes from:
   - `QUOTED` RFQ lines with `expected_arrival`

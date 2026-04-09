@@ -248,6 +248,7 @@ Last updated: 2026-04-06 (JST)
   - item drawer planning cards now include a dated recovery burndown table derived from `recovery_sources_after_start`, showing each recovery step and the remaining gap after that date
   - RFQ drawer now uses the same batch/line editor logic as `/rfq`
   - board date state now mirrors the effective planning `target_date` after same-project refreshes when there is no pending local preview edit
+  - when a selected project's stored `planned_start` is already in the past, the board initializes its working date to today (JST) while leaving the persisted start date untouched
   - drawer close, breadcrumb back, route-leave, and stack-truncation flows now protect unsaved project/RFQ drafts
   - item-scoped RFQ drawers keep the whole batch available and move the focused item rows to the top
   - RFQ save refreshes now rehydrate saved rows from server detail so normalized values such as cleared stale `linked_purchase_order_line_id` fields appear immediately
@@ -298,6 +299,7 @@ Last updated: 2026-04-06 (JST)
 - Existing projects with legacy assembly-only requirements still load those rows from the backend; the current item-only editor preserves them on save and shows an inline warning that they remain non-editable in this form.
 - Planning page has been folded into `/workspace`; the `/planning` route has been removed from the router (the `PlanningPage.tsx` file remains but is unused, and the path falls through to the wildcard redirect at `/`). The procurement-first workflow is centered on `/workspace` plus `/procurement`.
   - Select a project and analyze it at its planned start (or an override date).
+  - If the stored planned start is already in the past, the board analyzes from today by default instead of passing a past `target_date`.
   - Later projects are netted against earlier committed projects (`CONFIRMED` / `ACTIVE`) instead of being analyzed in isolation, including committed work whose start date is already in the past.
   - On-time shortage rows can still be converted directly into RFQ batches, and RFQ creation reuses the planning date currently under review.
   - The board now supports `Preview Confirm Allocation` and `Confirm Allocation`, which persist current on-time generic coverage as project reservations and dedicated order rows.
