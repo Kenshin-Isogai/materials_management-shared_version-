@@ -22,18 +22,48 @@ vi.mock("../src/lib/api", () => ({
 
 vi.mock("../src/components/CatalogPicker", () => ({
   CatalogPicker: ({
+    onChange,
     onQueryChange,
     placeholder,
+    value,
   }: {
+    onChange?: (value: {
+      entity_id: number;
+      entity_type: "item";
+      display_label: string;
+      value_text: string;
+      summary: string;
+    } | null) => void;
     onQueryChange?: (value: string) => void;
     placeholder?: string;
+    value?: { display_label: string } | null;
   }) => (
-    <input
-      aria-label={placeholder ?? "Catalog Picker"}
-      className="input"
-      placeholder={placeholder ?? "Catalog Picker"}
-      onChange={(event) => onQueryChange?.(event.target.value)}
-    />
+    <div>
+      <input
+        aria-label={placeholder ?? "Catalog Picker"}
+        className="input"
+        placeholder={placeholder ?? "Catalog Picker"}
+        value={value?.display_label ?? ""}
+        onChange={(event) => onQueryChange?.(event.target.value)}
+        readOnly={!onQueryChange}
+      />
+      {onChange ? (
+        <button
+          type="button"
+          onClick={() =>
+            onChange({
+              entity_id: 99,
+              entity_type: "item",
+              display_label: "MANUAL-ALT-99",
+              value_text: "MANUAL-ALT-99",
+              summary: "Manual alternate item",
+            })
+          }
+        >
+          Pick manual item
+        </button>
+      ) : null}
+    </div>
   ),
 }));
 
@@ -875,6 +905,212 @@ describe("OrdersPage", () => {
     expect(within(row as HTMLElement).getByText("Quantity")).toBeTruthy();
     expect(within(row as HTMLElement).getByText("15")).toBeTruthy();
     expect((row as HTMLElement).textContent).toContain("orders.csv | オーテックス | PO PO-41 | quotation 0000001809");
+  });
+
+  it("lets review rows be marked as not in catalog and routed into the missing-items CSV flow", async () => {
+    const user = userEvent.setup();
+    apiSendFormMock.mockImplementation(async (path: string) => {
+      if (path === "/purchase-order-lines/import-preview") {
+        return {
+          can_auto_accept: false,
+          blocking_errors: [],
+          duplicate_quotation_numbers: [],
+          locked_purchase_orders: [],
+          source_name: "orders.csv",
+          supplier: {
+            supplier_id: null,
+            supplier_name: "Per-row supplier",
+            exists: false,
+            mode: "per_row",
+          },
+          thresholds: {
+            auto_accept: 100,
+            review: 80,
+          },
+          summary: {
+            total_rows: 1,
+            exact: 0,
+            high_confidence: 0,
+            needs_review: 1,
+            unresolved: 0,
+          },
+          rows: [
+            {
+              row: 1,
+              source_index: 0,
+              source_name: "orders.csv",
+              supplier_id: 3,
+              supplier_name: "オーテックス",
+              item_number: "UNKNOWN-123",
+              quantity: 15,
+              purchase_order_number: "PO-41",
+              quotation_number: "0000001809",
+              issue_date: "2025-10-20",
+              order_date: "2025-10-21",
+              expected_arrival: "2025-11-30",
+              quotation_document_url: "https://example.sharepoint.com/sites/procurement/0000001809",
+              purchase_order_document_url: "https://example.sharepoint.com/sites/procurement/po-41",
+              status: "needs_review",
+              confidence_score: 82,
+              warnings: [],
+              candidates: [],
+              suggested_match: {
+                item_id: 2,
+                canonical_item_number: "BETA-200",
+                manufacturer_name: "BETACO",
+                item_number: "BETA-200",
+                units_per_order: 1,
+                display_label: "BETA-200",
+                value_text: "BETA-200",
+                summary: "Beta support part",
+                match_source: "item_number_fuzzy",
+                match_reason: "Fuzzy match",
+                confidence_score: 82,
+              },
+              order_amount: 15,
+            },
+          ],
+        };
+      }
+      if (path === "/purchase-order-lines/import") {
+        return {
+          status: "ok",
+          imported_count: 1,
+          saved_alias_count: 0,
+        };
+      }
+      throw new Error(`Unexpected apiSendForm path: ${path}`);
+    });
+
+    renderPage();
+
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement | null;
+    expect(fileInput).toBeTruthy();
+    const file = new File(["supplier,item_number,quantity\nオーテックス,UNKNOWN-123,15\n"], "orders.csv", {
+      type: "text/csv",
+    });
+    await user.upload(fileInput as HTMLInputElement, file);
+
+    fireEvent.submit(screen.getByRole("button", { name: "Preview Import" }).closest("form") as HTMLFormElement);
+
+    expect(await screen.findByRole("button", { name: "Confirm Import" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Download Missing Items CSV" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "Not in Catalog -> Missing Items CSV" }));
+
+    expect(await screen.findByText(/1 item\(s\) need registration before this order import can continue/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Download Missing Items CSV" })).toBeTruthy();
+    expect(screen.getByText(/This row will be added to the Missing Items CSV instead of imported/i)).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Confirm Import" }));
+
+    await waitFor(() => {
+      expect(apiSendFormMock).not.toHaveBeenCalledWith("/purchase-order-lines/import", expect.any(FormData));
+    });
+    expect(
+      screen.getByText(
+        /Rows 1 need item registration first\. Download Missing Items CSV, import it on Items, then re-import this order file\./i,
+      ),
+    ).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Undo Not in Catalog" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("button", { name: "Download Missing Items CSV" })).toBeNull();
+    });
+  });
+
+  it("preserves a manual preview selection when undoing Not in Catalog", async () => {
+    const user = userEvent.setup();
+    apiSendFormMock.mockImplementation(async (path: string) => {
+      if (path === "/purchase-order-lines/import-preview") {
+        return {
+          can_auto_accept: false,
+          blocking_errors: [],
+          duplicate_quotation_numbers: [],
+          locked_purchase_orders: [],
+          source_name: "orders.csv",
+          supplier: {
+            supplier_id: null,
+            supplier_name: "Per-row supplier",
+            exists: false,
+            mode: "per_row",
+          },
+          thresholds: {
+            auto_accept: 100,
+            review: 80,
+          },
+          summary: {
+            total_rows: 1,
+            exact: 0,
+            high_confidence: 0,
+            needs_review: 1,
+            unresolved: 0,
+          },
+          rows: [
+            {
+              row: 1,
+              source_index: 0,
+              source_name: "orders.csv",
+              supplier_id: 3,
+              supplier_name: "オーテックス",
+              item_number: "UNKNOWN-123",
+              quantity: 15,
+              purchase_order_number: "PO-41",
+              quotation_number: "0000001809",
+              issue_date: "2025-10-20",
+              order_date: "2025-10-21",
+              expected_arrival: "2025-11-30",
+              quotation_document_url: "https://example.sharepoint.com/sites/procurement/0000001809",
+              purchase_order_document_url: "https://example.sharepoint.com/sites/procurement/po-41",
+              status: "needs_review",
+              confidence_score: 82,
+              warnings: [],
+              candidates: [],
+              suggested_match: {
+                item_id: 2,
+                canonical_item_number: "BETA-200",
+                manufacturer_name: "BETACO",
+                item_number: "BETA-200",
+                units_per_order: 1,
+                display_label: "BETA-200",
+                value_text: "BETA-200",
+                summary: "Beta support part",
+                match_source: "item_number_fuzzy",
+                match_reason: "Fuzzy match",
+                confidence_score: 82,
+              },
+              order_amount: 15,
+            },
+          ],
+        };
+      }
+      throw new Error(`Unexpected apiSendForm path: ${path}`);
+    });
+
+    renderPage();
+
+    const fileInput = document.querySelector('input[type="file"]') as HTMLInputElement | null;
+    expect(fileInput).toBeTruthy();
+    const file = new File(["supplier,item_number,quantity\nオーテックス,UNKNOWN-123,15\n"], "orders.csv", {
+      type: "text/csv",
+    });
+    await user.upload(fileInput as HTMLInputElement, file);
+
+    fireEvent.submit(screen.getByRole("button", { name: "Preview Import" }).closest("form") as HTMLFormElement);
+
+    expect(await screen.findByRole("button", { name: "Confirm Import" })).toBeTruthy();
+    expect(screen.getByDisplayValue("BETA-200")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Pick manual item" }));
+    expect(screen.getByDisplayValue("MANUAL-ALT-99")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "Not in Catalog -> Missing Items CSV" }));
+    expect(screen.getByText(/This row will be added to the Missing Items CSV instead of imported/i)).toBeTruthy();
+    expect((screen.getByLabelText("Search canonical item") as HTMLInputElement).value).toBe("");
+
+    await user.click(screen.getByRole("button", { name: "Undo Not in Catalog" }));
+    expect(screen.getByDisplayValue("MANUAL-ALT-99")).toBeTruthy();
   });
 
   it("revalidates purchase-order headers after marking a line arrived", async () => {

@@ -2,6 +2,11 @@
 
 ### Changed
 
+- Improved the Orders CSV import preview UX for borderline item matches.
+  - `Import Purchase Order Lines CSV` preview rows with suggested matches can now be explicitly marked as `Not in Catalog`, which adds them to the existing missing-items CSV workflow instead of forcing an incorrect catalog confirmation
+  - the missing-items callout now explains this off-ramp directly so operators can reject a bad suggestion, register the missing item from the Items page, and then re-import the same order CSV
+  - undoing `Not in Catalog` now restores the operator's current manual catalog selection instead of resetting the row back to the original suggested match
+
 - Clarified the Reservations page execution UX.
   - reservation `deadline` now appears as `Needed By` in operator-facing labels/help text so the field no longer reads like a start time or auto-expiry timestamp
   - `Reservation List` now defaults to ACTIVE reservations and exposes an `Include History` toggle for released/consumed rows
@@ -34,6 +39,9 @@
 
 - Frontend targeted Vitest:
   - `npm run test -- tests/ReservationsPage.test.tsx tests/OrdersPage.test.tsx`
+  - result: successful (`19 passed`)
+- Frontend targeted Vitest:
+  - `.\\node_modules\\.bin\\vitest.cmd run tests\\OrdersPage.test.tsx`
   - result: successful (`19 passed`)
 - Backend targeted pytest:
   - `uv run --project backend python -m pytest backend/tests/test_service_transactions.py::test_reservation_can_use_incoming_backing_and_convert_on_arrival backend/tests/test_service_transactions.py::test_reservation_can_mix_stock_and_incoming_backing -q --import-mode=importlib`

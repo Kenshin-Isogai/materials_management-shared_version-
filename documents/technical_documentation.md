@@ -85,6 +85,7 @@ This document explains the implemented architecture of the Materials Management 
   - line-level document-reference edits still flow through the header model: changing a line's purchase-order document reference updates the current header metadata when appropriate or reattaches the line to an existing same-supplier header already using that value
   - the Orders UI opens HTTPS references as document links and shows other references as plain text
   - `frontend/src/features/orders/OrdersPage.tsx` now acts as a thin orchestration shell: SWR data fetching and import-preview state stay in the parent, while line/quotation/purchase-order browsing and edit state live in dedicated section components
+  - Orders import preview now lets operators explicitly mark suggested `needs_review` / `high_confidence` rows as not yet registered, routing them into the same missing-items CSV flow already used by fully unresolved rows
   - order import jobs now persist `request_metadata` so `supplier_id`, `supplier_name`, `row_overrides`, `alias_saves`, and `unlock_purchase_orders` remain available for inspection and redo
   - `POST /api/purchase-order-lines/import-jobs/{import_job_id}/undo` and `POST /api/purchase-order-lines/import-jobs/{import_job_id}/redo` now provide the same safety-first operator pattern already used by item imports
 - Generated artifact delivery for batch-produced missing-item register CSVs:

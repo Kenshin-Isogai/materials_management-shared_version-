@@ -33,17 +33,19 @@ export type OrderImportFormProps = {
   // Import preview props
   importPreview: OrderImportPreview | null;
   previewSelections: Record<string, CatalogSearchResult | null>;
+  previewMissingSelections: Record<string, boolean>;
   previewUnits: Record<string, string>;
   previewAliasSaves: Record<string, boolean>;
   previewUnlocks: Record<string, boolean>;
   setPreviewSelections: React.Dispatch<React.SetStateAction<Record<string, CatalogSearchResult | null>>>;
+  setPreviewMissingSelections: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
   setPreviewUnits: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   setPreviewAliasSaves: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
   setPreviewUnlocks: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
   selectedPreviewMatch: (row: OrderImportPreviewRow) => CatalogSearchResult | null;
   previewUnitsValue: (row: OrderImportPreviewRow) => string;
   canOfferAliasSave: (row: OrderImportPreviewRow, selected: CatalogSearchResult | null) => boolean;
-  unresolvedPreviewRows: () => MissingItemResolverRow[];
+  missingItemsPreviewRows: () => MissingItemResolverRow[];
   onConfirmImportPreview: () => void;
 };
 
@@ -61,21 +63,23 @@ export function OrderImportForm({
   onDownloadGeneratedArtifact,
   importPreview,
   previewSelections,
+  previewMissingSelections,
   previewUnits,
   previewAliasSaves,
   previewUnlocks,
   setPreviewSelections,
+  setPreviewMissingSelections,
   setPreviewUnits,
   setPreviewAliasSaves,
   setPreviewUnlocks,
   selectedPreviewMatch,
   previewUnitsValue,
   canOfferAliasSave,
-  unresolvedPreviewRows,
+  missingItemsPreviewRows,
   onConfirmImportPreview,
 }: OrderImportFormProps) {
   const navigate = useNavigate();
-  const unresolvedRows = unresolvedPreviewRows();
+  const missingItemRows = missingItemsPreviewRows();
 
   return (
     <>
@@ -205,12 +209,13 @@ export function OrderImportForm({
               </div>
             )}
 
-            {unresolvedRows.length > 0 && (
+            {missingItemRows.length > 0 && (
               <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-2">
                 <p className="text-sm font-semibold text-amber-900">
-                  {unresolvedRows.length} unresolved item(s) — not yet registered in the catalog
+                  {missingItemRows.length} item(s) need registration before this order import can continue
                 </p>
                 <ol className="list-decimal list-inside text-xs text-amber-800 space-y-1">
+                  <li>If a suggested catalog match is wrong, click <span className="font-semibold">Not in Catalog</span> on that row to add it here.</li>
                   <li>Download the missing-items CSV below.</li>
                   <li>Go to the <span className="font-semibold">Items</span> page and import it to register the new items.</li>
                   <li>Return here and <span className="font-semibold">re-import the same order file</span> — the newly registered items will now resolve.</li>
@@ -221,7 +226,7 @@ export function OrderImportForm({
                     type="button"
                     onClick={() =>
                       downloadMissingRowsCsv(
-                        unresolvedRows,
+                        missingItemRows,
                         "orders_preview_missing_items.csv"
                       )
                     }
@@ -249,10 +254,13 @@ export function OrderImportForm({
                 </thead>
                 <tbody>
                   {importPreview.rows.map((row) => {
+                    const previewKey = orderPreviewRowKey(row);
                     const selection = selectedPreviewMatch(row);
                     const canSaveAlias = canOfferAliasSave(row, selection);
+                    const isMarkedMissing = previewMissingSelections[previewKey] ?? false;
+                    const canMarkMissing = row.status === "needs_review" || row.status === "high_confidence";
                     return (
-                      <tr key={orderPreviewRowKey(row)} className="border-b border-slate-100 align-top">
+                      <tr key={previewKey} className="border-b border-slate-100 align-top">
                         <td className="px-2 py-3 font-semibold text-slate-700">#{row.row}</td>
                         <td className="px-2 py-3">
                           <div className="space-y-1">
@@ -331,16 +339,50 @@ export function OrderImportForm({
                           <div className="space-y-2">
                             <CatalogPicker
                               allowedTypes={["item"]}
-                              onChange={(value) =>
+                              onChange={(value) => {
                                 setPreviewSelections((prev) => ({
                                   ...prev,
-                                  [orderPreviewRowKey(row)]: value,
-                                }))
-                              }
+                                  [previewKey]: value,
+                                }));
+                                if (value) {
+                                  setPreviewMissingSelections((prev) => ({
+                                    ...prev,
+                                    [previewKey]: false,
+                                  }));
+                                }
+                              }}
                               placeholder="Search canonical item"
                               recentKey="orders-import-preview-item"
                               value={selection ?? null}
                             />
+                            {canMarkMissing && (
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  className="button-subtle"
+                                  type="button"
+                                  onClick={() => {
+                                    const nextMarkedMissing = !isMarkedMissing;
+                                    setPreviewMissingSelections((prev) => ({
+                                      ...prev,
+                                      [previewKey]: nextMarkedMissing,
+                                    }));
+                                    if (nextMarkedMissing) {
+                                      setPreviewAliasSaves((prev) => ({
+                                        ...prev,
+                                        [previewKey]: false,
+                                      }));
+                                    }
+                                  }}
+                                >
+                                  {isMarkedMissing ? "Undo Not in Catalog" : "Not in Catalog -> Missing Items CSV"}
+                                </button>
+                                {isMarkedMissing && (
+                                  <span className="text-xs font-semibold text-amber-700">
+                                    This row will be added to the Missing Items CSV instead of imported.
+                                  </span>
+                                )}
+                              </div>
+                            )}
                             <div className="flex flex-wrap gap-2">
                               <input
                                 className="input w-28"
@@ -361,11 +403,11 @@ export function OrderImportForm({
                             {canSaveAlias && (
                               <label className="flex items-center gap-2 text-xs text-slate-600">
                                 <input
-                                  checked={previewAliasSaves[orderPreviewRowKey(row)] ?? false}
+                                  checked={previewAliasSaves[previewKey] ?? false}
                                   onChange={(event) =>
                                     setPreviewAliasSaves((prev) => ({
                                       ...prev,
-                                      [orderPreviewRowKey(row)]: event.target.checked,
+                                      [previewKey]: event.target.checked,
                                     }))
                                   }
                                   type="checkbox"
@@ -400,7 +442,7 @@ export function OrderImportForm({
                 Clear Preview
               </button>
               <p className="self-center text-xs text-slate-500">
-                High-confidence rows can be confirmed directly; review and unresolved rows can be adjusted here before commit.
+                High-confidence rows can be confirmed directly; if a suggested match is wrong, use Not in Catalog to route that row into the Missing Items CSV flow.
               </p>
             </div>
           </div>

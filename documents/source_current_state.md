@@ -197,6 +197,7 @@ Last updated: 2026-04-10 (JST)
 - Shared-server browser CSV workflows are now preview-first on the main Items and Orders pages.
   - Items page uses one `General Items CSV Import` surface for regular item CSVs and order-generated missing-item CSVs
   - generated missing-item CSVs are downloaded from Orders and then edited/re-imported through the normal Items preview/import flow
+  - the Orders preview now also lets operators explicitly move suggested-but-wrong rows into that missing-item CSV path instead of forcing a catalog match selection
   - Bulk Item Entry keeps free-text manufacturer and alias-supplier entry, but now also suggests registered manufacturer/supplier names through browser-native datalist options to reduce normalization drift
   - Bulk Item Entry submit now reports an explicit completion summary, keeps failed rows in place for correction, and no longer aborts the remaining rows after the first submit error
 - Reservations page batch entry now reports submit success/failure inline, so backend inventory-allocation rejections are visible to operators instead of appearing only in the browser console

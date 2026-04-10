@@ -77,6 +77,20 @@ export function downloadMissingRowsCsv(rows: MissingItemResolverRow[], filename:
   window.setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
+export function orderPreviewRowToMissingItemRow(row: Pick<OrderImportPreviewRow, "row" | "item_number" | "supplier_name">): MissingItemResolverRow {
+  return {
+    row: row.row,
+    item_number: row.item_number,
+    supplier: row.supplier_name,
+    resolution_type: "new_item",
+    category: "",
+    url: "",
+    description: "",
+    canonical_item_number: "",
+    units_per_order: "",
+  };
+}
+
 export function previewMatchToCatalogResult(match: OrderImportPreviewMatch): CatalogSearchResult {
   return {
     entity_type: "item",

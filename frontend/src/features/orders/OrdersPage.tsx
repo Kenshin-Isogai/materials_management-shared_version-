@@ -20,6 +20,7 @@ import type {
 } from "@/features/orders/types";
 import {
   normalizeMissingRows,
+  orderPreviewRowToMissingItemRow,
   previewMatchToCatalogResult,
   orderPreviewRowKey,
   purchaseOrderPreviewKey,
@@ -38,6 +39,7 @@ export function OrdersPage() {
   const [missingRows, setMissingRows] = useState<MissingItemResolverRow[]>([]);
   const [importPreview, setImportPreview] = useState<OrderImportPreview | null>(null);
   const [previewSelections, setPreviewSelections] = useState<Record<string, CatalogSearchResult | null>>({});
+  const [previewMissingSelections, setPreviewMissingSelections] = useState<Record<string, boolean>>({});
   const [previewUnits, setPreviewUnits] = useState<Record<string, string>>({});
   const [previewAliasSaves, setPreviewAliasSaves] = useState<Record<string, boolean>>({});
   const [previewUnlocks, setPreviewUnlocks] = useState<Record<string, boolean>>({});
@@ -68,6 +70,7 @@ export function OrdersPage() {
   function resetImportPreview() {
     setImportPreview(null);
     setPreviewSelections({});
+    setPreviewMissingSelections({});
     setPreviewUnits({});
     setPreviewAliasSaves({});
     setPreviewUnlocks({});
@@ -79,12 +82,14 @@ export function OrdersPage() {
 
   function applyImportPreview(preview: OrderImportPreview) {
     const nextSelections: Record<string, CatalogSearchResult | null> = {};
+    const nextMissingSelections: Record<string, boolean> = {};
     const nextUnits: Record<string, string> = {};
     const nextAliasSaves: Record<string, boolean> = {};
     const nextUnlocks: Record<string, boolean> = {};
     for (const row of preview.rows) {
       const key = orderPreviewRowKey(row);
       nextSelections[key] = row.suggested_match ? previewMatchToCatalogResult(row.suggested_match) : null;
+      nextMissingSelections[key] = false;
       nextUnits[key] = String(row.suggested_match?.units_per_order ?? 1);
       nextAliasSaves[key] = false;
     }
@@ -93,12 +98,20 @@ export function OrdersPage() {
     }
     setImportPreview(preview);
     setPreviewSelections(nextSelections);
+    setPreviewMissingSelections(nextMissingSelections);
     setPreviewUnits(nextUnits);
     setPreviewAliasSaves(nextAliasSaves);
     setPreviewUnlocks(nextUnlocks);
   }
 
+  function isPreviewRowMarkedMissing(row: OrderImportPreviewRow): boolean {
+    return previewMissingSelections[orderPreviewRowKey(row)] ?? false;
+  }
+
   function selectedPreviewMatch(row: OrderImportPreviewRow): CatalogSearchResult | null {
+    if (isPreviewRowMarkedMissing(row)) {
+      return null;
+    }
     return resolvePreviewSelection(
       previewSelections,
       orderPreviewRowKey(row),
@@ -130,21 +143,15 @@ export function OrdersPage() {
     return normalizeCatalogValue(row.item_number) !== normalizeCatalogValue(selected.value_text);
   }
 
-  function unresolvedPreviewRows(): MissingItemResolverRow[] {
+  function missingItemsPreviewRows(): MissingItemResolverRow[] {
     if (!importPreview) return [];
     return importPreview.rows
-      .filter((row) => row.status === "unresolved" && !selectedPreviewMatch(row))
-      .map((row) => ({
-        row: row.row,
-        item_number: row.item_number,
-        supplier: row.supplier_name,
-        resolution_type: "new_item",
-        category: "",
-        url: "",
-        description: "",
-        canonical_item_number: "",
-        units_per_order: "",
-      }));
+      .filter(
+        (row) =>
+          !selectedPreviewMatch(row) &&
+          (row.status === "unresolved" || isPreviewRowMarkedMissing(row)),
+      )
+      .map(orderPreviewRowToMissingItemRow);
   }
 
   async function previewImport(event: FormEvent) {
@@ -186,6 +193,14 @@ export function OrdersPage() {
         `Unlock locked purchase orders before import: ${unresolvedLocks
           .map((locked) => locked.purchase_order_number)
           .join(", ")}`,
+      );
+      return;
+    }
+
+    const missingRegistrationRows = missingItemsPreviewRows();
+    if (missingRegistrationRows.length > 0) {
+      setMessage(
+        `Rows ${missingRegistrationRows.map((row) => row.row).join(", ")} need item registration first. Download Missing Items CSV, import it on Items, then re-import this order file.`,
       );
       return;
     }
@@ -326,17 +341,19 @@ export function OrdersPage() {
         onDownloadGeneratedArtifact={downloadGeneratedArtifact}
         importPreview={importPreview}
         previewSelections={previewSelections}
+        previewMissingSelections={previewMissingSelections}
         previewUnits={previewUnits}
         previewAliasSaves={previewAliasSaves}
         previewUnlocks={previewUnlocks}
         setPreviewSelections={setPreviewSelections}
+        setPreviewMissingSelections={setPreviewMissingSelections}
         setPreviewUnits={setPreviewUnits}
         setPreviewAliasSaves={setPreviewAliasSaves}
         setPreviewUnlocks={setPreviewUnlocks}
         selectedPreviewMatch={selectedPreviewMatch}
         previewUnitsValue={previewUnitsValue}
         canOfferAliasSave={canOfferAliasSave}
-        unresolvedPreviewRows={unresolvedPreviewRows}
+        missingItemsPreviewRows={missingItemsPreviewRows}
         onConfirmImportPreview={() => void confirmImportPreview()}
       />
 
