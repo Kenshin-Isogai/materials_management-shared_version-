@@ -895,7 +895,9 @@ End-to-End tests are implemented using Playwright to verify the full-stack behav
   - Reservations entry now uses `CatalogPicker` for item selection
   - Reservations entry now also supports optional project selection for provisional project linkage on reservation create
   - Reservations entry now also supports optional preferred incoming order selection; reservation create applies that eligible preferred line before stock allocation, then fills any remaining shortfall from open same-project dedicated or generic order lines in ETA order
+  - Reservations UI labels the reservation `deadline` field as `Needed By` for operators while preserving the backend/API field name
   - Reservations page now includes a provisional-allocation summary panel (project-linked active reservation totals + dedicated/uncommitted open incoming quantities) with CSV export support
+  - Reservation List defaults to ACTIVE rows and lets operators include released/consumed history on demand instead of loading historical rows by default
   - Reservation list rows now show stock-backed vs incoming-backed quantity, linked incoming order lines, and warning/shortage state when backing supply becomes delayed, oversubscribed, or unavailable
   - Items, Orders, Movements, and Reservations import preview rows now use the same catalog-search payload for reconciliation corrections
   - Orders import supplier selection also uses the same picker/search contract

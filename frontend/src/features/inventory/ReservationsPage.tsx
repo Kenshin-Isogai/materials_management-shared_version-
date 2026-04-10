@@ -89,6 +89,7 @@ function itemToCatalogResult(item: Item): CatalogSearchResult {
 
 export function ReservationsPage() {
   const location = useLocation();
+  const [showReservationHistory, setShowReservationHistory] = useState(false);
   const [bulkRows, setBulkRows] = useState<ReservationRow[]>([
     blankRow(),
     blankRow(),
@@ -105,8 +106,11 @@ export function ReservationsPage() {
   const [reservationPreviewSelections, setReservationPreviewSelections] = useState<
     Record<number, CatalogSearchResult | null>
   >({});
-  const { data, error, isLoading, mutate: mutateReservations } = useSWR("/reservations", () =>
-    apiGetWithPagination<Reservation[]>("/reservations?per_page=200")
+  const reservationListPath = showReservationHistory
+    ? "/reservations?per_page=200"
+    : "/reservations?status=ACTIVE&per_page=200";
+  const { data, error, isLoading, mutate: mutateReservations } = useSWR(reservationListPath, () =>
+    apiGetWithPagination<Reservation[]>(reservationListPath)
   );
   const { data: itemsResp } = useSWR("/items-options-reservations", () =>
     apiGetWithPagination<Item[]>("/items?per_page=1000")
@@ -125,6 +129,14 @@ export function ReservationsPage() {
   const projects = useMemo(() => projectsResp ?? [], [projectsResp]);
   const openOrderRows = useMemo(() => openOrders ?? [], [openOrders]);
   const allReservationRows = useMemo(() => allReservations ?? [], [allReservations]);
+  const activeReservationCount = useMemo(
+    () => allReservationRows.filter((row) => row.status === "ACTIVE").length,
+    [allReservationRows]
+  );
+  const historyReservationCount = useMemo(
+    () => allReservationRows.filter((row) => row.status !== "ACTIVE").length,
+    [allReservationRows]
+  );
   const itemCatalogById = useMemo(
     () => new Map(items.map((item) => [item.item_id, itemToCatalogResult(item)])),
     [items]
@@ -519,7 +531,7 @@ export function ReservationsPage() {
       <section className="panel grid gap-3 p-4">
         <h2 className="font-display text-lg font-semibold">CSV Import (Reservations)</h2>
         <p className="text-xs text-slate-500">
-          Columns: item_id, quantity, purpose, deadline, note, project_id(optional)
+          Columns: item_id, quantity, purpose, deadline (needed-by date), note, project_id(optional)
         </p>
         <div className="flex flex-wrap gap-2">
           <button
@@ -594,7 +606,7 @@ export function ReservationsPage() {
                             qty {row.quantity}
                           </p>
                           {row.purpose && <p className="text-xs text-slate-500">{row.purpose}</p>}
-                          {row.deadline && <p className="text-xs text-slate-500">deadline {row.deadline}</p>}
+                          {row.deadline && <p className="text-xs text-slate-500">needed by {row.deadline}</p>}
                           {row.project_id && <p className="text-xs text-slate-500">project #{row.project_id}</p>}
                         </div>
                       </td>
@@ -674,7 +686,7 @@ export function ReservationsPage() {
           </button>
         </div>
         <p className="text-xs text-slate-500">
-          Single-item and multi-item reservations are both handled here.
+          Single-item and multi-item reservations are both handled here. Use <span className="font-semibold">Needed By</span> for the date the reserved stock is expected to be required.
         </p>
         <div className="overflow-x-auto">
           <table className="min-w-full text-sm">
@@ -683,7 +695,7 @@ export function ReservationsPage() {
                 <th className="px-2 py-2">Item</th>
                 <th className="px-2 py-2">Qty</th>
                 <th className="px-2 py-2">Purpose</th>
-                <th className="px-2 py-2">Deadline</th>
+                <th className="px-2 py-2">Needed By</th>
                 <th className="px-2 py-2">Note</th>
                 <th className="px-2 py-2">Project (optional)</th>
                 <th className="px-2 py-2">Incoming Order (optional)</th>
@@ -856,7 +868,30 @@ export function ReservationsPage() {
       </section>
 
       <section className="panel p-4">
-        <h2 className="mb-3 font-display text-lg font-semibold">Reservation List</h2>
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="font-display text-lg font-semibold">Reservation List</h2>
+            <p className="text-xs text-slate-500">
+              Default view shows ACTIVE reservations only. Turn on history to review released or consumed rows.
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              className={showReservationHistory ? "button-subtle" : "button"}
+              type="button"
+              onClick={() => setShowReservationHistory(false)}
+            >
+              Active Only ({activeReservationCount})
+            </button>
+            <button
+              className={showReservationHistory ? "button" : "button-subtle"}
+              type="button"
+              onClick={() => setShowReservationHistory(true)}
+            >
+              Include History ({historyReservationCount})
+            </button>
+          </div>
+        </div>
         {isLoading && <p className="text-sm text-slate-500">Loading...</p>}
         {error && <ApiErrorNotice error={error} area="reservation data" />}
         {data?.data && (
@@ -868,7 +903,7 @@ export function ReservationsPage() {
                   <th className="px-2 py-2">Item</th>
                   <th className="px-2 py-2">Qty</th>
                   <th className="px-2 py-2">Purpose</th>
-                  <th className="px-2 py-2">Deadline</th>
+                  <th className="px-2 py-2">Needed By</th>
                   <th className="px-2 py-2">Project</th>
                   <th className="px-2 py-2">Backing</th>
                   <th className="px-2 py-2">Status</th>
@@ -876,65 +911,75 @@ export function ReservationsPage() {
                 </tr>
               </thead>
               <tbody>
-                {data.data.map((row) => (
-                  <tr key={row.reservation_id} className="border-b border-slate-100">
-                    <td className="px-2 py-2">#{row.reservation_id}</td>
-                    <td className="px-2 py-2">{row.item_number}</td>
-                    <td className="px-2 py-2">{row.quantity}</td>
-                    <td className="px-2 py-2">{row.purpose ?? "-"}</td>
-                    <td className="px-2 py-2">{row.deadline ?? "-"}</td>
-                    <td className="px-2 py-2">
-                      {row.project_id ? `${row.project_name ?? "(unnamed)"} (#${row.project_id})` : "-"}
-                    </td>
-                    <td className="px-2 py-2">
-                      <div className="space-y-1 text-xs text-slate-600">
-                        <p>Stock {row.stock_backed_quantity ?? 0} / Incoming {row.incoming_backed_quantity ?? 0}</p>
-                        {row.incoming_backing?.filter((entry) => entry.status === "ACTIVE").map((entry) => (
-                          <p key={entry.incoming_allocation_id}>
-                            Order #{entry.order_id ?? "?"} · PO {entry.purchase_order_number ?? "-"} · qty {entry.quantity} · ETA {entry.expected_arrival ?? entry.expected_arrival_snapshot ?? "-"}
-                          </p>
-                        ))}
-                        {row.backing_risk_status && row.backing_risk_status !== "ok" && (
-                          <p className={row.backing_risk_status === "shortage" ? "text-rose-700" : "text-amber-700"}>
-                            {row.backing_risk_status.toUpperCase()}
-                            {row.backing_risk_reasons?.length ? `: ${row.backing_risk_reasons[0]}` : ""}
-                          </p>
-                        )}
-                        {row.incoming_candidate_orders?.length ? (
-                          <p className="text-slate-500">
-                            Alternatives:{" "}
-                            {row.incoming_candidate_orders
-                              .map((candidate) => `#${candidate.order_id} (${candidate.available_quantity})`)
-                              .join(", ")}
-                          </p>
-                        ) : null}
-                      </div>
-                    </td>
-                    <td className="px-2 py-2">{row.status}</td>
-                    <td className="px-2 py-2">
-                      {row.status === "ACTIVE" ? (
-                        <div className="flex gap-2">
-                          <button
-                            className="button-subtle"
-                            onClick={() => release(row.reservation_id, row.quantity)}
-                            disabled={loading}
-                          >
-                            Release...
-                          </button>
-                          <button
-                            className="button-subtle"
-                            onClick={() => consume(row.reservation_id, row.quantity)}
-                            disabled={loading}
-                          >
-                            Consume...
-                          </button>
+                {data.data.length ? (
+                  data.data.map((row) => (
+                    <tr key={row.reservation_id} className="border-b border-slate-100">
+                      <td className="px-2 py-2">#{row.reservation_id}</td>
+                      <td className="px-2 py-2">{row.item_number}</td>
+                      <td className="px-2 py-2">{row.quantity}</td>
+                      <td className="px-2 py-2">{row.purpose ?? "-"}</td>
+                      <td className="px-2 py-2">{row.deadline ?? "-"}</td>
+                      <td className="px-2 py-2">
+                        {row.project_id ? `${row.project_name ?? "(unnamed)"} (#${row.project_id})` : "-"}
+                      </td>
+                      <td className="px-2 py-2">
+                        <div className="space-y-1 text-xs text-slate-600">
+                          <p>Stock {row.stock_backed_quantity ?? 0} / Incoming {row.incoming_backed_quantity ?? 0}</p>
+                          {row.incoming_backing?.filter((entry) => entry.status === "ACTIVE").map((entry) => (
+                            <p key={entry.incoming_allocation_id}>
+                              Order #{entry.order_id ?? "?"} · PO {entry.purchase_order_number ?? "-"} · qty {entry.quantity} · ETA {entry.expected_arrival ?? entry.expected_arrival_snapshot ?? "-"}
+                            </p>
+                          ))}
+                          {row.backing_risk_status && row.backing_risk_status !== "ok" && (
+                            <p className={row.backing_risk_status === "shortage" ? "text-rose-700" : "text-amber-700"}>
+                              {row.backing_risk_status.toUpperCase()}
+                              {row.backing_risk_reasons?.length ? `: ${row.backing_risk_reasons[0]}` : ""}
+                            </p>
+                          )}
+                          {row.incoming_candidate_orders?.length ? (
+                            <p className="text-slate-500">
+                              Alternatives:{" "}
+                              {row.incoming_candidate_orders
+                                .map((candidate) => `#${candidate.order_id} (${candidate.available_quantity})`)
+                                .join(", ")}
+                            </p>
+                          ) : null}
                         </div>
-                      ) : (
-                        <span className="text-slate-400">-</span>
-                      )}
+                      </td>
+                      <td className="px-2 py-2">{row.status}</td>
+                      <td className="px-2 py-2">
+                        {row.status === "ACTIVE" ? (
+                          <div className="flex gap-2">
+                            <button
+                              className="button-subtle"
+                              onClick={() => release(row.reservation_id, row.quantity)}
+                              disabled={loading}
+                            >
+                              Release...
+                            </button>
+                            <button
+                              className="button-subtle"
+                              onClick={() => consume(row.reservation_id, row.quantity)}
+                              disabled={loading}
+                            >
+                              Consume...
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-slate-400">-</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr>
+                    <td className="px-2 py-4 text-slate-500" colSpan={9}>
+                      {showReservationHistory
+                        ? "No reservation history found."
+                        : "No ACTIVE reservations right now. Turn on history to review released or consumed rows."}
                     </td>
                   </tr>
-                ))}
+                )}
               </tbody>
             </table>
           </div>

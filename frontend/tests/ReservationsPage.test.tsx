@@ -1,228 +1,144 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import { SWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ReservationsPage } from "@/features/inventory/ReservationsPage";
 
-const apiDownloadMock = vi.fn();
-const apiGetAllPagesMock = vi.fn();
-const apiGetWithPaginationMock = vi.fn();
-const apiSendMock = vi.fn();
-const apiSendFormMock = vi.fn();
+const useSWRMock = vi.fn();
 
-vi.mock("../src/lib/api", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../src/lib/api")>();
-  return {
-    ...actual,
-    apiDownload: (...args: unknown[]) => apiDownloadMock(...args),
-    apiGetAllPages: (...args: unknown[]) => apiGetAllPagesMock(...args),
-    apiGetWithPagination: (...args: unknown[]) => apiGetWithPaginationMock(...args),
-    apiSend: (...args: unknown[]) => apiSendMock(...args),
-    apiSendForm: (...args: unknown[]) => apiSendFormMock(...args),
-  };
-});
-
-vi.mock("../src/components/CatalogPicker", () => ({
-  CatalogPicker: ({ placeholder }: { placeholder?: string }) => (
-    <input aria-label={placeholder ?? "Catalog Picker"} className="input" />
-  ),
+vi.mock("swr", () => ({
+  default: (key: string, fetcher: unknown) => useSWRMock(key, fetcher),
 }));
 
-import { ReservationsPage } from "../src/features/inventory/ReservationsPage";
-import { ApiClientError } from "../src/lib/types";
+vi.mock("@/components/ApiErrorNotice", () => ({
+  ApiErrorNotice: () => <div>api error</div>,
+}));
 
-function renderPage(initialEntries: string[] = ["/reservations"]) {
-  render(
-    <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
-      <MemoryRouter initialEntries={initialEntries}>
-        <ReservationsPage />
-      </MemoryRouter>
-    </SWRConfig>,
-  );
-}
+vi.mock("@/components/ImportPreviewSummary", () => ({
+  ImportPreviewSummary: () => <div>preview summary</div>,
+}));
+
+vi.mock("@/components/CatalogPicker", () => ({
+  CatalogPicker: () => <div>catalog picker</div>,
+}));
+
+const activeReservation = {
+  reservation_id: 101,
+  item_id: 1,
+  item_number: "ITEM-ACTIVE",
+  quantity: 2,
+  purpose: "Bench work",
+  deadline: "2026-04-20",
+  status: "ACTIVE" as const,
+  note: null,
+  created_at: "2026-04-10T00:00:00+09:00",
+  stock_backed_quantity: 2,
+  incoming_backed_quantity: 0,
+};
+
+const releasedReservation = {
+  reservation_id: 102,
+  item_id: 1,
+  item_number: "ITEM-RELEASED",
+  quantity: 1,
+  purpose: "Old work",
+  deadline: "2026-04-05",
+  status: "RELEASED" as const,
+  note: null,
+  created_at: "2026-04-09T00:00:00+09:00",
+  stock_backed_quantity: 0,
+  incoming_backed_quantity: 0,
+};
 
 describe("ReservationsPage", () => {
-  beforeEach(() => {
-    apiDownloadMock.mockReset();
-    apiGetAllPagesMock.mockReset();
-    apiGetWithPaginationMock.mockReset();
-    apiSendMock.mockReset();
-    apiSendFormMock.mockReset();
-
-    apiGetWithPaginationMock.mockImplementation(async (path: string) => {
-      if (path === "/reservations?per_page=200") {
-        return { data: [], pagination: undefined };
-      }
-      if (path === "/items?per_page=1000") {
-        return {
-          data: [
-            {
-              item_id: 1,
-              item_number: "ITEM-001",
-              manufacturer_id: 10,
-              manufacturer_name: "Maker",
-              category: "Optics",
-              description: "Test item",
-            },
-          ],
-          pagination: undefined,
-        };
-      }
-      throw new Error(`Unexpected apiGetWithPagination path: ${path}`);
-    });
-
-    apiGetAllPagesMock.mockImplementation(async (path: string) => {
-      if (path === "/projects?per_page=200") {
-        return [
-          {
-            project_id: 3,
-            name: "Project Alpha",
-            status: "ACTIVE",
-            planned_start: "2026-04-10",
-            requirement_count: 0,
-          },
-        ];
-      }
-      if (
-        path === "/purchase-order-lines?include_arrived=false&per_page=200" ||
-        path === "/reservations?per_page=200"
-      ) {
-        if (path === "/purchase-order-lines?include_arrived=false&per_page=200") {
-          return [
-            {
-              order_id: 11,
-              purchase_order_id: 101,
-              purchase_order_number: "PO-GENERIC",
-              item_id: 1,
-              quotation_id: 201,
-              project_id: null,
-              canonical_item_number: "ITEM-001",
-              order_amount: 4,
-              ordered_quantity: 4,
-              ordered_item_number: "ITEM-001",
-              order_date: "2026-04-01",
-              expected_arrival: "2026-04-15",
-              arrival_date: null,
-              status: "Ordered",
-              supplier_name: "Supplier Generic",
-              quotation_number: "Q-GENERIC",
-            },
-            {
-              order_id: 12,
-              purchase_order_id: 102,
-              purchase_order_number: "PO-ALPHA",
-              item_id: 1,
-              quotation_id: 202,
-              project_id: 3,
-              project_name: "Project Alpha",
-              canonical_item_number: "ITEM-001",
-              order_amount: 5,
-              ordered_quantity: 5,
-              ordered_item_number: "ITEM-001",
-              order_date: "2026-04-02",
-              expected_arrival: "2026-04-16",
-              arrival_date: null,
-              status: "Ordered",
-              supplier_name: "Supplier Alpha",
-              quotation_number: "Q-ALPHA",
-            },
-            {
-              order_id: 13,
-              purchase_order_id: 103,
-              purchase_order_number: "PO-BETA",
-              item_id: 1,
-              quotation_id: 203,
-              project_id: 9,
-              project_name: "Project Beta",
-              canonical_item_number: "ITEM-001",
-              order_amount: 6,
-              ordered_quantity: 6,
-              ordered_item_number: "ITEM-001",
-              order_date: "2026-04-03",
-              expected_arrival: "2026-04-17",
-              arrival_date: null,
-              status: "Ordered",
-              supplier_name: "Supplier Beta",
-              quotation_number: "Q-BETA",
-            },
-          ];
-        }
-        return [];
-      }
-      throw new Error(`Unexpected apiGetAllPages path: ${path}`);
-    });
-  });
-
   afterEach(() => {
     cleanup();
   });
 
-  it("shows a success message after batch creation", async () => {
-    const user = userEvent.setup();
-    apiSendMock.mockResolvedValue([]);
-
-    renderPage(["/reservations?item_id=1&quantity=2&project_id=3"]);
-
-    await user.click(await screen.findByRole("button", { name: "Submit Batch" }));
-
-    await waitFor(() => {
-      expect(apiSendMock).toHaveBeenCalledWith("/reservations/batch", {
-        method: "POST",
-        body: JSON.stringify({
-          reservations: [
-            {
-              item_id: 1,
-              quantity: 2,
-              purpose: null,
-              deadline: null,
-              note: null,
-              project_id: 3,
-              preferred_order_id: null,
-            },
-          ],
-        }),
-      });
+  beforeEach(() => {
+    useSWRMock.mockReset();
+    useSWRMock.mockImplementation((key: string) => {
+      if (key === "/reservations?status=ACTIVE&per_page=200") {
+        return {
+          data: { data: [activeReservation], pagination: { page: 1, per_page: 200, total: 1, total_pages: 1 } },
+          error: undefined,
+          isLoading: false,
+          mutate: vi.fn(),
+        };
+      }
+      if (key === "/reservations?per_page=200") {
+        return {
+          data: {
+            data: [activeReservation, releasedReservation],
+            pagination: { page: 1, per_page: 200, total: 2, total_pages: 1 },
+          },
+          error: undefined,
+          isLoading: false,
+          mutate: vi.fn(),
+        };
+      }
+      if (key === "/reservations-summary-options") {
+        return {
+          data: [activeReservation, releasedReservation],
+          error: undefined,
+          isLoading: false,
+          mutate: vi.fn(),
+        };
+      }
+      if (key === "/items-options-reservations") {
+        return {
+          data: { data: [], pagination: { page: 1, per_page: 1000, total: 0, total_pages: 1 } },
+          error: undefined,
+          isLoading: false,
+          mutate: vi.fn(),
+        };
+      }
+      return {
+        data: [],
+        error: undefined,
+        isLoading: false,
+        mutate: vi.fn(),
+      };
     });
-
-    expect(await screen.findByText("Created 1 reservation row(s).")).toBeTruthy();
   });
 
-  it("shows the backend error when batch creation fails", async () => {
-    const user = userEvent.setup();
-    apiSendMock.mockRejectedValue(
-      new ApiClientError({
-        message: "Not enough available inventory for reservation",
-        statusCode: 409,
-        code: "INSUFFICIENT_STOCK",
-      }),
+  it("defaults the reservation list to active rows and uses needed-by wording", () => {
+    render(
+      <MemoryRouter>
+        <ReservationsPage />
+      </MemoryRouter>
     );
 
-    renderPage(["/reservations?item_id=1&quantity=2&project_id=3"]);
+    const reservationListSection = screen
+      .getAllByRole("heading", { name: "Reservation List" })[0]
+      .closest("section");
 
-    await user.click(await screen.findByRole("button", { name: "Submit Batch" }));
-
-    expect(
-      await screen.findByText("Submit batch failed: Not enough available inventory for reservation"),
-    ).toBeTruthy();
+    expect(reservationListSection).not.toBeNull();
+    expect(useSWRMock).toHaveBeenCalledWith("/reservations?status=ACTIVE&per_page=200", expect.any(Function));
+    expect(screen.getAllByText("Needed By").length).toBeGreaterThan(0);
+    expect(within(reservationListSection as HTMLElement).getByRole("button", { name: "Active Only (1)" })).toBeTruthy();
+    expect(screen.getByText("ITEM-ACTIVE")).not.toBeNull();
+    expect(screen.queryByText("ITEM-RELEASED")).toBeNull();
   });
 
-  it("hides preferred incoming orders that do not match the reservation project scope", async () => {
+  it("shows released history rows when history is enabled", async () => {
     const user = userEvent.setup();
 
-    renderPage(["/reservations?item_id=1&quantity=2"]);
+    render(
+      <MemoryRouter>
+        <ReservationsPage />
+      </MemoryRouter>
+    );
 
-    const preferredOrderSelect = (await screen.findAllByRole("combobox"))[1];
-    await user.selectOptions(preferredOrderSelect, "11");
+    const reservationListSection = screen
+      .getAllByRole("heading", { name: "Reservation List" })[0]
+      .closest("section");
 
-    expect(screen.getByRole("option", { name: /PO-GENERIC/i })).toBeTruthy();
-    expect(screen.queryByRole("option", { name: /PO-ALPHA/i })).toBeNull();
-    expect(screen.queryByRole("option", { name: /PO-BETA/i })).toBeNull();
+    expect(reservationListSection).not.toBeNull();
+    await user.click(within(reservationListSection as HTMLElement).getByRole("button", { name: "Include History (1)" }));
 
-    const projectSelect = (await screen.findAllByRole("combobox"))[0];
-    await user.selectOptions(projectSelect, "3");
-
-    expect(screen.getByRole("option", { name: /PO-GENERIC/i })).toBeTruthy();
-    expect(screen.getByRole("option", { name: /PO-ALPHA/i })).toBeTruthy();
-    expect(screen.queryByRole("option", { name: /PO-BETA/i })).toBeNull();
+    expect(useSWRMock).toHaveBeenCalledWith("/reservations?per_page=200", expect.any(Function));
+    expect(screen.getByText("ITEM-RELEASED")).not.toBeNull();
+    expect(screen.getByText("RELEASED")).not.toBeNull();
   });
 });

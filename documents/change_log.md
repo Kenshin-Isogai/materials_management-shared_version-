@@ -2,6 +2,10 @@
 
 ### Changed
 
+- Clarified the Reservations page execution UX.
+  - reservation `deadline` now appears as `Needed By` in operator-facing labels/help text so the field no longer reads like a start time or auto-expiry timestamp
+  - `Reservation List` now defaults to ACTIVE reservations and exposes an `Include History` toggle for released/consumed rows
+
 - Made generic incoming-order reservation lookup handle `project_id=None` with an explicit SQL predicate and added backend regression coverage for non-project reservations auto-filling from generic incoming supply.
 
 - Fixed two remaining incoming-backing review regressions.
