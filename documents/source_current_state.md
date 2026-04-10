@@ -1,6 +1,6 @@
 # Source Current State
 
-Last updated: 2026-04-06 (JST)
+Last updated: 2026-04-10 (JST)
 
 ## 1. System Snapshot
 
@@ -199,6 +199,16 @@ Last updated: 2026-04-06 (JST)
   - generated missing-item CSVs are downloaded from Orders and then edited/re-imported through the normal Items preview/import flow
   - Bulk Item Entry keeps free-text manufacturer and alias-supplier entry, but now also suggests registered manufacturer/supplier names through browser-native datalist options to reduce normalization drift
   - Bulk Item Entry submit now reports an explicit completion summary, keeps failed rows in place for correction, and no longer aborts the remaining rows after the first submit error
+- Reservations page batch entry now reports submit success/failure inline, so backend inventory-allocation rejections are visible to operators instead of appearing only in the browser console
+- Reservations can now mix current stock-backed quantity with incoming order-backed quantity.
+  - incoming backing is stored per purchase-order line through `reservation_incoming_allocations`
+  - an explicit preferred incoming order line is allocated before stock when it is eligible for the reservation item/project, so order-line-driven reservation creation can still honor the selected line even when stock exists
+  - the Reservations page preferred-order selector now only shows backend-eligible lines: generic lines for generic reservations, plus same-project dedicated lines when a project is selected
+  - reservation create can auto-fill current-stock shortfalls from open same-project dedicated or generic orders in ETA order
+  - order-line detail cards now show how much incoming quantity is already reserved
+  - reservation list rows now show stock vs incoming backing, linked incoming order lines, and warning/shortage guidance plus suggested alternative incoming lines
+  - order arrival now converts matching incoming-backed reservation quantity into stock-backed location allocations automatically
+  - ARRIVAL undo now restores that converted backing onto open incoming supply for the undone quantity instead of leaving it tied to a closed arrived line
 - Arrival page timeline view now keeps the `Overdue` list in its own capped scroll region, so large overdue sets do not force the whole page column to grow before users can inspect the detail pane.
 - Orders manual CSV import and quotation maintenance now use external document URLs as the primary contract.
   - `supplier` is required on every manual order CSV row

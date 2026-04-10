@@ -1,3 +1,46 @@
+## 2026-04-10
+
+### Changed
+
+- Made generic incoming-order reservation lookup handle `project_id=None` with an explicit SQL predicate and added backend regression coverage for non-project reservations auto-filling from generic incoming supply.
+
+- Fixed two remaining incoming-backing review regressions.
+  - ARRIVAL undo now restores incoming-backed reservations onto an actually open order line by reopening the fully undone arrived line or recreating open supply for the undone quantity before moving reservation backing off the converted row
+  - Reservations preferred incoming-order dropdowns now hide project-incompatible order lines, matching the backend rule that only same-project dedicated lines or generic lines are eligible
+
+- Fixed the remaining ARRIVAL regressions in the incoming-backing flow.
+  - `undo_transaction` now restores arrival-converted reservation backing from stock allocations back into active incoming allocations for the actually undone quantity
+  - full-arrival API requests now accept location-only bodies such as `{"location": "BENCH_B"}` without requiring a redundant `quantity`
+- Fixed the remaining incoming-backing regressions in reservation create and ARRIVAL undo.
+  - explicit `preferred_order_id` backing is now honored even when enough stock already exists by allocating the preferred incoming line before stock and then using stock/other incoming supply for any remainder
+  - preferred incoming order lines now enforce the same project ownership scope as automatic incoming selection, preventing cross-project dedicated-line reservations
+  - `undo_transaction` now reverses ARRIVAL quantity from the transaction's actual destination location instead of always assuming `STOCK`
+- Added incoming-backed reservation support across backend and frontend.
+  - reservations can now mix current stock-backed quantity with future incoming order-backed quantity
+  - reservation create can auto-fill stock shortfalls from open same-project dedicated or generic purchase-order lines in ETA order
+  - `Reservation Entry` now allows an optional preferred incoming order line and shows inline submit success/failure messages
+  - `Reservation List` now surfaces stock vs incoming backing, linked incoming order lines, and warning/shortage guidance with alternative incoming candidates
+  - purchase-order-line cards now show incoming-reserved quantity / reservation count and open Reservations with that line preselected as preferred incoming backing
+  - order arrival now converts matching incoming-backed allocations into stock-backed location allocations automatically, using `STOCK` by default and allowing an optional arrival location override
+- Fixed reservation backing edge cases in the new incoming-backed flow.
+  - `consume_reservation` now distinguishes true active-allocation drift from a reservation that still has incoming-backed quantity and therefore is not yet ready to consume from stock
+  - added regression coverage for partial arrivals so only the unarrived incoming-backed remainder stays linked to the split order line
+
+### Tests
+
+- Frontend targeted Vitest:
+  - `npm run test -- tests/ReservationsPage.test.tsx tests/OrdersPage.test.tsx`
+  - result: successful (`19 passed`)
+- Backend targeted pytest:
+  - `uv run --project backend python -m pytest backend/tests/test_service_transactions.py::test_reservation_can_use_incoming_backing_and_convert_on_arrival backend/tests/test_service_transactions.py::test_reservation_can_mix_stock_and_incoming_backing -q --import-mode=importlib`
+  - result: skipped in this environment (`TEST_DATABASE_URL or DATABASE_URL is required for PostgreSQL-backed tests`)
+- Backend compile check:
+  - `uv run --project backend python -m compileall backend/app`
+  - result: successful
+- Backend targeted pytest:
+  - `uv run --project backend python -m pytest backend/tests/test_service_transactions.py -k "incoming_backing_and_convert_on_arrival or partial_arrival_moves_only_remaining_incoming_backing_to_split_order or partial_arrival_sibling_inherits_project_id or consume_reservation_fails_when_active_allocations_missing" -q --import-mode=importlib`
+  - result: successful
+
 ## 2026-04-09
 
 ### Changed

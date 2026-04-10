@@ -593,6 +593,244 @@ def test_concurrent_reservations_do_not_overallocate(conn, database_url: str):
         check_conn.close()
 
 
+def test_reservation_can_use_incoming_backing_and_convert_on_arrival(conn):
+    item = _create_basic_item(conn, item_number="ITEM-INCOMING-RES")
+    import_result = service.import_orders_from_content(
+        conn,
+        supplier_name="SupplierIncomingReservation",
+        content=(
+            "item_number,quantity,quotation_number,issue_date,order_date,expected_arrival,quotation_document_url\n"
+            f"{item['item_number']},5,Q-INCOMING-001,2026-04-01,2026-04-01,2026-04-10,https://example.com/q-incoming-001\n"
+        ).encode("utf-8"),
+        source_name="incoming_reservation.csv",
+    )
+    order_id = int(import_result["order_ids"][0])
+
+    reservation = service.create_reservation(
+        conn,
+        {
+            "item_id": item["item_id"],
+            "quantity": 4,
+            "purpose": "incoming-backed",
+            "preferred_order_id": order_id,
+        },
+    )
+    conn.commit()
+
+    assert int(reservation["stock_backed_quantity"]) == 0
+    assert int(reservation["incoming_backed_quantity"]) == 4
+    assert len(reservation["incoming_backing"]) == 1
+    assert int(reservation["incoming_backing"][0]["order_id"]) == order_id
+
+    arrival_result = service.process_order_arrival(conn, order_id=order_id)
+    conn.commit()
+
+    assert int(arrival_result["arrived_quantity"]) == 5
+    refreshed = service.get_reservation(conn, int(reservation["reservation_id"]))
+    assert int(refreshed["stock_backed_quantity"]) == 4
+    assert int(refreshed["incoming_backed_quantity"]) == 0
+    assert _inventory_qty(conn, item["item_id"], "STOCK") == 5
+
+
+def test_partial_arrival_moves_only_remaining_incoming_backing_to_split_order(conn):
+    item = _create_basic_item(conn, item_number="ITEM-INCOMING-RES-SPLIT")
+    import_result = service.import_orders_from_content(
+        conn,
+        supplier_name="SupplierIncomingReservationSplit",
+        content=(
+            "item_number,quantity,quotation_number,issue_date,order_date,expected_arrival,quotation_document_url\n"
+            f"{item['item_number']},10,Q-INCOMING-SPLIT-001,2026-04-01,2026-04-01,2026-04-10,https://example.com/q-incoming-split-001\n"
+        ).encode("utf-8"),
+        source_name="incoming_reservation_split.csv",
+    )
+    order_id = int(import_result["order_ids"][0])
+
+    reservation = service.create_reservation(
+        conn,
+        {
+            "item_id": item["item_id"],
+            "quantity": 8,
+            "purpose": "incoming-backed-split",
+            "preferred_order_id": order_id,
+        },
+    )
+
+    arrival_result = service.process_order_arrival(conn, order_id=order_id, quantity=3)
+    conn.commit()
+
+    assert arrival_result["split_order_id"] is not None
+    split_order_id = int(arrival_result["split_order_id"])
+    refreshed = service.get_reservation(conn, int(reservation["reservation_id"]))
+    active_incoming = [
+        entry for entry in refreshed["incoming_backing"] if entry["status"] == "ACTIVE"
+    ]
+    converted_incoming = [
+        entry for entry in refreshed["incoming_backing"] if entry["status"] == "CONVERTED"
+    ]
+
+    assert int(refreshed["stock_backed_quantity"]) == 3
+    assert int(refreshed["incoming_backed_quantity"]) == 5
+    assert len(active_incoming) == 1
+    assert int(active_incoming[0]["order_id"]) == split_order_id
+    assert int(active_incoming[0]["quantity"]) == 5
+    assert sum(int(entry["quantity"]) for entry in converted_incoming) == 3
+    assert _inventory_qty(conn, item["item_id"], "STOCK") == 3
+
+
+def test_reservation_can_mix_stock_and_incoming_backing(conn):
+    item = _create_basic_item(conn, item_number="ITEM-MIXED-RES")
+    service.adjust_inventory(
+        conn,
+        item_id=item["item_id"],
+        quantity_delta=2,
+        location="STOCK",
+        note="seed stock for mixed reservation",
+    )
+    import_result = service.import_orders_from_content(
+        conn,
+        supplier_name="SupplierMixedReservation",
+        content=(
+            "item_number,quantity,quotation_number,issue_date,order_date,expected_arrival,quotation_document_url\n"
+            f"{item['item_number']},5,Q-MIXED-001,2026-04-01,2026-04-01,2026-04-12,https://example.com/q-mixed-001\n"
+        ).encode("utf-8"),
+        source_name="mixed_reservation.csv",
+    )
+    order_id = int(import_result["order_ids"][0])
+
+    reservation = service.create_reservation(
+        conn,
+        {
+            "item_id": item["item_id"],
+            "quantity": 5,
+            "purpose": "mixed-backed",
+            "preferred_order_id": order_id,
+        },
+    )
+    conn.commit()
+
+    assert int(reservation["quantity"]) == 5
+    assert int(reservation["stock_backed_quantity"]) == 0
+    assert int(reservation["incoming_backed_quantity"]) == 5
+
+    release_result = service.release_reservation(conn, int(reservation["reservation_id"]), quantity=1)
+    conn.commit()
+
+    assert int(release_result["quantity"]) == 4
+    assert int(release_result["stock_backed_quantity"]) + int(release_result["incoming_backed_quantity"]) == 4
+
+
+def test_reservation_preferred_incoming_is_honored_even_when_stock_is_sufficient(conn):
+    item = _create_basic_item(conn, item_number="ITEM-PREFERRED-INCOMING-STOCK")
+    service.adjust_inventory(
+        conn,
+        item_id=item["item_id"],
+        quantity_delta=10,
+        location="STOCK",
+        note="seed stock for preferred incoming",
+    )
+    import_result = service.import_orders_from_content(
+        conn,
+        supplier_name="SupplierPreferredIncoming",
+        content=(
+            "item_number,quantity,quotation_number,issue_date,order_date,expected_arrival,quotation_document_url\n"
+            f"{item['item_number']},4,Q-PREFERRED-001,2026-04-01,2026-04-01,2026-04-15,https://example.com/q-preferred-001\n"
+        ).encode("utf-8"),
+        source_name="preferred_incoming_reservation.csv",
+    )
+    order_id = int(import_result["order_ids"][0])
+
+    reservation = service.create_reservation(
+        conn,
+        {
+            "item_id": item["item_id"],
+            "quantity": 6,
+            "purpose": "preferred-incoming-with-stock",
+            "preferred_order_id": order_id,
+        },
+    )
+    conn.commit()
+
+    assert int(reservation["stock_backed_quantity"]) == 2
+    assert int(reservation["incoming_backed_quantity"]) == 4
+    assert len(reservation["incoming_backing"]) == 1
+    assert int(reservation["incoming_backing"][0]["order_id"]) == order_id
+
+
+def test_reservation_rejects_preferred_incoming_from_different_project(conn):
+    item = _create_basic_item(conn, item_number="ITEM-PREFERRED-PROJECT")
+    project_a = service.create_project(
+        conn,
+        {
+            "name": "Project A",
+            "status": "ACTIVE",
+            "owner": "alice",
+            "planned_start": "2026-04-10",
+        },
+    )
+    project_b = service.create_project(
+        conn,
+        {
+            "name": "Project B",
+            "status": "ACTIVE",
+            "owner": "bob",
+            "planned_start": "2026-04-10",
+        },
+    )
+    import_result = service.import_orders_from_content(
+        conn,
+        supplier_name="SupplierDedicatedIncoming",
+        content=(
+            "item_number,quantity,quotation_number,issue_date,order_date,expected_arrival,quotation_document_url,project_name\n"
+            f"{item['item_number']},5,Q-PROJECT-001,2026-04-01,2026-04-01,2026-04-20,https://example.com/q-project-001,{project_b['name']}\n"
+        ).encode("utf-8"),
+        source_name="project_dedicated_incoming.csv",
+    )
+    order_id = int(import_result["order_ids"][0])
+
+    with pytest.raises(AppError) as exc_info:
+        service.create_reservation(
+            conn,
+            {
+                "item_id": item["item_id"],
+                "quantity": 3,
+                "purpose": "wrong-project-preferred",
+                "project_id": project_a["project_id"],
+                "preferred_order_id": order_id,
+            },
+        )
+
+    assert exc_info.value.code == "INVALID_PREFERRED_ORDER"
+
+
+def test_reservation_without_project_can_auto_fill_from_generic_incoming_supply(conn):
+    item = _create_basic_item(conn, item_number="ITEM-GENERIC-INCOMING-RES")
+    import_result = service.import_orders_from_content(
+        conn,
+        supplier_name="SupplierGenericIncomingReservation",
+        content=(
+            "item_number,quantity,quotation_number,issue_date,order_date,expected_arrival,quotation_document_url\n"
+            f"{item['item_number']},5,Q-GENERIC-001,2026-04-01,2026-04-01,2026-04-18,https://example.com/q-generic-001\n"
+        ).encode("utf-8"),
+        source_name="generic_incoming_reservation.csv",
+    )
+    order_id = int(import_result["order_ids"][0])
+
+    reservation = service.create_reservation(
+        conn,
+        {
+            "item_id": item["item_id"],
+            "quantity": 3,
+            "purpose": "generic-incoming-auto-fill",
+        },
+    )
+    conn.commit()
+
+    assert int(reservation["stock_backed_quantity"]) == 0
+    assert int(reservation["incoming_backed_quantity"]) == 3
+    assert len(reservation["incoming_backing"]) == 1
+    assert int(reservation["incoming_backing"][0]["order_id"]) == order_id
+
+
 def test_concurrent_inventory_adjust_creates_single_row_with_combined_quantity(conn, database_url: str):
     item = _create_basic_item(conn, item_number="ITEM-INV-CONCURRENT")
     conn.commit()
@@ -1086,6 +1324,109 @@ def test_arrival_undo_is_limited_by_stock_when_other_locations_have_inventory(co
     assert undo_result["applied_quantity"] == 2
     assert _inventory_qty(conn, item["item_id"], "STOCK") == 0
     assert _inventory_qty(conn, item["item_id"], "BENCH_A") == 8
+
+
+def test_arrival_undo_uses_logged_destination_location(conn):
+    item = _create_basic_item(conn, item_number="ITEM-UNDO-ARRIVAL-LOCATION")
+    import_result = service.import_orders_from_content(
+        conn,
+        supplier_name="SupplierUndoArrivalLocation",
+        content=(
+            "item_number,quantity,quotation_number,issue_date,order_date,expected_arrival,quotation_document_url\n"
+            f"{item['item_number']},5,Q-UNDO-ARRIVAL-001,2026-04-01,2026-04-01,2026-04-10,https://example.com/q-undo-arrival-001\n"
+        ).encode("utf-8"),
+        source_name="undo_arrival_location.csv",
+    )
+    order_id = int(import_result["order_ids"][0])
+
+    arrival_result = service.process_order_arrival(conn, order_id=order_id, location="BENCH_B")
+    undo_result = service.undo_transaction(conn, arrival_result["transaction"]["log_id"])
+    conn.commit()
+
+    assert undo_result["applied_quantity"] == 5
+    assert _inventory_qty(conn, item["item_id"], "BENCH_B") == 0
+    assert _inventory_qty(conn, item["item_id"], "STOCK") == 0
+
+
+def test_arrival_undo_restores_incoming_backing_after_full_conversion(conn):
+    item = _create_basic_item(conn, item_number="ITEM-UNDO-INCOMING-FULL")
+    import_result = service.import_orders_from_content(
+        conn,
+        supplier_name="SupplierUndoIncomingFull",
+        content=(
+            "item_number,quantity,quotation_number,issue_date,order_date,expected_arrival,quotation_document_url\n"
+            f"{item['item_number']},5,Q-UNDO-INCOMING-FULL-001,2026-04-01,2026-04-01,2026-04-10,https://example.com/q-undo-incoming-full-001\n"
+        ).encode("utf-8"),
+        source_name="undo_incoming_full.csv",
+    )
+    order_id = int(import_result["order_ids"][0])
+
+    reservation = service.create_reservation(
+        conn,
+        {
+            "item_id": item["item_id"],
+            "quantity": 4,
+            "purpose": "undo incoming full",
+            "preferred_order_id": order_id,
+        },
+    )
+    arrival_result = service.process_order_arrival(conn, order_id=order_id)
+    undo_result = service.undo_transaction(conn, arrival_result["transaction"]["log_id"])
+    conn.commit()
+
+    refreshed = service.get_reservation(conn, int(reservation["reservation_id"]))
+    active_incoming = [row for row in refreshed["incoming_backing"] if row["status"] == "ACTIVE"]
+    restored_order = service.get_order(conn, order_id)
+
+    assert undo_result["applied_quantity"] == 5
+    assert int(refreshed["stock_backed_quantity"]) == 0
+    assert int(refreshed["incoming_backed_quantity"]) == 4
+    assert sum(int(row["quantity"]) for row in active_incoming) == 4
+    assert {int(row["order_id"]) for row in active_incoming} == {order_id}
+    assert restored_order["status"] == "Ordered"
+    assert _inventory_qty(conn, item["item_id"], "STOCK") == 0
+
+
+def test_arrival_undo_restores_incoming_backing_after_partial_conversion(conn):
+    item = _create_basic_item(conn, item_number="ITEM-UNDO-INCOMING-PARTIAL")
+    import_result = service.import_orders_from_content(
+        conn,
+        supplier_name="SupplierUndoIncomingPartial",
+        content=(
+            "item_number,quantity,quotation_number,issue_date,order_date,expected_arrival,quotation_document_url\n"
+            f"{item['item_number']},10,Q-UNDO-INCOMING-PARTIAL-001,2026-04-01,2026-04-01,2026-04-10,https://example.com/q-undo-incoming-partial-001\n"
+        ).encode("utf-8"),
+        source_name="undo_incoming_partial.csv",
+    )
+    order_id = int(import_result["order_ids"][0])
+
+    reservation = service.create_reservation(
+        conn,
+        {
+            "item_id": item["item_id"],
+            "quantity": 8,
+            "purpose": "undo incoming partial",
+            "preferred_order_id": order_id,
+        },
+    )
+    arrival_result = service.process_order_arrival(conn, order_id=order_id, quantity=3)
+    undo_result = service.undo_transaction(conn, arrival_result["transaction"]["log_id"])
+    conn.commit()
+
+    refreshed = service.get_reservation(conn, int(reservation["reservation_id"]))
+    active_incoming = [row for row in refreshed["incoming_backing"] if row["status"] == "ACTIVE"]
+    restored_parent = service.get_order(conn, order_id)
+    child_orders, _ = service.list_orders(conn, item_id=item["item_id"], page=1, per_page=20)
+    open_child_ids = {int(row["order_id"]) for row in child_orders if int(row["order_id"]) != order_id and row["status"] == "Ordered"}
+
+    assert undo_result["applied_quantity"] == 3
+    assert int(refreshed["stock_backed_quantity"]) == 0
+    assert int(refreshed["incoming_backed_quantity"]) == 8
+    assert sum(int(row["quantity"]) for row in active_incoming) == 8
+    assert restored_parent["status"] == "Ordered"
+    assert open_child_ids
+    assert {int(row["order_id"]) for row in active_incoming} == ({order_id} | open_child_ids)
+    assert _inventory_qty(conn, item["item_id"], "STOCK") == 0
 
 def test_item_flow_ignores_allocation_only_reserve_logs(conn):
     item = _create_basic_item(conn, item_number="ITEM-FLOW-RESERVE")

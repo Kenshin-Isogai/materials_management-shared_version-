@@ -67,6 +67,7 @@ from . import service, storage
 from .schemas import (
     AliasUpsertBySupplierNameRequest,
     AliasUpsertRequest,
+    ArrivalRequest,
     BomAnalyzeRequest,
     BomReserveRequest,
     CategoryMergeRequest,
@@ -1338,17 +1339,24 @@ def create_app(database_url: str | None = None, db_path: str | None = None) -> F
         return ok(result)
 
     @app.post("/api/purchase-order-lines/{order_id}/arrival")
-    def post_order_arrival(order_id: int, body: PartialArrivalRequest | None = None, conn= db):
+    def post_order_arrival(order_id: int, body: ArrivalRequest | None = None, conn= db):
         quantity = None
+        location = None
         if body is not None:
             quantity = body.quantity
-        result = service.process_order_arrival(conn, order_id=order_id, quantity=quantity)
+            location = body.location
+        result = service.process_order_arrival(conn, order_id=order_id, quantity=quantity, location=location)
         conn.commit()
         return ok(result)
 
     @app.post("/api/purchase-order-lines/{order_id}/partial-arrival")
     def post_order_partial_arrival(order_id: int, body: PartialArrivalRequest, conn= db):
-        result = service.process_order_arrival(conn, order_id=order_id, quantity=body.quantity)
+        result = service.process_order_arrival(
+            conn,
+            order_id=order_id,
+            quantity=body.quantity,
+            location=body.location,
+        )
         conn.commit()
         return ok(result)
 

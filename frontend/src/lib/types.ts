@@ -132,6 +132,40 @@ export type Reservation = {
   created_at: string;
   project_id?: number | null;
   project_name?: string | null;
+  stock_backed_quantity?: number;
+  incoming_backed_quantity?: number;
+  backing_risk_status?: "ok" | "warning" | "shortage";
+  backing_risk_reasons?: string[];
+  stock_backing?: Array<{
+    allocation_id: number;
+    location: string;
+    quantity: number;
+    status: "ACTIVE" | "RELEASED" | "CONSUMED";
+  }>;
+  incoming_backing?: Array<{
+    incoming_allocation_id: number;
+    order_id: number | null;
+    quantity: number;
+    status: "ACTIVE" | "RELEASED" | "CONVERTED" | "SHORTAGE";
+    expected_arrival_snapshot: string | null;
+    expected_arrival: string | null;
+    purchase_order_number: string | null;
+    supplier_name: string | null;
+    target_location: string | null;
+    risk_status: "ok" | "warning" | "shortage";
+    risk_reasons: string[];
+  }>;
+  incoming_candidate_orders?: Array<{
+    order_id: number;
+    purchase_order_number: string | null;
+    supplier_name: string | null;
+    project_id: number | null;
+    project_name: string | null;
+    expected_arrival: string | null;
+    available_quantity: number;
+    backing_scope: "dedicated" | "generic";
+    risk_status: "ok" | "warning";
+  }>;
 };
 
 export type PurchaseOrderLine = {
@@ -155,6 +189,8 @@ export type PurchaseOrderLine = {
   quotation_document_url?: string | null;
   purchase_order_document_url?: string | null;
   import_locked?: boolean;
+  incoming_reserved_quantity?: number;
+  incoming_reservation_count?: number;
 };
 
 export type Order = PurchaseOrderLine;

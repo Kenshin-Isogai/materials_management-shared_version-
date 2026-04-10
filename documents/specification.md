@@ -79,6 +79,7 @@ When statements conflict, interpret in this order:
 | Inventory | `transaction_log` | Inventory operation audit log + undo chain | log_id, operation_type, item_id |
 | Inventory | `reservations` | Reservation header/lifecycle | reservation_id, item_id, status |
 | Inventory | `reservation_allocations` | Per-location reservation allocations | allocation_id, reservation_id, item_id, location |
+| Inventory | `reservation_incoming_allocations` | Incoming-order-backed reservation allocations | incoming_allocation_id, reservation_id, order_id, quantity |
 | Purchasing | `quotations` | Quotation headers | quotation_id, supplier_id, quotation_number |
 | Purchasing | `purchase_orders` | Purchase-order headers | purchase_order_id, supplier_id, purchase_order_number |
 | Purchasing | `orders` | Purchase-order lines | order_id, purchase_order_id, item_id |
@@ -687,6 +688,25 @@ Tracks per-location reservation allocations without moving stock into a syntheti
 | released_at | TIMESTAMP | Nullable | Release/consume timestamp |
 | note | TEXT | Nullable | Optional note |
 
+### **3.21a reservation_incoming_allocations**
+
+Tracks reservation quantity backed by still-open purchase-order lines before physical arrival.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| incoming_allocation_id | INTEGER | PK, AUTOINCREMENT | Internal incoming allocation ID |
+| reservation_id | INTEGER | FK -> reservations, NOT NULL | Parent reservation |
+| item_id | INTEGER | FK -> items_master, NOT NULL | Allocated item |
+| order_id | INTEGER | FK -> orders, Nullable | Backing purchase-order line |
+| quantity | INTEGER | NOT NULL, CHECK > 0 | Allocated quantity |
+| status | TEXT | NOT NULL, default `ACTIVE` | `ACTIVE`, `RELEASED`, `CONVERTED`, `SHORTAGE` |
+| expected_arrival_snapshot | DATE | Nullable | ETA snapshot at allocation time |
+| target_location | TEXT | Nullable | Preferred arrival conversion location |
+| created_at | TIMESTAMP | NOT NULL | Allocation creation timestamp |
+| updated_at | TIMESTAMP | NOT NULL | Last state update timestamp |
+| released_at | TIMESTAMP | Nullable | Release/convert timestamp |
+| note | TEXT | Nullable | Optional note |
+
 ### **3.22 order_lineage_events**
 
 Stores traceability events for order ETA update/split/merge transitions.
@@ -858,9 +878,11 @@ Stores local split metadata so split behavior is explicit and externally reconci
 
 **Arrival Processing:**
 1. Update order status to 'Arrived'
-2. Increment inventory at STOCK location
-3. Log ARRIVAL operation
-4. For partial arrivals, require integer-safe split of ordered traceability quantities
+2. Increment inventory at arrival location (`STOCK` by default; optional override allowed)
+3. Convert matching active `reservation_incoming_allocations` into stock-backed `reservation_allocations` automatically, in allocation creation order
+4. Reassign any remaining active incoming-backed allocations to the post-split open child order when the arrival was partial
+5. Log ARRIVAL operation
+6. For partial arrivals, require integer-safe split of ordered traceability quantities
 
 ### **4.2 Inventory Operations**
 
@@ -883,20 +905,30 @@ Stores local split metadata so split behavior is explicit and externally reconci
 **Creating Reservations:**
 1. Validate item exists and quantity > 0
 2. Calculate available quantity across physical locations (`inventory_ledger.quantity - active allocations`)
-3. Allocate reservation quantity from physical locations without moving inventory rows
-4. Create reservation record with purpose/deadline
+3. If a preferred incoming order line is specified, allocate against that line first when it is still eligible for the reservation item/project
+4. After any preferred incoming allocation, allocate available physical stock
+5. If quantity still remains short, optionally allocate the remainder against open purchase-order lines (`reservation_incoming_allocations`)
+6. Auto-selection order for incoming backing is:
+   - same-project dedicated open order lines
+   - generic open order lines
+   - within each bucket, earliest `expected_arrival` first
+7. Open order lines without `expected_arrival` are excluded from auto-selection and may only be chosen manually
+8. A reservation may mix stock-backed and incoming-backed allocations and may span multiple order lines
+9. Preferred incoming order lines must obey the same project scope rules as automatic selection: same-project dedicated or generic only
+10. Create reservation record with purpose/deadline
 
 **Releasing Reservations:**
 1. Support full or partial release quantity
-2. Mark corresponding active allocations as RELEASED (no inventory movement)
+2. Mark corresponding active stock-backed and/or incoming-backed allocations as RELEASED (no inventory movement)
 3. If released quantity equals remaining reservation quantity: set status to RELEASED
 4. If released quantity is partial: keep status ACTIVE and decrement remaining reservation quantity
 
 **Consuming Reservations:**
 1. Support full or partial consume quantity
-2. Consume from allocated physical locations and mark those allocations CONSUMED
+2. Consume only from stock-backed physical allocations and mark those allocations CONSUMED
 3. If consumed quantity equals remaining reservation quantity: set status to CONSUMED
 4. If consumed quantity is partial: keep status ACTIVE and decrement remaining reservation quantity
+5. Incoming-backed quantity cannot be consumed before arrival conversion
 
 ### **4.4 Assembly System**
 

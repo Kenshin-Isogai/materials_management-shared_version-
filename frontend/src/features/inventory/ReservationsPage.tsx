@@ -16,7 +16,10 @@ type ReservationRow = {
   deadline: string;
   note: string;
   project_id: string;
+  preferred_order_id: string;
 };
+
+type ReservationEntryMessageTone = "info" | "success" | "error";
 
 type ReservationImportPreviewRow = {
   row: number;
@@ -63,7 +66,15 @@ const blankRow = (): ReservationRow => ({
   deadline: "",
   note: "",
   project_id: "",
+  preferred_order_id: "",
 });
+
+function isPreferredIncomingOrderEligible(order: Order, projectIdRaw: string): boolean {
+  if (order.status !== "Ordered") return false;
+  const reservationProjectId =
+    projectIdRaw && Number.isFinite(Number(projectIdRaw)) ? Number(projectIdRaw) : null;
+  return order.project_id == null || order.project_id === reservationProjectId;
+}
 
 function itemToCatalogResult(item: Item): CatalogSearchResult {
   return {
@@ -86,7 +97,10 @@ export function ReservationsPage() {
   ]);
   const [loading, setLoading] = useState(false);
   const [reservationCsvFile, setReservationCsvFile] = useState<File | null>(null);
-  const [reservationMessage, setReservationMessage] = useState("");
+  const [reservationImportMessage, setReservationImportMessage] = useState("");
+  const [reservationEntryMessage, setReservationEntryMessage] = useState("");
+  const [reservationEntryMessageTone, setReservationEntryMessageTone] =
+    useState<ReservationEntryMessageTone>("info");
   const [reservationPreview, setReservationPreview] = useState<ReservationImportPreview | null>(null);
   const [reservationPreviewSelections, setReservationPreviewSelections] = useState<
     Record<number, CatalogSearchResult | null>
@@ -115,6 +129,15 @@ export function ReservationsPage() {
     () => new Map(items.map((item) => [item.item_id, itemToCatalogResult(item)])),
     [items]
   );
+  const openOrdersByItemId = useMemo(() => {
+    const grouped = new Map<number, Order[]>();
+    for (const order of openOrderRows) {
+      const existing = grouped.get(order.item_id) ?? [];
+      existing.push(order);
+      grouped.set(order.item_id, existing);
+    }
+    return grouped;
+  }, [openOrderRows]);
 
   const provisionalSummary = useMemo(() => {
     const reservations = allReservationRows.filter((row) => row.status === "ACTIVE");
@@ -209,6 +232,10 @@ export function ReservationsPage() {
         projectIdRaw && Number.isFinite(Number(projectIdRaw)) && Number(projectIdRaw) > 0
           ? projectIdRaw
           : "",
+      preferred_order_id:
+        sourceOrderIdRaw && Number.isFinite(Number(sourceOrderIdRaw)) && Number(sourceOrderIdRaw) > 0
+          ? sourceOrderIdRaw
+          : "",
     };
 
     setBulkRows((prev) => {
@@ -219,12 +246,13 @@ export function ReservationsPage() {
     });
 
     if (sourceOrderIdRaw && Number.isFinite(Number(sourceOrderIdRaw))) {
-      setReservationMessage(
+      setReservationEntryMessage(
         `Prefilled from purchase order line #${sourceOrderIdRaw}. Confirm item/qty/project before submitting.`
       );
     } else {
-      setReservationMessage("Prefilled reservation entry. Confirm values before submitting.");
+      setReservationEntryMessage("Prefilled reservation entry. Confirm values before submitting.");
     }
+    setReservationEntryMessageTone("info");
   }, [location.search]);
 
   function updateBulkRow(index: number, patch: Partial<ReservationRow>) {
@@ -318,9 +346,11 @@ export function ReservationsPage() {
         deadline: row.deadline.trim() || null,
         note: row.note.trim() || null,
         project_id: row.project_id ? Number(row.project_id) : null,
+        preferred_order_id: row.preferred_order_id ? Number(row.preferred_order_id) : null,
       }));
     if (!reservations.length) return;
     setLoading(true);
+    setReservationEntryMessage("");
     try {
       await apiSend("/reservations/batch", {
         method: "POST",
@@ -328,6 +358,11 @@ export function ReservationsPage() {
       });
       setBulkRows([blankRow(), blankRow(), blankRow(), blankRow()]);
       await revalidateReservationViews();
+      setReservationEntryMessage(`Created ${reservations.length} reservation row(s).`);
+      setReservationEntryMessageTone("success");
+    } catch (error) {
+      setReservationEntryMessage(formatActionError("Submit batch failed", error));
+      setReservationEntryMessageTone("error");
     } finally {
       setLoading(false);
     }
@@ -339,7 +374,7 @@ export function ReservationsPage() {
     const formData = new FormData();
     formData.append("file", reservationCsvFile);
     setLoading(true);
-    setReservationMessage("");
+    setReservationImportMessage("");
     resetReservationPreview();
     try {
       const result = await apiSendForm<ReservationImportPreview>(
@@ -347,13 +382,13 @@ export function ReservationsPage() {
         formData
       );
       applyReservationPreview(result);
-      setReservationMessage(
+      setReservationImportMessage(
         result.can_auto_accept
           ? `Preview ready: ${result.summary.total_rows} row(s) are ready to import.`
           : `Preview ready: review=${result.summary.needs_review}, unresolved=${result.summary.unresolved}.`
       );
     } catch (error) {
-      setReservationMessage(formatActionError("Preview failed", error));
+      setReservationImportMessage(formatActionError("Preview failed", error));
     } finally {
       setLoading(false);
     }
@@ -365,14 +400,14 @@ export function ReservationsPage() {
       (row) => row.requires_user_selection && !selectedReservationPreviewMatch(row)
     );
     if (missingSelection) {
-      setReservationMessage(`Row ${missingSelection.row}: choose an item or assembly first.`);
+      setReservationImportMessage(`Row ${missingSelection.row}: choose an item or assembly first.`);
       return;
     }
     const nonFixableBlocking = reservationPreview.rows.find(
       (row) => row.blocking && !row.requires_user_selection
     );
     if (nonFixableBlocking) {
-      setReservationMessage(`Row ${nonFixableBlocking.row}: ${nonFixableBlocking.message}`);
+      setReservationImportMessage(`Row ${nonFixableBlocking.row}: ${nonFixableBlocking.message}`);
       return;
     }
 
@@ -398,15 +433,15 @@ export function ReservationsPage() {
       formData.append("row_overrides", JSON.stringify(rowOverrides));
     }
     setLoading(true);
-    setReservationMessage("");
+    setReservationImportMessage("");
     try {
       const result = await apiSendForm<Reservation[]>("/reservations/import-csv", formData);
-      setReservationMessage(`Imported ${result.length} reservation row(s).`);
+      setReservationImportMessage(`Imported ${result.length} reservation row(s).`);
       setReservationCsvFile(null);
       resetReservationPreview();
       await revalidateReservationViews();
     } catch (error) {
-      setReservationMessage(formatActionError("Import failed", error));
+      setReservationImportMessage(formatActionError("Import failed", error));
     } finally {
       setLoading(false);
     }
@@ -531,7 +566,7 @@ export function ReservationsPage() {
             Preview Import
           </button>
         </form>
-        {reservationMessage && <p className="text-sm text-signal">{reservationMessage}</p>}
+        {reservationImportMessage && <p className="text-sm text-signal">{reservationImportMessage}</p>}
         {reservationPreview && (
           <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
             <ImportPreviewSummary summary={reservationPreview.summary} />
@@ -651,6 +686,7 @@ export function ReservationsPage() {
                 <th className="px-2 py-2">Deadline</th>
                 <th className="px-2 py-2">Note</th>
                 <th className="px-2 py-2">Project (optional)</th>
+                <th className="px-2 py-2">Incoming Order (optional)</th>
                 <th className="px-2 py-2">-</th>
               </tr>
             </thead>
@@ -714,6 +750,22 @@ export function ReservationsPage() {
                     </select>
                   </td>
                   <td className="px-2 py-2">
+                    <select
+                      className="input"
+                      value={row.preferred_order_id}
+                      onChange={(e) => updateBulkRow(idx, { preferred_order_id: e.target.value })}
+                    >
+                      <option value="">Auto-select incoming order</option>
+                      {(row.item_id ? openOrdersByItemId.get(Number(row.item_id)) ?? [] : [])
+                        .filter((order) => isPreferredIncomingOrderEligible(order, row.project_id))
+                        .map((order) => (
+                        <option key={order.order_id} value={order.order_id}>
+                          #{order.order_id} · PO {order.purchase_order_number ?? order.purchase_order_id} · qty {order.order_amount} · ETA {order.expected_arrival ?? "none"}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td className="px-2 py-2">
                     <button className="button-subtle" onClick={() => removeBulkRow(idx)}>
                       Del
                     </button>
@@ -726,6 +778,19 @@ export function ReservationsPage() {
         <button className="button" disabled={loading} onClick={createBulk}>
           Submit Batch
         </button>
+        {reservationEntryMessage && (
+          <p
+            className={`text-sm ${
+              reservationEntryMessageTone === "error"
+                ? "text-rose-700"
+                : reservationEntryMessageTone === "success"
+                  ? "text-emerald-700"
+                  : "text-signal"
+            }`}
+          >
+            {reservationEntryMessage}
+          </p>
+        )}
       </section>
 
       <section className="panel space-y-3 p-4">
@@ -805,6 +870,7 @@ export function ReservationsPage() {
                   <th className="px-2 py-2">Purpose</th>
                   <th className="px-2 py-2">Deadline</th>
                   <th className="px-2 py-2">Project</th>
+                  <th className="px-2 py-2">Backing</th>
                   <th className="px-2 py-2">Status</th>
                   <th className="px-2 py-2">Actions</th>
                 </tr>
@@ -819,6 +885,30 @@ export function ReservationsPage() {
                     <td className="px-2 py-2">{row.deadline ?? "-"}</td>
                     <td className="px-2 py-2">
                       {row.project_id ? `${row.project_name ?? "(unnamed)"} (#${row.project_id})` : "-"}
+                    </td>
+                    <td className="px-2 py-2">
+                      <div className="space-y-1 text-xs text-slate-600">
+                        <p>Stock {row.stock_backed_quantity ?? 0} / Incoming {row.incoming_backed_quantity ?? 0}</p>
+                        {row.incoming_backing?.filter((entry) => entry.status === "ACTIVE").map((entry) => (
+                          <p key={entry.incoming_allocation_id}>
+                            Order #{entry.order_id ?? "?"} · PO {entry.purchase_order_number ?? "-"} · qty {entry.quantity} · ETA {entry.expected_arrival ?? entry.expected_arrival_snapshot ?? "-"}
+                          </p>
+                        ))}
+                        {row.backing_risk_status && row.backing_risk_status !== "ok" && (
+                          <p className={row.backing_risk_status === "shortage" ? "text-rose-700" : "text-amber-700"}>
+                            {row.backing_risk_status.toUpperCase()}
+                            {row.backing_risk_reasons?.length ? `: ${row.backing_risk_reasons[0]}` : ""}
+                          </p>
+                        )}
+                        {row.incoming_candidate_orders?.length ? (
+                          <p className="text-slate-500">
+                            Alternatives:{" "}
+                            {row.incoming_candidate_orders
+                              .map((candidate) => `#${candidate.order_id} (${candidate.available_quantity})`)
+                              .join(", ")}
+                          </p>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="px-2 py-2">{row.status}</td>
                     <td className="px-2 py-2">

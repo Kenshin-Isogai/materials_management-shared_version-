@@ -1752,6 +1752,207 @@ def _get_total_available_inventory(conn: sqlite3.Connection, item_id: int) -> in
     return sum(qty for _, qty in _list_item_available_inventory(conn, item_id))
 
 
+def _get_active_incoming_reserved_quantity(conn: sqlite3.Connection, order_id: int) -> int:
+    row = conn.execute(
+        """
+        SELECT COALESCE(SUM(quantity), 0) AS qty
+        FROM reservation_incoming_allocations
+        WHERE order_id = ? AND status = 'ACTIVE'
+        """,
+        (order_id,),
+    ).fetchone()
+    if row is None:
+        return 0
+    return int(row["qty"] or 0)
+
+
+def _list_item_open_incoming_supply(
+    conn: sqlite3.Connection,
+    item_id: int,
+    *,
+    project_id: int | None = None,
+    include_no_eta: bool = False,
+    exclude_order_ids: set[int] | None = None,
+) -> list[dict[str, Any]]:
+    rows = conn.execute(
+        """
+        SELECT
+            o.order_id,
+            o.item_id,
+            o.project_id,
+            o.order_amount,
+            o.expected_arrival,
+            o.status,
+            p.name AS project_name,
+            po.purchase_order_number,
+            s.name AS supplier_name
+        FROM orders o
+        JOIN purchase_orders po ON po.purchase_order_id = o.purchase_order_id
+        JOIN suppliers s ON s.supplier_id = po.supplier_id
+        LEFT JOIN projects p ON p.project_id = o.project_id
+        WHERE o.item_id = ?
+          AND o.status = 'Ordered'
+          AND (
+                o.project_id IS NULL
+                OR (? IS NOT NULL AND o.project_id = ?)
+          )
+        ORDER BY
+            CASE
+                WHEN o.project_id = ? THEN 0
+                WHEN o.project_id IS NULL THEN 1
+                ELSE 2
+            END,
+            CASE WHEN o.expected_arrival IS NULL THEN 1 ELSE 0 END,
+            o.expected_arrival ASC,
+            o.order_id ASC
+        """,
+        (item_id, project_id, project_id, project_id),
+    ).fetchall()
+    options: list[dict[str, Any]] = []
+    excluded = exclude_order_ids or set()
+    for row in rows:
+        order_id = int(row["order_id"])
+        if order_id in excluded:
+            continue
+        if row["expected_arrival"] is None and not include_no_eta:
+            continue
+        available_quantity = max(
+            0,
+            int(row["order_amount"]) - _get_active_incoming_reserved_quantity(conn, order_id),
+        )
+        if available_quantity <= 0:
+            continue
+        options.append(
+            {
+                "order_id": order_id,
+                "item_id": int(row["item_id"]),
+                "project_id": int(row["project_id"]) if row["project_id"] is not None else None,
+                "project_name": str(row["project_name"]) if row["project_name"] is not None else None,
+                "purchase_order_number": row["purchase_order_number"],
+                "supplier_name": row["supplier_name"],
+                "expected_arrival": row["expected_arrival"],
+                "available_quantity": available_quantity,
+                "backing_scope": "dedicated" if row["project_id"] is not None else "generic",
+            }
+        )
+    return options
+
+
+def _select_incoming_order_candidates(
+    conn: sqlite3.Connection,
+    *,
+    item_id: int,
+    quantity: int,
+    project_id: int | None,
+    preferred_order_id: int | None = None,
+    deadline: str | None = None,
+    exclude_order_ids: set[int] | None = None,
+    auto_fill_remaining: bool = True,
+) -> list[dict[str, Any]]:
+    remaining = int(quantity)
+    selected: list[dict[str, Any]] = []
+    excluded_order_ids: set[int] = set(exclude_order_ids or set())
+    normalized_deadline = normalize_optional_date(deadline, "deadline") if deadline else None
+
+    if preferred_order_id is not None:
+        preferred_order = get_order(conn, int(preferred_order_id))
+        if int(preferred_order["item_id"]) != int(item_id):
+            raise AppError(
+                code="INVALID_PREFERRED_ORDER",
+                message="Preferred incoming order line does not match the reservation item",
+                status_code=422,
+            )
+        if preferred_order["status"] != "Ordered":
+            raise AppError(
+                code="INVALID_PREFERRED_ORDER",
+                message="Preferred incoming order line must still be Ordered",
+                status_code=422,
+            )
+        preferred_project_id = (
+            int(preferred_order["project_id"]) if preferred_order.get("project_id") is not None else None
+        )
+        if preferred_project_id is not None and preferred_project_id != project_id:
+            raise AppError(
+                code="INVALID_PREFERRED_ORDER",
+                message="Preferred incoming order line is dedicated to a different project",
+                status_code=422,
+            )
+        preferred_available = max(
+            0,
+            int(preferred_order["order_amount"]) - _get_active_incoming_reserved_quantity(conn, int(preferred_order_id)),
+        )
+        if preferred_available <= 0:
+            raise AppError(
+                code="PREFERRED_ORDER_FULLY_ALLOCATED",
+                message="Preferred incoming order line no longer has allocatable quantity",
+                status_code=409,
+            )
+        selected_qty = min(preferred_available, remaining)
+        selected.append(
+            {
+                "order_id": int(preferred_order_id),
+                "quantity": selected_qty,
+                "expected_arrival": preferred_order.get("expected_arrival"),
+                "target_location": None,
+                "risk_status": (
+                    "warning"
+                    if preferred_order.get("expected_arrival") is None
+                    or (
+                        normalized_deadline is not None
+                        and preferred_order.get("expected_arrival") is not None
+                        and str(preferred_order["expected_arrival"]) > normalized_deadline
+                    )
+                    else "ok"
+                ),
+            }
+        )
+        remaining -= selected_qty
+        excluded_order_ids.add(int(preferred_order_id))
+
+    if remaining <= 0 or not auto_fill_remaining:
+        return selected
+
+    for candidate in _list_item_open_incoming_supply(
+        conn,
+        item_id,
+        project_id=project_id,
+        include_no_eta=False,
+        exclude_order_ids=excluded_order_ids,
+    ):
+        if remaining <= 0:
+            break
+        selected_qty = min(int(candidate["available_quantity"]), remaining)
+        selected.append(
+            {
+                "order_id": int(candidate["order_id"]),
+                "quantity": selected_qty,
+                "expected_arrival": candidate.get("expected_arrival"),
+                "target_location": None,
+                "risk_status": (
+                    "warning"
+                    if normalized_deadline is not None
+                    and candidate.get("expected_arrival") is not None
+                    and str(candidate["expected_arrival"]) > normalized_deadline
+                    else "ok"
+                ),
+            }
+        )
+        remaining -= selected_qty
+
+    if remaining > 0:
+        raise AppError(
+            code="INSUFFICIENT_STOCK",
+            message="Not enough available inventory or incoming supply for reservation",
+            status_code=409,
+            details={
+                "item_id": item_id,
+                "requested": quantity,
+                "available": quantity - remaining,
+            },
+        )
+    return selected
+
+
 def _get_active_allocation_summary_by_item_location(
     conn: sqlite3.Connection,
     item_ids: list[int],
@@ -2006,6 +2207,23 @@ def _remove_reservation_tx_marker(note: str | None, log_id: int) -> str | None:
 def _reservation_event_note(override_note: str | None, existing_note: Any, log_id: int) -> str:
     base_note = override_note if override_note is not None else _remove_reservation_tx_marker(existing_note, log_id)
     return _append_reservation_tx_marker(None if base_note is None else str(base_note), log_id)
+
+
+def _arrival_conversion_marker(log_id: int, incoming_allocation_id: int) -> str:
+    return f"[[arrival_tx:{int(log_id)}:{int(incoming_allocation_id)}]]"
+
+
+def _arrival_conversion_note(existing_note: Any, log_id: int, incoming_allocation_id: int) -> str:
+    base = re.sub(r"\s*\[\[arrival_tx:\d+:\d+\]\]", "", str(existing_note or "")).strip()
+    marker = _arrival_conversion_marker(log_id, incoming_allocation_id)
+    return f"{base} {marker}".strip() if base else marker
+
+
+def _remove_arrival_conversion_marker(note: Any) -> str | None:
+    if note is None:
+        return None
+    cleaned = re.sub(r"\s*\[\[arrival_tx:\d+:\d+\]\]", "", str(note)).strip()
+    return cleaned or None
 
 
 def _get_or_create_quotation(
@@ -3332,7 +3550,19 @@ def _order_read_select_columns() -> str:
             po.purchase_order_document_url,
             po.import_locked,
             s.supplier_id,
-            s.name AS supplier_name
+            s.name AS supplier_name,
+            (
+                SELECT COALESCE(SUM(ria.quantity), 0)
+                FROM reservation_incoming_allocations ria
+                WHERE ria.order_id = o.order_id
+                  AND ria.status = 'ACTIVE'
+            ) AS incoming_reserved_quantity,
+            (
+                SELECT COUNT(DISTINCT ria.reservation_id)
+                FROM reservation_incoming_allocations ria
+                WHERE ria.order_id = o.order_id
+                  AND ria.status = 'ACTIVE'
+            ) AS incoming_reservation_count
     """
 
 
@@ -9060,6 +9290,7 @@ def process_order_arrival(
     *,
     order_id: int,
     quantity: int | None = None,
+    location: str | None = None,
 ) -> dict[str, Any]:
     order = get_order(conn, order_id)
     _lock_order_item_state(conn, order_id, int(order["item_id"]))
@@ -9082,6 +9313,7 @@ def process_order_arrival(
             status_code=422,
         )
     split_order_id: int | None = None
+    target_location = require_non_empty(location, "location") if location is not None else "STOCK"
     if arrived_qty == order_amount:
         conn.execute(
             """
@@ -9157,18 +9389,113 @@ def process_order_arrival(
             root_expected_arrival=order.get("expected_arrival"),
             child_expected_arrival=order.get("expected_arrival"),
         )
-
-    _apply_inventory_delta(conn, int(order["item_id"]), "STOCK", arrived_qty)
     log = _log_transaction(
         conn,
         operation_type="ARRIVAL",
         item_id=int(order["item_id"]),
         quantity=arrived_qty,
         from_location=None,
-        to_location="STOCK",
+        to_location=target_location,
         note=f"order_id={order_id}",
         batch_id=f"arrival-{order_id}",
     )
+    log_id = int(log["log_id"])
+    _apply_inventory_delta(conn, int(order["item_id"]), target_location, arrived_qty)
+    active_incoming_rows = conn.execute(
+        """
+        SELECT incoming_allocation_id, reservation_id, item_id, quantity, note
+        FROM reservation_incoming_allocations
+        WHERE order_id = ? AND status = 'ACTIVE'
+        ORDER BY created_at, incoming_allocation_id
+        """,
+        (order_id,),
+    ).fetchall()
+    remaining_to_convert = arrived_qty
+    arrival_now = log["timestamp"]
+    remaining_active_incoming_ids: list[int] = []
+    for row in active_incoming_rows:
+        incoming_allocation_id = int(row["incoming_allocation_id"])
+        conversion_note = _arrival_conversion_note(row["note"], log_id, incoming_allocation_id)
+        if remaining_to_convert <= 0:
+            remaining_active_incoming_ids.append(incoming_allocation_id)
+            continue
+        active_qty = int(row["quantity"])
+        convert_qty = min(active_qty, remaining_to_convert)
+        left_qty = active_qty - convert_qty
+        conn.execute(
+            """
+            INSERT INTO reservation_allocations (
+                reservation_id, item_id, location, quantity, status, created_at, note
+            ) VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?)
+            """,
+            (
+                int(row["reservation_id"]),
+                int(row["item_id"]),
+                target_location,
+                convert_qty,
+                arrival_now,
+                conversion_note,
+            ),
+        )
+        if left_qty == 0:
+            conn.execute(
+                """
+                UPDATE reservation_incoming_allocations
+                SET status = 'CONVERTED', released_at = ?, updated_at = ?, target_location = ?, note = ?
+                WHERE incoming_allocation_id = ?
+                """,
+                (arrival_now, arrival_now, target_location, conversion_note, incoming_allocation_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE reservation_incoming_allocations
+                SET quantity = ?, updated_at = ?
+                WHERE incoming_allocation_id = ?
+                """,
+                (left_qty, arrival_now, incoming_allocation_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO reservation_incoming_allocations (
+                    reservation_id,
+                    item_id,
+                    order_id,
+                    quantity,
+                    status,
+                    expected_arrival_snapshot,
+                    target_location,
+                    created_at,
+                    updated_at,
+                    released_at,
+                    note
+                )
+                SELECT reservation_id, item_id, order_id, ?, 'CONVERTED', expected_arrival_snapshot, ?, ?, ?, ?, ?
+                FROM reservation_incoming_allocations
+                WHERE incoming_allocation_id = ?
+                """,
+                (
+                    convert_qty,
+                    target_location,
+                    arrival_now,
+                    arrival_now,
+                    arrival_now,
+                    conversion_note,
+                    incoming_allocation_id,
+                ),
+            )
+            remaining_active_incoming_ids.append(incoming_allocation_id)
+        remaining_to_convert -= convert_qty
+    if split_order_id is not None and remaining_active_incoming_ids:
+        active_placeholders = ", ".join("?" for _ in remaining_active_incoming_ids)
+        conn.execute(
+            f"""
+            UPDATE reservation_incoming_allocations
+            SET order_id = ?, updated_at = ?
+            WHERE incoming_allocation_id IN ({active_placeholders}) AND status = 'ACTIVE'
+            """,
+            (split_order_id, arrival_now, *remaining_active_incoming_ids),
+        )
     return {
         "order_id": order_id,
         "arrived_quantity": arrived_qty,
@@ -9487,7 +9814,8 @@ def list_reservations(
         {where}
         ORDER BY r.created_at DESC, r.reservation_id DESC
     """
-    return _paginate(conn, sql, tuple(params), page, per_page)
+    rows, pagination = _paginate(conn, sql, tuple(params), page, per_page)
+    return ([_reservation_with_backing_summary(conn, row) for row in rows], pagination)
 
 
 def get_reservation(conn: sqlite3.Connection, reservation_id: int) -> dict[str, Any]:
@@ -9507,7 +9835,202 @@ def get_reservation(conn: sqlite3.Connection, reservation_id: int) -> dict[str, 
             message=f"Reservation with id {reservation_id} not found",
             status_code=404,
         )
-    return dict(row)
+    return _reservation_with_backing_summary(conn, dict(row))
+
+
+def _list_reservation_stock_backing_rows(
+    conn: sqlite3.Connection,
+    reservation_ids: list[int],
+) -> dict[int, list[dict[str, Any]]]:
+    if not reservation_ids:
+        return {}
+    placeholders = ",".join("?" for _ in reservation_ids)
+    rows = conn.execute(
+        f"""
+        SELECT allocation_id, reservation_id, location, quantity, status, created_at, released_at, note
+        FROM reservation_allocations
+        WHERE reservation_id IN ({placeholders})
+        ORDER BY reservation_id, allocation_id
+        """,
+        tuple(reservation_ids),
+    ).fetchall()
+    result: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        reservation_id = int(row["reservation_id"])
+        result.setdefault(reservation_id, []).append(
+            {
+                "allocation_id": int(row["allocation_id"]),
+                "location": str(row["location"]),
+                "quantity": int(row["quantity"]),
+                "status": str(row["status"]),
+                "created_at": row["created_at"],
+                "released_at": row["released_at"],
+                "note": row["note"],
+            }
+        )
+    return result
+
+
+def _list_reservation_incoming_backing_rows(
+    conn: sqlite3.Connection,
+    reservation_ids: list[int],
+) -> dict[int, list[dict[str, Any]]]:
+    if not reservation_ids:
+        return {}
+    placeholders = ",".join("?" for _ in reservation_ids)
+    rows = conn.execute(
+        f"""
+        SELECT
+            ria.incoming_allocation_id,
+            ria.reservation_id,
+            ria.order_id,
+            ria.quantity,
+            ria.status,
+            ria.expected_arrival_snapshot,
+            ria.target_location,
+            ria.created_at,
+            ria.updated_at,
+            ria.released_at,
+            ria.note,
+            o.order_amount,
+            o.status AS order_status,
+            o.expected_arrival,
+            o.project_id AS order_project_id,
+            p.name AS order_project_name,
+            po.purchase_order_number,
+            s.name AS supplier_name
+        FROM reservation_incoming_allocations ria
+        LEFT JOIN orders o ON o.order_id = ria.order_id
+        LEFT JOIN projects p ON p.project_id = o.project_id
+        LEFT JOIN purchase_orders po ON po.purchase_order_id = o.purchase_order_id
+        LEFT JOIN suppliers s ON s.supplier_id = po.supplier_id
+        WHERE ria.reservation_id IN ({placeholders})
+        ORDER BY ria.reservation_id, ria.incoming_allocation_id
+        """,
+        tuple(reservation_ids),
+    ).fetchall()
+    result: dict[int, list[dict[str, Any]]] = {}
+    for row in rows:
+        reservation_id = int(row["reservation_id"])
+        order_id = int(row["order_id"]) if row["order_id"] is not None else None
+        risk_status = "ok"
+        risk_reasons: list[str] = []
+        if order_id is None:
+            risk_status = "shortage"
+            risk_reasons.append("Linked order line is no longer available.")
+        else:
+            active_qty = _get_active_incoming_reserved_quantity(conn, order_id)
+            order_amount = int(row["order_amount"] or 0)
+            current_eta = row["expected_arrival"]
+            if order_amount < active_qty:
+                risk_status = "shortage"
+                risk_reasons.append("Incoming order line is oversubscribed by reservations.")
+            elif row["order_status"] != "Ordered":
+                risk_status = "warning"
+                risk_reasons.append("Incoming order line is no longer open.")
+            if current_eta is None:
+                risk_status = "warning" if risk_status == "ok" else risk_status
+                risk_reasons.append("Incoming order line has no expected arrival date.")
+        result.setdefault(reservation_id, []).append(
+            {
+                "incoming_allocation_id": int(row["incoming_allocation_id"]),
+                "order_id": order_id,
+                "quantity": int(row["quantity"]),
+                "status": str(row["status"]),
+                "expected_arrival_snapshot": row["expected_arrival_snapshot"],
+                "expected_arrival": row["expected_arrival"],
+                "purchase_order_number": row["purchase_order_number"],
+                "supplier_name": row["supplier_name"],
+                "order_project_id": int(row["order_project_id"]) if row["order_project_id"] is not None else None,
+                "order_project_name": row["order_project_name"],
+                "target_location": row["target_location"],
+                "created_at": row["created_at"],
+                "updated_at": row["updated_at"],
+                "released_at": row["released_at"],
+                "note": row["note"],
+                "risk_status": risk_status,
+                "risk_reasons": risk_reasons,
+            }
+        )
+    return result
+
+
+def _candidate_incoming_orders_for_reservation(
+    conn: sqlite3.Connection,
+    reservation: dict[str, Any],
+    *,
+    exclude_order_ids: set[int] | None = None,
+) -> list[dict[str, Any]]:
+    rows = _list_item_open_incoming_supply(
+        conn,
+        int(reservation["item_id"]),
+        project_id=int(reservation["project_id"]) if reservation.get("project_id") is not None else None,
+        include_no_eta=False,
+        exclude_order_ids=exclude_order_ids,
+    )
+    deadline = str(reservation["deadline"]) if reservation.get("deadline") else None
+    candidates: list[dict[str, Any]] = []
+    for row in rows[:5]:
+        risk = "ok"
+        if deadline is not None and row.get("expected_arrival") is not None and str(row["expected_arrival"]) > deadline:
+            risk = "warning"
+        candidates.append(
+            {
+                "order_id": int(row["order_id"]),
+                "purchase_order_number": row["purchase_order_number"],
+                "supplier_name": row["supplier_name"],
+                "project_id": row["project_id"],
+                "project_name": row["project_name"],
+                "expected_arrival": row["expected_arrival"],
+                "available_quantity": int(row["available_quantity"]),
+                "backing_scope": row["backing_scope"],
+                "risk_status": risk,
+            }
+        )
+    return candidates
+
+
+def _reservation_with_backing_summary(conn: sqlite3.Connection, reservation: dict[str, Any]) -> dict[str, Any]:
+    reservation_id = int(reservation["reservation_id"])
+    stock_backing = _list_reservation_stock_backing_rows(conn, [reservation_id]).get(reservation_id, [])
+    incoming_backing = _list_reservation_incoming_backing_rows(conn, [reservation_id]).get(reservation_id, [])
+    stock_active_quantity = sum(entry["quantity"] for entry in stock_backing if entry["status"] == "ACTIVE")
+    incoming_active_quantity = sum(entry["quantity"] for entry in incoming_backing if entry["status"] == "ACTIVE")
+    risk_reasons: list[str] = []
+    risk_status = "ok"
+    active_order_ids: set[int] = set()
+    for entry in incoming_backing:
+        if entry["status"] != "ACTIVE":
+            continue
+        if entry["order_id"] is not None:
+            active_order_ids.add(int(entry["order_id"]))
+        deadline = reservation.get("deadline")
+        expected_arrival = entry.get("expected_arrival")
+        if deadline is not None and expected_arrival is not None and str(expected_arrival) > str(deadline):
+            if entry["risk_status"] == "ok":
+                entry["risk_status"] = "warning"
+            entry["risk_reasons"] = list(entry["risk_reasons"]) + ["Expected arrival is later than the reservation deadline."]
+        if entry["expected_arrival"] is not None and str(entry["expected_arrival"]) < today_jst() and entry["status"] == "ACTIVE":
+            if entry["risk_status"] == "ok":
+                entry["risk_status"] = "warning"
+            entry["risk_reasons"] = list(entry["risk_reasons"]) + ["Incoming order line is overdue."]
+        if entry["risk_status"] == "shortage":
+            risk_status = "shortage"
+        elif entry["risk_status"] == "warning" and risk_status == "ok":
+            risk_status = "warning"
+        risk_reasons.extend(entry["risk_reasons"])
+    reservation["stock_backed_quantity"] = stock_active_quantity
+    reservation["incoming_backed_quantity"] = incoming_active_quantity
+    reservation["backing_risk_status"] = risk_status
+    reservation["backing_risk_reasons"] = list(dict.fromkeys(risk_reasons))
+    reservation["stock_backing"] = stock_backing
+    reservation["incoming_backing"] = incoming_backing
+    reservation["incoming_candidate_orders"] = (
+        _candidate_incoming_orders_for_reservation(conn, reservation, exclude_order_ids=active_order_ids)
+        if risk_status != "ok"
+        else []
+    )
+    return reservation
 
 
 def create_reservation(conn: sqlite3.Connection, payload: dict[str, Any]) -> dict[str, Any]:
@@ -9533,18 +10056,35 @@ def create_reservation(conn: sqlite3.Connection, payload: dict[str, Any]) -> dic
         f"Item with id {item_id} not found",
     )
     _lock_inventory_item_state(conn, item_id)
+    preferred_order_id = payload.get("preferred_order_id")
+    if preferred_order_id is not None:
+        preferred_order_id = int(preferred_order_id)
+    incoming_allocations: list[dict[str, Any]] = []
+    if preferred_order_id is not None:
+        incoming_allocations = _select_incoming_order_candidates(
+            conn,
+            item_id=item_id,
+            quantity=quantity,
+            project_id=project_id,
+            preferred_order_id=preferred_order_id,
+            deadline=payload.get("deadline"),
+            auto_fill_remaining=False,
+        )
     available_rows = _list_item_available_inventory(conn, item_id)
     total_available = sum(qty for _, qty in available_rows)
-    if total_available < quantity:
-        raise AppError(
-            code="INSUFFICIENT_STOCK",
-            message="Not enough available inventory for reservation",
-            status_code=409,
-            details={
-                "item_id": item_id,
-                "requested": quantity,
-                "available": total_available,
-            },
+    preferred_incoming_quantity = sum(int(entry["quantity"]) for entry in incoming_allocations)
+    stock_quantity_to_allocate = min(total_available, max(0, quantity - preferred_incoming_quantity))
+    incoming_shortfall = quantity - preferred_incoming_quantity - stock_quantity_to_allocate
+    if incoming_shortfall > 0:
+        incoming_allocations.extend(
+            _select_incoming_order_candidates(
+                conn,
+                item_id=item_id,
+                quantity=incoming_shortfall,
+                project_id=project_id,
+                deadline=payload.get("deadline"),
+                exclude_order_ids={preferred_order_id} if preferred_order_id is not None else None,
+            )
         )
     cur = conn.execute(
         """
@@ -9572,7 +10112,7 @@ def create_reservation(conn: sqlite3.Connection, payload: dict[str, Any]) -> dic
         note=payload.get("note") or payload.get("purpose"),
         batch_id=f"reservation-{cur.lastrowid}",
     )
-    remaining_to_allocate = quantity
+    remaining_to_allocate = stock_quantity_to_allocate
     for location, available in available_rows:
         if remaining_to_allocate <= 0:
             break
@@ -9599,6 +10139,35 @@ def create_reservation(conn: sqlite3.Connection, payload: dict[str, Any]) -> dic
             ),
         )
         remaining_to_allocate -= allocated
+    now = now_jst_iso()
+    for allocation in incoming_allocations:
+        conn.execute(
+            """
+            INSERT INTO reservation_incoming_allocations (
+                reservation_id,
+                item_id,
+                order_id,
+                quantity,
+                status,
+                expected_arrival_snapshot,
+                target_location,
+                created_at,
+                updated_at,
+                note
+            ) VALUES (?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?, ?)
+            """,
+            (
+                int(cur.lastrowid),
+                item_id,
+                int(allocation["order_id"]),
+                int(allocation["quantity"]),
+                allocation.get("expected_arrival"),
+                allocation.get("target_location"),
+                now,
+                now,
+                payload.get("note") or payload.get("purpose"),
+            ),
+        )
     return get_reservation(conn, int(cur.lastrowid))
 
 
@@ -9667,7 +10236,18 @@ def release_reservation(
         """,
         (reservation_id,),
     ).fetchall()
-    allocatable_quantity = sum(int(alloc["quantity"]) for alloc in allocations)
+    incoming_allocations = conn.execute(
+        """
+        SELECT incoming_allocation_id, order_id, quantity, note
+        FROM reservation_incoming_allocations
+        WHERE reservation_id = ? AND status = 'ACTIVE'
+        ORDER BY incoming_allocation_id
+        """,
+        (reservation_id,),
+    ).fetchall()
+    allocatable_quantity = sum(int(alloc["quantity"]) for alloc in allocations) + sum(
+        int(alloc["quantity"]) for alloc in incoming_allocations
+    )
     if allocatable_quantity < release_quantity:
         raise AppError(
             code="RESERVATION_ALLOCATION_INCONSISTENT",
@@ -9735,6 +10315,64 @@ def release_reservation(
                 ),
             )
         remaining_to_release -= consume_alloc
+    for alloc in incoming_allocations:
+        if remaining_to_release <= 0:
+            break
+        alloc_qty = int(alloc["quantity"])
+        release_alloc = min(alloc_qty, remaining_to_release)
+        left_qty = alloc_qty - release_alloc
+        if left_qty == 0:
+            conn.execute(
+                """
+                UPDATE reservation_incoming_allocations
+                SET status = 'RELEASED', released_at = ?, updated_at = ?, note = ?
+                WHERE incoming_allocation_id = ?
+                """,
+                (
+                    log["timestamp"],
+                    log["timestamp"],
+                    _reservation_event_note(note, alloc["note"], log_id),
+                    int(alloc["incoming_allocation_id"]),
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE reservation_incoming_allocations
+                SET quantity = ?, updated_at = ?
+                WHERE incoming_allocation_id = ?
+                """,
+                (left_qty, log["timestamp"], int(alloc["incoming_allocation_id"])),
+            )
+            conn.execute(
+                """
+                INSERT INTO reservation_incoming_allocations (
+                    reservation_id,
+                    item_id,
+                    order_id,
+                    quantity,
+                    status,
+                    expected_arrival_snapshot,
+                    target_location,
+                    created_at,
+                    updated_at,
+                    released_at,
+                    note
+                )
+                SELECT reservation_id, item_id, order_id, ?, 'RELEASED', expected_arrival_snapshot, target_location, ?, ?, ?, ?
+                FROM reservation_incoming_allocations
+                WHERE incoming_allocation_id = ?
+                """,
+                (
+                    release_alloc,
+                    log["timestamp"],
+                    log["timestamp"],
+                    log["timestamp"],
+                    _reservation_event_note(note, alloc["note"], log_id),
+                    int(alloc["incoming_allocation_id"]),
+                ),
+            )
+        remaining_to_release -= release_alloc
 
     remaining = reserved_quantity - release_quantity
     if remaining == 0:
@@ -9797,7 +10435,17 @@ def consume_reservation(
         """,
         (reservation_id,),
     ).fetchall()
-    allocatable_quantity = sum(int(alloc["quantity"]) for alloc in allocations)
+    stock_backed_quantity = sum(int(alloc["quantity"]) for alloc in allocations)
+    incoming_allocations = conn.execute(
+        """
+        SELECT quantity
+        FROM reservation_incoming_allocations
+        WHERE reservation_id = ? AND status = 'ACTIVE'
+        """,
+        (reservation_id,),
+    ).fetchall()
+    incoming_backed_quantity = sum(int(alloc["quantity"]) for alloc in incoming_allocations)
+    allocatable_quantity = stock_backed_quantity + incoming_backed_quantity
     if allocatable_quantity < consume_quantity:
         raise AppError(
             code="RESERVATION_ALLOCATION_INCONSISTENT",
@@ -9807,6 +10455,18 @@ def consume_reservation(
                 "reservation_id": reservation_id,
                 "requested": consume_quantity,
                 "active_allocation_quantity": allocatable_quantity,
+            },
+        )
+    if stock_backed_quantity < consume_quantity:
+        raise AppError(
+            code="RESERVATION_NOT_READY_TO_CONSUME",
+            message="Consume quantity exceeds the stock-backed portion of this reservation",
+            status_code=409,
+            details={
+                "reservation_id": reservation_id,
+                "requested": consume_quantity,
+                "stock_backed_quantity": stock_backed_quantity,
+                "incoming_backed_quantity": incoming_backed_quantity,
             },
         )
     log = _log_transaction(
@@ -13637,6 +14297,26 @@ def _get_reservation_undo_rows(
     return [dict(row) for row in rows]
 
 
+def _get_reservation_incoming_undo_rows(
+    conn: sqlite3.Connection,
+    *,
+    reservation_id: int,
+    target_status: str,
+    log_id: int,
+) -> list[dict[str, Any]]:
+    marker = f"%[[tx:{int(log_id)}]]"
+    rows = conn.execute(
+        """
+        SELECT incoming_allocation_id, order_id, quantity, note
+        FROM reservation_incoming_allocations
+        WHERE reservation_id = ? AND status = ? AND note LIKE ?
+        ORDER BY incoming_allocation_id
+        """,
+        (reservation_id, target_status, marker),
+    ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def _restore_reservation_allocation_rows(
     conn: sqlite3.Connection,
     *,
@@ -13672,6 +14352,341 @@ def _restore_reservation_allocation_rows(
         )
 
 
+def _restore_reservation_incoming_allocation_rows(
+    conn: sqlite3.Connection,
+    *,
+    reservation_id: int,
+    rows: list[dict[str, Any]],
+    log_id: int,
+) -> None:
+    for row in rows:
+        active_row = conn.execute(
+            """
+            SELECT incoming_allocation_id, quantity
+            FROM reservation_incoming_allocations
+            WHERE reservation_id = ? AND status = 'ACTIVE' AND (
+                (order_id = ?)
+                OR (order_id IS NULL AND ? IS NULL)
+            )
+            ORDER BY incoming_allocation_id
+            LIMIT 1
+            """,
+            (reservation_id, row["order_id"], row["order_id"]),
+        ).fetchone()
+        if active_row is not None:
+            conn.execute(
+                "UPDATE reservation_incoming_allocations SET quantity = ?, updated_at = ? WHERE incoming_allocation_id = ?",
+                (
+                    int(active_row["quantity"]) + int(row["quantity"]),
+                    now_jst_iso(),
+                    int(active_row["incoming_allocation_id"]),
+                ),
+            )
+            conn.execute(
+                "DELETE FROM reservation_incoming_allocations WHERE incoming_allocation_id = ?",
+                (int(row["incoming_allocation_id"]),),
+            )
+            continue
+        conn.execute(
+            """
+            UPDATE reservation_incoming_allocations
+            SET status = 'ACTIVE', released_at = NULL, updated_at = ?, note = ?
+            WHERE incoming_allocation_id = ?
+            """,
+            (
+                now_jst_iso(),
+                _remove_reservation_tx_marker(row.get("note"), log_id),
+                int(row["incoming_allocation_id"]),
+            ),
+        )
+
+
+def _find_open_order_for_arrival_undo(
+    conn: sqlite3.Connection,
+    *,
+    root_order_id: int,
+    original_order_id: int,
+) -> dict[str, Any] | None:
+    row = conn.execute(
+        f"""
+        SELECT
+            {_order_read_select_columns()}
+        {_order_read_joins()}
+        WHERE o.status = 'Ordered'
+          AND o.order_id != ?
+          AND (
+            o.order_id = ?
+            OR los.root_order_id = ?
+          )
+        ORDER BY o.order_id ASC
+        LIMIT 1
+        """,
+        (original_order_id, root_order_id, root_order_id),
+    ).fetchone()
+    return _normalize_order_read_row(row) if row is not None else None
+
+
+def _restore_open_order_for_arrival_undo(
+    conn: sqlite3.Connection,
+    *,
+    original_order_id: int,
+    quantity: int,
+) -> int | None:
+    if quantity <= 0:
+        return None
+    order = get_order(conn, original_order_id)
+    if order["status"] != "Arrived":
+        return int(order["order_id"])
+
+    current_amount = int(order["order_amount"])
+    current_ordered_quantity = int(order["ordered_quantity"] or current_amount)
+    restore_quantity = min(int(quantity), current_amount)
+    restored_ordered_quantity = current_ordered_quantity * restore_quantity
+    if restored_ordered_quantity % current_amount != 0:
+        raise AppError(
+            code="UNDO_NOT_POSSIBLE",
+            message="Arrival undo cannot restore an integer-safe open order quantity",
+            status_code=409,
+        )
+    restored_ordered_quantity //= current_amount
+    root_order_id = int(order.get("split_root_order_id") or original_order_id)
+
+    if restore_quantity == current_amount:
+        conn.execute(
+            """
+            UPDATE orders
+            SET status = 'Ordered', arrival_date = NULL
+            WHERE order_id = ?
+            """,
+            (original_order_id,),
+        )
+        return original_order_id
+
+    remaining_amount = current_amount - restore_quantity
+    remaining_ordered_quantity = current_ordered_quantity - restored_ordered_quantity
+    conn.execute(
+        """
+        UPDATE orders
+        SET order_amount = ?, ordered_quantity = ?
+        WHERE order_id = ?
+        """,
+        (remaining_amount, remaining_ordered_quantity, original_order_id),
+    )
+
+    open_order = _find_open_order_for_arrival_undo(
+        conn,
+        root_order_id=root_order_id,
+        original_order_id=original_order_id,
+    )
+    if open_order is not None:
+        conn.execute(
+            """
+            UPDATE orders
+            SET order_amount = ?, ordered_quantity = ?
+            WHERE order_id = ?
+            """,
+            (
+                int(open_order["order_amount"]) + restore_quantity,
+                int(open_order["ordered_quantity"] or open_order["order_amount"]) + restored_ordered_quantity,
+                int(open_order["order_id"]),
+            ),
+        )
+        return int(open_order["order_id"])
+
+    cur = conn.execute(
+        """
+        INSERT INTO orders (
+            item_id, quotation_id, purchase_order_id, project_id, project_id_manual, order_amount, ordered_quantity,
+            ordered_item_number, order_date, expected_arrival, arrival_date, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 'Ordered')
+        """,
+        (
+            order["item_id"],
+            order["quotation_id"],
+            order["purchase_order_id"],
+            order.get("project_id"),
+            order.get("project_id_manual") or 0,
+            restore_quantity,
+            restored_ordered_quantity,
+            order["ordered_item_number"],
+            order["order_date"],
+            order["expected_arrival"],
+        ),
+    )
+    restored_order_id = int(cur.lastrowid)
+    _record_order_lineage_event(
+        conn,
+        event_type="ARRIVAL_SPLIT",
+        source_purchase_order_line_id=original_order_id,
+        target_purchase_order_line_id=restored_order_id,
+        quantity=restore_quantity,
+        previous_expected_arrival=order.get("expected_arrival"),
+        new_expected_arrival=order.get("expected_arrival"),
+        note="arrival undo restore",
+    )
+    _record_local_order_split(
+        conn,
+        split_type="ARRIVAL_SPLIT",
+        root_order_id=root_order_id,
+        child_order_id=restored_order_id,
+        split_quantity=restore_quantity,
+        root_expected_arrival=order.get("expected_arrival"),
+        child_expected_arrival=order.get("expected_arrival"),
+    )
+    return restored_order_id
+
+
+def _undo_arrival_reservation_conversions(conn: sqlite3.Connection, *, log_id: int, quantity: int) -> None:
+    if quantity <= 0:
+        return
+    original_log = get_transaction(conn, log_id)
+    order_id_match = re.search(r"\border_id=(\d+)\b", str(original_log.get("note") or ""))
+    restored_order_id = (
+        _restore_open_order_for_arrival_undo(
+            conn,
+            original_order_id=int(order_id_match.group(1)),
+            quantity=quantity,
+        )
+        if order_id_match is not None
+        else None
+    )
+    rows = conn.execute(
+        """
+        SELECT incoming_allocation_id, reservation_id, order_id, quantity, note
+        FROM reservation_incoming_allocations
+        WHERE status = 'CONVERTED' AND note LIKE ?
+        ORDER BY incoming_allocation_id
+        """,
+        (f"%[[arrival_tx:{int(log_id)}:%",),
+    ).fetchall()
+    remaining_to_restore = int(quantity)
+    for row in rows:
+        if remaining_to_restore <= 0:
+            break
+        incoming_allocation_id = int(row["incoming_allocation_id"])
+        marker_match = re.search(r"\[\[arrival_tx:\d+:\d+\]\]", str(row["note"] or ""))
+        if marker_match is None:
+            continue
+        marker = f"%{marker_match.group(0)}%"
+        active_allocation = conn.execute(
+            """
+            SELECT allocation_id, quantity
+            FROM reservation_allocations
+            WHERE status = 'ACTIVE' AND note LIKE ?
+            ORDER BY allocation_id
+            LIMIT 1
+            """,
+            (marker,),
+        ).fetchone()
+        if active_allocation is None:
+            continue
+        converted_qty = int(row["quantity"])
+        allocation_qty = int(active_allocation["quantity"])
+        restore_qty = min(remaining_to_restore, converted_qty, allocation_qty)
+        if restore_qty <= 0:
+            continue
+        remaining_to_restore -= restore_qty
+
+        leftover_allocation_qty = allocation_qty - restore_qty
+        if leftover_allocation_qty == 0:
+            conn.execute(
+                "DELETE FROM reservation_allocations WHERE allocation_id = ?",
+                (int(active_allocation["allocation_id"]),),
+            )
+        else:
+            conn.execute(
+                "UPDATE reservation_allocations SET quantity = ? WHERE allocation_id = ?",
+                (leftover_allocation_qty, int(active_allocation["allocation_id"])),
+            )
+
+        restored_note = _remove_arrival_conversion_marker(row["note"])
+        target_order_id = restored_order_id if restored_order_id is not None else row["order_id"]
+        active_incoming = conn.execute(
+            """
+            SELECT incoming_allocation_id, quantity
+            FROM reservation_incoming_allocations
+            WHERE reservation_id = ? AND status = 'ACTIVE' AND (
+                (order_id = ?)
+                OR (order_id IS NULL AND ? IS NULL)
+            )
+            ORDER BY incoming_allocation_id
+            LIMIT 1
+            """,
+            (int(row["reservation_id"]), target_order_id, target_order_id),
+        ).fetchone()
+        leftover_converted_qty = converted_qty - restore_qty
+        if active_incoming is not None:
+            conn.execute(
+                """
+                UPDATE reservation_incoming_allocations
+                SET quantity = ?, updated_at = ?, note = COALESCE(note, ?), order_id = ?
+                WHERE incoming_allocation_id = ?
+                """,
+                (
+                    int(active_incoming["quantity"]) + restore_qty,
+                    now_jst_iso(),
+                    restored_note,
+                    target_order_id,
+                    int(active_incoming["incoming_allocation_id"]),
+                ),
+            )
+            if leftover_converted_qty == 0:
+                conn.execute(
+                    "DELETE FROM reservation_incoming_allocations WHERE incoming_allocation_id = ?",
+                    (incoming_allocation_id,),
+                )
+            else:
+                conn.execute(
+                    """
+                    UPDATE reservation_incoming_allocations
+                    SET quantity = ?, updated_at = ?
+                    WHERE incoming_allocation_id = ?
+                    """,
+                    (leftover_converted_qty, now_jst_iso(), incoming_allocation_id),
+                )
+            continue
+
+        if leftover_converted_qty == 0:
+            conn.execute(
+                """
+                UPDATE reservation_incoming_allocations
+                SET status = 'ACTIVE', released_at = NULL, updated_at = ?, note = ?, order_id = ?
+                WHERE incoming_allocation_id = ?
+                """,
+                (now_jst_iso(), restored_note, target_order_id, incoming_allocation_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE reservation_incoming_allocations
+                SET quantity = ?, updated_at = ?
+                WHERE incoming_allocation_id = ?
+                """,
+                (leftover_converted_qty, now_jst_iso(), incoming_allocation_id),
+            )
+            conn.execute(
+                """
+                INSERT INTO reservation_incoming_allocations (
+                    reservation_id,
+                    item_id,
+                    order_id,
+                    quantity,
+                    status,
+                    expected_arrival_snapshot,
+                    target_location,
+                    created_at,
+                    updated_at,
+                    released_at,
+                    note
+                )
+                SELECT reservation_id, item_id, ?, ?, 'ACTIVE', expected_arrival_snapshot, target_location, ?, ?, NULL, ?
+                FROM reservation_incoming_allocations
+                WHERE incoming_allocation_id = ?
+                """,
+                (target_order_id, restore_qty, now_jst_iso(), now_jst_iso(), restored_note, incoming_allocation_id),
+            )
+
+
 def _undo_reservation_release(
     conn: sqlite3.Connection,
     *,
@@ -13695,7 +14710,15 @@ def _undo_reservation_release(
         target_status="RELEASED",
         log_id=log_id,
     )
-    released_qty = sum(int(row["quantity"]) for row in released_rows)
+    released_incoming_rows = _get_reservation_incoming_undo_rows(
+        conn,
+        reservation_id=reservation_id,
+        target_status="RELEASED",
+        log_id=log_id,
+    )
+    released_qty = sum(int(row["quantity"]) for row in released_rows) + sum(
+        int(row["quantity"]) for row in released_incoming_rows
+    )
     if released_qty != qty:
         raise AppError(
             code="UNDO_NOT_POSSIBLE",
@@ -13703,6 +14726,12 @@ def _undo_reservation_release(
             status_code=409,
         )
     _restore_reservation_allocation_rows(conn, reservation_id=reservation_id, rows=released_rows, log_id=log_id)
+    _restore_reservation_incoming_allocation_rows(
+        conn,
+        reservation_id=reservation_id,
+        rows=released_incoming_rows,
+        log_id=log_id,
+    )
     conn.execute(
         """
         UPDATE reservations
@@ -13813,21 +14842,23 @@ def undo_transaction(conn: sqlite3.Connection, log_id: int, note: str | None = N
         )
     elif op_type == "ARRIVAL":
         _lock_inventory_item_state(conn, item_id)
-        available = _get_inventory_quantity(conn, item_id, "STOCK")
+        target_location = original["to_location"] or "STOCK"
+        available = _get_inventory_quantity(conn, item_id, target_location)
         if available <= 0:
             raise AppError(
                 code="UNDO_NOT_POSSIBLE",
-                message="No quantity available in STOCK for ARRIVAL undo",
+                message=f"No quantity available in {target_location} for ARRIVAL undo",
                 status_code=409,
             )
         applied_qty = min(qty, available)
-        _apply_inventory_delta(conn, item_id, "STOCK", -applied_qty)
+        _apply_inventory_delta(conn, item_id, target_location, -applied_qty)
+        _undo_arrival_reservation_conversions(conn, log_id=log_id, quantity=applied_qty)
         undo_log = _log_transaction(
             conn,
             operation_type="CONSUME",
             item_id=item_id,
             quantity=applied_qty,
-            from_location="STOCK",
+            from_location=target_location,
             to_location=None,
             note=undo_note,
             batch_id=f"undo-{log_id}",
@@ -13949,6 +14980,14 @@ def undo_transaction(conn: sqlite3.Connection, log_id: int, note: str | None = N
         )
         conn.execute(
             """
+            UPDATE reservation_incoming_allocations
+            SET status = 'RELEASED', released_at = ?, updated_at = ?, note = ?
+            WHERE reservation_id = ? AND status = 'ACTIVE'
+            """,
+            (now_jst_iso(), now_jst_iso(), undo_note, reservation_id),
+        )
+        conn.execute(
+            """
             UPDATE reservations
             SET status = 'RELEASED', released_at = ?
             WHERE reservation_id = ?
@@ -13994,9 +15033,15 @@ def get_operational_integrity_summary(conn: sqlite3.Connection) -> dict[str, Any
                 FROM reservation_allocations
                 WHERE status = 'ACTIVE'
                 GROUP BY reservation_id
-            ) active ON active.reservation_id = r.reservation_id
+            ) stock_active ON stock_active.reservation_id = r.reservation_id
+            LEFT JOIN (
+                SELECT reservation_id, COALESCE(SUM(quantity), 0) AS active_quantity
+                FROM reservation_incoming_allocations
+                WHERE status = 'ACTIVE'
+                GROUP BY reservation_id
+            ) incoming_active ON incoming_active.reservation_id = r.reservation_id
             WHERE r.status = 'ACTIVE'
-              AND COALESCE(active.active_quantity, 0) <> r.quantity
+              AND COALESCE(stock_active.active_quantity, 0) + COALESCE(incoming_active.active_quantity, 0) <> r.quantity
         ) mismatches
         """
     ).fetchone()
@@ -14010,6 +15055,14 @@ def get_operational_integrity_summary(conn: sqlite3.Connection) -> dict[str, Any
             JOIN reservation_allocations ra ON ra.reservation_id = r.reservation_id
             WHERE r.status IN ('RELEASED', 'CONSUMED')
               AND ra.status = 'ACTIVE'
+            GROUP BY r.reservation_id
+            UNION
+            SELECT
+                r.reservation_id
+            FROM reservations r
+            JOIN reservation_incoming_allocations ria ON ria.reservation_id = r.reservation_id
+            WHERE r.status IN ('RELEASED', 'CONSUMED')
+              AND ria.status = 'ACTIVE'
             GROUP BY r.reservation_id
         ) leaked
         """

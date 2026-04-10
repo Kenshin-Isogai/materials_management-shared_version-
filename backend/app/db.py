@@ -42,6 +42,7 @@ _PRIMARY_KEY_BY_TABLE = {
     "projects": "project_id",
     "reservations": "reservation_id",
     "reservation_allocations": "allocation_id",
+    "reservation_incoming_allocations": "incoming_allocation_id",
     "assemblies": "assembly_id",
     "location_assembly_usage": "usage_id",
     "project_requirements": "requirement_id",

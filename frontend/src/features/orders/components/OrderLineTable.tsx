@@ -123,6 +123,11 @@ export function OrderLineTable({
                         Qty {row.order_amount} · ETA {row.expected_arrival ?? "-"} · {row.status}
                         {row.project_name ? ` · ${row.project_name}` : ""}
                       </p>
+                      {(row.incoming_reserved_quantity ?? 0) > 0 ? (
+                        <p className="text-xs text-emerald-700">
+                          Reserved by {row.incoming_reservation_count ?? 0} reservation(s) · qty {row.incoming_reserved_quantity}
+                        </p>
+                      ) : null}
                     </div>
                     <div className="flex flex-wrap items-center justify-end gap-2">
                       <button className="button-subtle" onClick={() => openOrderDetails(row.order_id)} disabled={loading}>Line Details</button>
@@ -231,6 +236,14 @@ export function OrderLineTable({
                       <p className="mt-1 font-medium text-slate-900">{selectedOrder.project_name ?? "-"}</p>
                     </div>
                     <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Incoming-backed Reservations</p>
+                      <p className="mt-1 font-medium text-slate-900">
+                        {(selectedOrder.incoming_reservation_count ?? 0) > 0
+                          ? `${selectedOrder.incoming_reservation_count} reservation(s) / qty ${selectedOrder.incoming_reserved_quantity ?? 0}`
+                          : "-"}
+                      </p>
+                    </div>
+                    <div>
                       <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Quotation Document</p>
                       <p className="mt-1">{renderDocumentReference(selectedOrder.quotation_document_url)}</p>
                     </div>
@@ -253,8 +266,7 @@ export function OrderLineTable({
                     Create Provisional Reservation…
                   </button>
                   <p className="text-xs text-slate-500">
-                    Creates a stock-backed reservation draft on the Reservations page. Order dedication remains managed from
-                    order/procurement linkage rules.
+                    Opens Reservations with this line preselected as the preferred incoming backing. Stock and incoming backing can be mixed there.
                   </p>
                 </div>
               </div>

@@ -184,6 +184,49 @@ def test_health_endpoint_reports_mutation_integrity_anomalies(client):
     assert payload["data"]["auth"]["rbac_mode"] == "rbac_enforced"
 
 
+def test_full_arrival_endpoint_accepts_location_only_body(client):
+    conn = get_connection(client.app.state.database_url)
+    try:
+        manufacturer = service.create_manufacturer(conn, "ARRIVAL-LOCATION-MFG")
+        item = service.create_item(
+            conn,
+            {
+                "item_number": "ARRIVAL-LOCATION-ONLY-ITEM-001",
+                "manufacturer_id": manufacturer["manufacturer_id"],
+                "category": "Lens",
+            },
+        )
+        import_result = service.import_orders_from_content(
+            conn,
+            supplier_name="ArrivalLocationOnlySupplier",
+            content=(
+                "item_number,quantity,quotation_number,issue_date,order_date,expected_arrival,quotation_document_url\n"
+                f"{item['item_number']},5,Q-ARRIVAL-LOCATION-ONLY-001,2026-04-01,2026-04-01,2026-04-10,https://example.com/q-arrival-location-only-001\n"
+            ).encode("utf-8"),
+            source_name="arrival_location_only.csv",
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    order_id = int(import_result["order_ids"][0])
+    response = client.post(f"/api/purchase-order-lines/{order_id}/arrival", json={"location": "BENCH_B"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ok"
+    assert payload["data"]["arrived_quantity"] == 5
+
+    inventory = client.get("/api/inventory")
+    assert inventory.status_code == 200
+    matching_row = next(
+        row
+        for row in inventory.json()["data"]
+        if row["item_id"] == item["item_id"] and row["location"] == "BENCH_B"
+    )
+    assert matching_row["quantity"] == 5
+
+
 def test_liveness_and_readiness_endpoints(client):
     healthz = client.get("/healthz")
     assert healthz.status_code == 200

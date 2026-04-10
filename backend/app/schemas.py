@@ -119,10 +119,12 @@ class PurchaseOrderUpdateRequest(BaseModel):
 
 class ArrivalRequest(BaseModel):
     quantity: int | None = Field(default=None, gt=0)
+    location: str | None = None
 
 
 class PartialArrivalRequest(BaseModel):
     quantity: int = Field(gt=0)
+    location: str | None = None
 
 
 class ReservationCreate(BaseModel):
@@ -132,6 +134,7 @@ class ReservationCreate(BaseModel):
     deadline: str | None = None
     note: str | None = None
     project_id: int | None = None
+    preferred_order_id: int | None = None
 
 
 class ReservationUpdate(BaseModel):

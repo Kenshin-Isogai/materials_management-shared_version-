@@ -599,12 +599,16 @@ Note: `CATEGORY_ALIASES` is intentionally not a strict foreign-key relation to `
 
 - Reservation no longer physically moves inventory to `RESERVED`.
 - Active reservation quantity is tracked in `reservation_allocations` by `(reservation_id, item_id, location)` rows.
+- Future-arrival reservation backing is tracked separately in `reservation_incoming_allocations`, each row linked to a specific open purchase-order line.
 - Availability for reservation and planning uses:
   - `available = inventory_ledger.on_hand - active_allocations`
+- Reservation headers may now mix stock-backed and incoming-backed quantity; the remaining reservation quantity must equal the sum of active rows across both backing tables.
 - Consume acts on physical inventory locations referenced by active allocations, preserving location traceability.
+- Incoming-backed quantity cannot be consumed until order arrival converts it into stock-backed location rows.
 - Release changes allocation status only (no inventory delta).
 - Inventory and reservation mutations now serialize on PostgreSQL advisory transaction locks keyed by item/reservation so concurrent requests cannot over-allocate the same inventory snapshot.
 - Reservation release/consume transaction logs now include event-specific identifiers so undo can restore both reservation allocation state and the original consumed location.
+- Order arrival now converts matching incoming-backed reservation rows into stock-backed location allocations automatically, defaulting to `STOCK` unless the arrival request names another location.
 
 ### 6) Import job undo/redo safety
 
@@ -890,7 +894,9 @@ End-to-End tests are implemented using Playwright to verify the full-stack behav
   - Adding a new movement row inherits the latest completed `from/to` locations to speed repeated transfer entry
   - Reservations entry now uses `CatalogPicker` for item selection
   - Reservations entry now also supports optional project selection for provisional project linkage on reservation create
+  - Reservations entry now also supports optional preferred incoming order selection; reservation create applies that eligible preferred line before stock allocation, then fills any remaining shortfall from open same-project dedicated or generic order lines in ETA order
   - Reservations page now includes a provisional-allocation summary panel (project-linked active reservation totals + dedicated/uncommitted open incoming quantities) with CSV export support
+  - Reservation list rows now show stock-backed vs incoming-backed quantity, linked incoming order lines, and warning/shortage state when backing supply becomes delayed, oversubscribed, or unavailable
   - Items, Orders, Movements, and Reservations import preview rows now use the same catalog-search payload for reconciliation corrections
   - Orders import supplier selection also uses the same picker/search contract
   - preview-first flows now preserve an explicit cleared selection instead of silently falling back to a stale suggested match
