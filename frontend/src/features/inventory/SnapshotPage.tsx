@@ -128,7 +128,7 @@ export function SnapshotPage() {
       setData(result);
       if (nextBasis === "net_available") {
         setMessage(
-          "Net available subtracts current active reservation allocations from on-hand inventory, then adds open orders due by the selected date.",
+          "Net available subtracts active reservations, excludes project-dedicated incoming supply, and nets started CONFIRMED/ACTIVE project demand against free stock plus generic orders due by the selected date.",
         );
       }
     } finally {

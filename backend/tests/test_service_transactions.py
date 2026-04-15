@@ -3750,6 +3750,226 @@ def test_inventory_snapshot_net_available_returns_residual_stock(conn):
     assert matching_rows[0]["allocated_project_names"] == ["SNAPSHOT-NET-PROJECT"]
 
 
+def test_inventory_snapshot_net_available_deduplicates_mixed_backing_reservation_counts(conn):
+    item = _create_basic_item(conn, item_number="ITEM-SNAPSHOT-MIXED-COUNT")
+    service.adjust_inventory(
+        conn,
+        item_id=item["item_id"],
+        quantity_delta=2,
+        location="STOCK",
+        note="seed mixed snapshot stock",
+    )
+    service.import_orders_from_content(
+        conn,
+        content=(
+            "item_number,quantity,quotation_number,issue_date,order_date,expected_arrival,quotation_document_url\n"
+            f"{item['item_number']},5,Q-SNAPSHOT-MIXED-COUNT-001,2026-03-01,2026-03-02,{FUTURE_TARGET_DATE},https://example.com/q-snapshot-mixed-count-001.pdf\n"
+        ).encode("utf-8"),
+        supplier_name="SNAPSHOT-MIXED-COUNT-SUPPLIER",
+        source_name="snapshot_mixed_count.csv",
+    )
+    reservation = service.create_reservation(
+        conn,
+        {
+            "item_id": item["item_id"],
+            "quantity": 4,
+            "purpose": "mixed snapshot backing",
+            "deadline": FUTURE_TARGET_DATE,
+        },
+    )
+    conn.commit()
+
+    assert int(reservation["stock_backed_quantity"]) == 2
+    assert int(reservation["incoming_backed_quantity"]) == 2
+
+    snapshot = service.get_inventory_snapshot(
+        conn,
+        target_date=FUTURE_TARGET_DATE,
+        mode="future",
+        basis="net_available",
+    )
+
+    matching_rows = [row for row in snapshot["rows"] if int(row["item_id"]) == item["item_id"]]
+    assert len(matching_rows) == 1
+    assert matching_rows[0]["location"] == "STOCK"
+    assert int(matching_rows[0]["quantity"]) == 3
+    assert int(matching_rows[0]["allocated_quantity"]) == 4
+    assert int(matching_rows[0]["active_reservation_count"]) == 1
+
+
+def test_inventory_snapshot_net_available_consumes_started_committed_project_demand(conn):
+    item = _create_basic_item(conn, item_number="ITEM-SNAPSHOT-COMMITTED")
+    project = service.create_project(
+        conn,
+        {
+            "name": "SNAPSHOT-COMMITTED-PROJECT",
+            "status": "CONFIRMED",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [
+                {"item_id": item["item_id"], "assembly_id": None, "quantity": 5},
+            ],
+        },
+    )
+    service.adjust_inventory(
+        conn,
+        item_id=item["item_id"],
+        quantity_delta=5,
+        location="STOCK",
+        note="seed committed-demand stock",
+    )
+    conn.commit()
+
+    snapshot = service.get_inventory_snapshot(
+        conn,
+        target_date=FUTURE_TARGET_DATE,
+        mode="future",
+        basis="net_available",
+    )
+
+    matching_rows = [row for row in snapshot["rows"] if int(row["item_id"]) == item["item_id"]]
+    assert len(matching_rows) == 1
+    assert matching_rows[0]["location"] == "STOCK"
+    assert int(matching_rows[0]["quantity"]) == 0
+    assert int(matching_rows[0]["allocated_quantity"]) == 5
+    assert int(matching_rows[0]["active_reservation_count"]) == 0
+    assert matching_rows[0]["allocated_project_names"] == [project["name"]]
+
+
+def test_inventory_snapshot_net_available_does_not_consume_before_project_start(conn):
+    item = _create_basic_item(conn, item_number="ITEM-SNAPSHOT-BEFORE-START")
+    service.create_project(
+        conn,
+        {
+            "name": "SNAPSHOT-BEFORE-START-PROJECT",
+            "status": "CONFIRMED",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [
+                {"item_id": item["item_id"], "assembly_id": None, "quantity": 5},
+            ],
+        },
+    )
+    service.adjust_inventory(
+        conn,
+        item_id=item["item_id"],
+        quantity_delta=5,
+        location="STOCK",
+        note="seed pre-start stock",
+    )
+    conn.commit()
+
+    snapshot = service.get_inventory_snapshot(
+        conn,
+        target_date="2999-12-30",
+        mode="future",
+        basis="net_available",
+    )
+
+    matching_rows = [row for row in snapshot["rows"] if int(row["item_id"]) == item["item_id"]]
+    assert len(matching_rows) == 1
+    assert matching_rows[0]["location"] == "STOCK"
+    assert int(matching_rows[0]["quantity"]) == 5
+    assert int(matching_rows[0]["allocated_quantity"]) == 0
+    assert matching_rows[0]["allocated_project_names"] == []
+
+
+def test_inventory_snapshot_net_available_excludes_project_dedicated_orders_from_free_quantity(conn):
+    item = _create_basic_item(conn, item_number="ITEM-SNAPSHOT-DEDICATED")
+    project = service.create_project(
+        conn,
+        {
+            "name": "SNAPSHOT-DEDICATED-PROJECT",
+            "status": "CONFIRMED",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [],
+        },
+    )
+    imported = service.import_orders_from_rows(
+        conn,
+        supplier_name="SNAPSHOT-DEDICATED-SUPPLIER",
+        rows=[
+            {
+                "item_number": item["item_number"],
+                "quantity": "4",
+                "quotation_number": "Q-SNAPSHOT-DEDICATED-001",
+                "issue_date": "2026-03-01",
+                "order_date": "2026-03-02",
+                "expected_arrival": FUTURE_TARGET_DATE,
+                "quotation_document_url": "https://example.com/q-snapshot-dedicated-001.pdf",
+            }
+        ],
+        source_name="snapshot_dedicated_order.csv",
+    )
+    service.update_order(conn, int(imported["order_ids"][0]), {"project_id": project["project_id"]})
+    conn.commit()
+
+    snapshot = service.get_inventory_snapshot(
+        conn,
+        target_date=FUTURE_TARGET_DATE,
+        mode="future",
+        basis="net_available",
+    )
+
+    matching_rows = [row for row in snapshot["rows"] if int(row["item_id"]) == item["item_id"]]
+    assert len(matching_rows) == 1
+    assert matching_rows[0]["location"] == "STOCK"
+    assert int(matching_rows[0]["quantity"]) == 0
+    assert int(matching_rows[0]["allocated_quantity"]) == 4
+    assert int(matching_rows[0]["active_reservation_count"]) == 0
+    assert matching_rows[0]["allocated_project_names"] == [project["name"]]
+
+
+def test_inventory_snapshot_net_available_counts_dedicated_incoming_reservations(conn):
+    item = _create_basic_item(conn, item_number="ITEM-SNAPSHOT-DEDICATED-COUNT")
+    project = service.create_project(
+        conn,
+        {
+            "name": "SNAPSHOT-DEDICATED-COUNT-PROJECT",
+            "status": "CONFIRMED",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [],
+        },
+    )
+    import_result = service.import_orders_from_content(
+        conn,
+        supplier_name="SNAPSHOT-DEDICATED-COUNT-SUPPLIER",
+        content=(
+            "item_number,quantity,quotation_number,issue_date,order_date,expected_arrival,quotation_document_url,project_name\n"
+            f"{item['item_number']},4,Q-SNAPSHOT-DEDICATED-COUNT-001,2026-03-01,2026-03-02,{FUTURE_TARGET_DATE},https://example.com/q-snapshot-dedicated-count-001.pdf,{project['name']}\n"
+        ).encode("utf-8"),
+        source_name="snapshot_dedicated_count.csv",
+    )
+    reservation = service.create_reservation(
+        conn,
+        {
+            "item_id": item["item_id"],
+            "quantity": 3,
+            "purpose": "dedicated incoming snapshot backing",
+            "deadline": FUTURE_TARGET_DATE,
+            "project_id": project["project_id"],
+            "preferred_order_id": int(import_result["order_ids"][0]),
+        },
+    )
+    conn.commit()
+
+    assert int(reservation["stock_backed_quantity"]) == 0
+    assert int(reservation["incoming_backed_quantity"]) == 3
+
+    snapshot = service.get_inventory_snapshot(
+        conn,
+        target_date=FUTURE_TARGET_DATE,
+        mode="future",
+        basis="net_available",
+    )
+
+    matching_rows = [row for row in snapshot["rows"] if int(row["item_id"]) == item["item_id"]]
+    assert len(matching_rows) == 1
+    assert matching_rows[0]["location"] == "STOCK"
+    assert int(matching_rows[0]["quantity"]) == 0
+    assert int(matching_rows[0]["allocated_quantity"]) == 4
+    assert int(matching_rows[0]["active_reservation_count"]) == 1
+    assert matching_rows[0]["allocated_project_names"] == [project["name"]]
+
+
 def test_inventory_snapshot_net_available_rejects_past_mode(conn):
     with pytest.raises(AppError) as exc_info:
         service.get_inventory_snapshot(

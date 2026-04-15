@@ -1979,28 +1979,324 @@ def _get_active_allocation_summary_by_item_location(
     ).fetchall()
     summary: dict[tuple[int, str], dict[str, Any]] = {}
     for row in rows:
-        key = (int(row["item_id"]), str(row["location"]))
-        current = summary.setdefault(
-            key,
-            {
-                "allocated_quantity": 0,
-                "reservation_ids": set(),
-                "project_names": [],
-            },
+        _append_snapshot_allocation_summary_entry(
+            summary,
+            (int(row["item_id"]), str(row["location"])),
+            quantity=int(row["quantity"] or 0),
+            reservation_id=int(row["reservation_id"]),
+            project_name=row["project_name"],
         )
-        current["allocated_quantity"] += int(row["quantity"] or 0)
-        current["reservation_ids"].add(int(row["reservation_id"]))
-        project_name = str(row["project_name"]).strip() if row["project_name"] is not None else ""
-        if project_name and project_name not in current["project_names"]:
-            current["project_names"].append(project_name)
+    return _normalize_snapshot_allocation_summary(summary, include_reservation_ids=True)
+
+
+def _append_snapshot_allocation_summary_entry(
+    summary: dict[tuple[int, str], dict[str, Any]],
+    key: tuple[int, str],
+    *,
+    quantity: int = 0,
+    reservation_id: int | None = None,
+    project_name: Any = None,
+) -> None:
+    current = summary.setdefault(
+        key,
+        {
+            "allocated_quantity": 0,
+            "reservation_ids": set(),
+            "project_names": [],
+        },
+    )
+    normalized_quantity = int(quantity or 0)
+    if normalized_quantity > 0:
+        current["allocated_quantity"] += normalized_quantity
+    if reservation_id is not None:
+        current["reservation_ids"].add(int(reservation_id))
+    normalized_project_name = str(project_name).strip() if project_name is not None else ""
+    if normalized_project_name and normalized_project_name not in current["project_names"]:
+        current["project_names"].append(normalized_project_name)
+
+
+def _normalize_snapshot_allocation_summary(
+    summary: dict[tuple[int, str], dict[str, Any]],
+    *,
+    include_reservation_ids: bool = False,
+) -> dict[tuple[int, str], dict[str, Any]]:
     normalized: dict[tuple[int, str], dict[str, Any]] = {}
     for key, value in summary.items():
-        normalized[key] = {
+        reservation_ids = {int(reservation_id) for reservation_id in (value.get("reservation_ids") or set())}
+        normalized_value = {
             "allocated_quantity": int(value["allocated_quantity"]),
-            "active_reservation_count": len(value["reservation_ids"]),
+            "active_reservation_count": len(reservation_ids),
             "allocated_project_names": list(value["project_names"]),
         }
+        if include_reservation_ids:
+            normalized_value["reservation_ids"] = reservation_ids
+        normalized[key] = normalized_value
     return normalized
+
+
+def _merge_snapshot_allocation_summaries(
+    *summaries: dict[tuple[int, str], dict[str, Any]]
+) -> dict[tuple[int, str], dict[str, Any]]:
+    merged: dict[tuple[int, str], dict[str, Any]] = {}
+    for summary in summaries:
+        for key, value in summary.items():
+            for project_name in list(value.get("allocated_project_names") or []):
+                _append_snapshot_allocation_summary_entry(
+                    merged,
+                    key,
+                    quantity=0,
+                    project_name=project_name,
+                )
+            reservation_ids = value.get("reservation_ids")
+            if reservation_ids is not None:
+                for reservation_id in reservation_ids:
+                    _append_snapshot_allocation_summary_entry(
+                        merged,
+                        key,
+                        quantity=0,
+                        reservation_id=int(reservation_id),
+                    )
+            else:
+                reservation_count = int(value.get("active_reservation_count") or 0)
+                if reservation_count > 0:
+                    for offset in range(reservation_count):
+                        _append_snapshot_allocation_summary_entry(
+                            merged,
+                            key,
+                            quantity=0,
+                            reservation_id=(hash((key, offset, id(summary))) & 0x7FFFFFFF) + 1,
+                        )
+            _append_snapshot_allocation_summary_entry(
+                merged,
+                key,
+                quantity=int(value.get("allocated_quantity") or 0),
+            )
+    return _normalize_snapshot_allocation_summary(merged)
+
+
+def _get_active_incoming_reserved_quantity_by_order_ids(
+    conn: sqlite3.Connection,
+    order_ids: list[int],
+) -> dict[int, int]:
+    if not order_ids:
+        return {}
+    placeholders = ",".join("?" for _ in order_ids)
+    rows = conn.execute(
+        f"""
+        SELECT order_id, COALESCE(SUM(quantity), 0) AS quantity
+        FROM reservation_incoming_allocations
+        WHERE status = 'ACTIVE'
+          AND order_id IN ({placeholders})
+        GROUP BY order_id
+        """,
+        tuple(order_ids),
+    ).fetchall()
+    return {int(row["order_id"]): int(row["quantity"] or 0) for row in rows}
+
+
+def _get_due_generic_incoming_allocation_summary_by_item_location(
+    conn: sqlite3.Connection,
+    item_ids: list[int],
+    *,
+    target_date: str,
+) -> dict[tuple[int, str], dict[str, Any]]:
+    if not item_ids:
+        return {}
+    placeholders = ",".join("?" for _ in item_ids)
+    rows = conn.execute(
+        f"""
+        SELECT
+            ria.item_id,
+            ria.quantity,
+            ria.reservation_id,
+            o.project_id AS order_project_id,
+            p.name AS project_name
+        FROM reservation_incoming_allocations ria
+        JOIN reservations r ON r.reservation_id = ria.reservation_id
+        LEFT JOIN projects p ON p.project_id = r.project_id
+        LEFT JOIN orders o ON o.order_id = ria.order_id
+        WHERE ria.status = 'ACTIVE'
+          AND r.status = 'ACTIVE'
+          AND ria.item_id IN ({placeholders})
+          AND COALESCE(ria.expected_arrival_snapshot, o.expected_arrival) IS NOT NULL
+          AND date(COALESCE(ria.expected_arrival_snapshot, o.expected_arrival)) <= date(?)
+        ORDER BY ria.item_id, ria.reservation_id
+        """,
+        tuple(item_ids) + (target_date,),
+    ).fetchall()
+    summary: dict[tuple[int, str], dict[str, Any]] = {}
+    for row in rows:
+        _append_snapshot_allocation_summary_entry(
+            summary,
+            (int(row["item_id"]), "STOCK"),
+            quantity=0 if row["order_project_id"] is not None else int(row["quantity"] or 0),
+            reservation_id=int(row["reservation_id"]),
+            project_name=row["project_name"],
+        )
+    return _normalize_snapshot_allocation_summary(summary, include_reservation_ids=True)
+
+
+def _list_started_committed_projects_for_snapshot(
+    conn: sqlite3.Connection,
+    *,
+    target_date: str,
+) -> list[dict[str, Any]]:
+    committed_rows = conn.execute(
+        """
+        SELECT project_id
+        FROM projects
+        WHERE status IN ('CONFIRMED', 'ACTIVE')
+        ORDER BY COALESCE(planned_start, ?) ASC, project_id ASC
+        """,
+        (today_jst(),),
+    ).fetchall()
+    committed_project_ids = [int(row["project_id"]) for row in committed_rows]
+    projects = _load_projects_with_requirements(conn, committed_project_ids)
+    started_projects: list[dict[str, Any]] = []
+    for project in projects:
+        effective_planned_start = _normalize_project_planning_date(project)
+        if effective_planned_start > target_date:
+            continue
+        started_projects.append({**project, "effective_planned_start": effective_planned_start})
+    return started_projects
+
+
+def _sorted_snapshot_state_keys_for_item(
+    state: dict[tuple[int, str], int],
+    item_id: int,
+) -> list[tuple[int, str]]:
+    return sorted(
+        [key for key, quantity in state.items() if key[0] == item_id and quantity > 0],
+        key=lambda key: (0 if key[1] == "STOCK" else 1, key[1]),
+    )
+
+
+def _build_started_project_snapshot_allocation_summary(
+    conn: sqlite3.Connection,
+    *,
+    target_date: str,
+    state: dict[tuple[int, str], int],
+) -> dict[tuple[int, str], dict[str, Any]]:
+    started_projects = _list_started_committed_projects_for_snapshot(conn, target_date=target_date)
+    if not started_projects:
+        return {}
+
+    project_ids = [int(project["project_id"]) for project in started_projects]
+    required_by_project: dict[int, dict[int, int]] = {}
+    item_ids: set[int] = set()
+    for project in started_projects:
+        project_required = _aggregate_project_required_by_item(conn, project)
+        required_by_project[int(project["project_id"])] = project_required
+        item_ids.update(project_required.keys())
+    if not item_ids:
+        return {}
+
+    item_ids_sorted = sorted(item_ids)
+    project_placeholders = ",".join("?" for _ in project_ids)
+    item_placeholders = ",".join("?" for _ in item_ids_sorted)
+
+    stock_cover_rows = conn.execute(
+        f"""
+        SELECT
+            r.project_id,
+            ra.item_id,
+            COALESCE(SUM(ra.quantity), 0) AS quantity
+        FROM reservation_allocations ra
+        JOIN reservations r ON r.reservation_id = ra.reservation_id
+        WHERE ra.status = 'ACTIVE'
+          AND r.status = 'ACTIVE'
+          AND r.project_id IN ({project_placeholders})
+          AND ra.item_id IN ({item_placeholders})
+        GROUP BY r.project_id, ra.item_id
+        """,
+        tuple(project_ids) + tuple(item_ids_sorted),
+    ).fetchall()
+    stock_cover = {
+        (int(row["project_id"]), int(row["item_id"])): int(row["quantity"] or 0)
+        for row in stock_cover_rows
+    }
+
+    incoming_cover_rows = conn.execute(
+        f"""
+        SELECT
+            r.project_id,
+            ria.item_id,
+            COALESCE(SUM(ria.quantity), 0) AS quantity
+        FROM reservation_incoming_allocations ria
+        JOIN reservations r ON r.reservation_id = ria.reservation_id
+        LEFT JOIN orders o ON o.order_id = ria.order_id
+        WHERE ria.status = 'ACTIVE'
+          AND r.status = 'ACTIVE'
+          AND r.project_id IN ({project_placeholders})
+          AND ria.item_id IN ({item_placeholders})
+          AND COALESCE(o.project_id, 0) = 0
+          AND COALESCE(ria.expected_arrival_snapshot, o.expected_arrival) IS NOT NULL
+          AND date(COALESCE(ria.expected_arrival_snapshot, o.expected_arrival)) <= date(?)
+        GROUP BY r.project_id, ria.item_id
+        """,
+        tuple(project_ids) + tuple(item_ids_sorted) + (target_date,),
+    ).fetchall()
+    incoming_cover = {
+        (int(row["project_id"]), int(row["item_id"])): int(row["quantity"] or 0)
+        for row in incoming_cover_rows
+    }
+
+    dedicated_cover_rows = conn.execute(
+        f"""
+        SELECT
+            project_id,
+            item_id,
+            COALESCE(SUM(order_amount), 0) AS quantity
+        FROM orders
+        WHERE project_id IN ({project_placeholders})
+          AND item_id IN ({item_placeholders})
+          AND status <> 'Arrived'
+          AND expected_arrival IS NOT NULL
+          AND date(expected_arrival) <= date(?)
+        GROUP BY project_id, item_id
+        """,
+        tuple(project_ids) + tuple(item_ids_sorted) + (target_date,),
+    ).fetchall()
+    dedicated_cover = {
+        (int(row["project_id"]), int(row["item_id"])): int(row["quantity"] or 0)
+        for row in dedicated_cover_rows
+    }
+
+    summary: dict[tuple[int, str], dict[str, Any]] = {}
+    for project in started_projects:
+        project_id = int(project["project_id"])
+        project_name = project["name"]
+        for item_id, required_quantity in required_by_project.get(project_id, {}).items():
+            explicit_coverage = (
+                stock_cover.get((project_id, item_id), 0)
+                + incoming_cover.get((project_id, item_id), 0)
+                + dedicated_cover.get((project_id, item_id), 0)
+            )
+            remaining_to_allocate = max(0, int(required_quantity) - explicit_coverage)
+            if remaining_to_allocate <= 0:
+                continue
+            for key in _sorted_snapshot_state_keys_for_item(state, item_id):
+                if remaining_to_allocate <= 0:
+                    break
+                available_quantity = int(state.get(key, 0))
+                if available_quantity <= 0:
+                    continue
+                allocated_quantity = min(available_quantity, remaining_to_allocate)
+                if allocated_quantity <= 0:
+                    continue
+                updated_quantity = available_quantity - allocated_quantity
+                if updated_quantity <= 0:
+                    state.pop(key, None)
+                else:
+                    state[key] = updated_quantity
+                _append_snapshot_allocation_summary_entry(
+                    summary,
+                    key,
+                    quantity=allocated_quantity,
+                    project_name=project_name,
+                )
+                remaining_to_allocate -= allocated_quantity
+    return _normalize_snapshot_allocation_summary(summary)
 
 
 def _get_pending_arrival_quantity_by_date(
@@ -15317,19 +15613,47 @@ def get_inventory_snapshot(
                 if available_qty > 0:
                     available_state[(item_id, location)] = available_qty
             state = available_state
-        pending_orders = conn.execute(
+        pending_order_rows = conn.execute(
             """
-            SELECT item_id, SUM(order_amount) AS qty
-            FROM orders
-            WHERE status <> 'Arrived'
-              AND expected_arrival IS NOT NULL
-              AND date(expected_arrival) <= date(?)
-            GROUP BY item_id
+            SELECT
+                o.order_id,
+                o.item_id,
+                o.project_id,
+                o.order_amount,
+                p.name AS project_name
+            FROM orders o
+            LEFT JOIN projects p ON p.project_id = o.project_id
+            WHERE o.status <> 'Arrived'
+              AND o.expected_arrival IS NOT NULL
+              AND date(o.expected_arrival) <= date(?)
+            ORDER BY o.expected_arrival ASC, o.order_id ASC
             """,
             (normalized_target,),
         ).fetchall()
-        for row in pending_orders:
-            _state_apply(state, (int(row["item_id"]), "STOCK"), int(row["qty"]))
+        pending_order_ids = [int(row["order_id"]) for row in pending_order_rows]
+        active_incoming_reserved_by_order = _get_active_incoming_reserved_quantity_by_order_ids(
+            conn,
+            pending_order_ids,
+        )
+        dedicated_order_summary: dict[tuple[int, str], dict[str, Any]] = {}
+        for row in pending_order_rows:
+            order_id = int(row["order_id"])
+            item_id = int(row["item_id"])
+            project_id = int(row["project_id"]) if row["project_id"] is not None else None
+            order_amount = int(row["order_amount"] or 0)
+            reserved_quantity = active_incoming_reserved_by_order.get(order_id, 0)
+            if project_id is None:
+                free_quantity = max(0, order_amount - reserved_quantity)
+                if free_quantity > 0:
+                    _state_apply(state, (item_id, "STOCK"), free_quantity)
+                continue
+            if order_amount > 0:
+                _append_snapshot_allocation_summary_entry(
+                    dedicated_order_summary,
+                    (item_id, "STOCK"),
+                    quantity=order_amount,
+                    project_name=row["project_name"],
+                )
         if effective_basis == "raw":
             pending_consumption = conn.execute(
                 """
@@ -15345,10 +15669,49 @@ def get_inventory_snapshot(
             for row in pending_consumption:
                 _state_apply(state, (int(row["item_id"]), "RESERVED"), -int(row["qty"]))
 
-    if not state:
+    allocation_summary: dict[tuple[int, str], dict[str, Any]] = {}
+    if effective_basis == "net_available":
+        summary_item_ids = {item_id for item_id, _ in state.keys()}
+        summary_item_ids.update(int(row["item_id"]) for row in pending_order_rows)
+        active_allocation_item_rows = conn.execute(
+            """
+            SELECT DISTINCT item_id
+            FROM reservation_allocations
+            WHERE status = 'ACTIVE'
+            UNION
+            SELECT DISTINCT item_id
+            FROM reservation_incoming_allocations
+            WHERE status = 'ACTIVE'
+            """
+        ).fetchall()
+        summary_item_ids.update(int(row["item_id"]) for row in active_allocation_item_rows)
+        item_ids = sorted(summary_item_ids)
+        active_stock_summary = _get_active_allocation_summary_by_item_location(conn, item_ids)
+        due_generic_incoming_summary = _get_due_generic_incoming_allocation_summary_by_item_location(
+            conn,
+            item_ids,
+            target_date=normalized_target,
+        )
+        started_project_summary = _build_started_project_snapshot_allocation_summary(
+            conn,
+            target_date=normalized_target,
+            state=state,
+        )
+        allocation_summary = _merge_snapshot_allocation_summaries(
+            active_stock_summary,
+            due_generic_incoming_summary,
+            _normalize_snapshot_allocation_summary(dedicated_order_summary),
+            started_project_summary,
+        )
+
+    rows: list[dict[str, Any]] = []
+    row_keys = set(state.keys())
+    if effective_basis == "net_available":
+        row_keys.update(allocation_summary.keys())
+    if not row_keys:
         return {"date": normalized_target, "mode": effective_mode, "basis": effective_basis, "rows": []}
 
-    item_ids = sorted({item_id for item_id, _ in state.keys()})
+    item_ids = sorted({item_id for item_id, _ in row_keys})
     placeholder = ",".join("?" for _ in item_ids)
     item_map_rows = conn.execute(
         f"""
@@ -15366,16 +15729,13 @@ def get_inventory_snapshot(
         tuple(item_ids),
     ).fetchall()
     item_map = {int(row["item_id"]): dict(row) for row in item_map_rows}
-    allocation_summary: dict[tuple[int, str], dict[str, Any]] = {}
-    if effective_basis == "net_available":
-        allocation_summary = _get_active_allocation_summary_by_item_location(conn, item_ids)
-
-    rows: list[dict[str, Any]] = []
-    for (item_id, location), quantity in sorted(state.items(), key=lambda r: (r[0][1], r[0][0])):
-        if quantity <= 0:
+    for item_id, location in sorted(row_keys, key=lambda r: (r[1], r[0])):
+        quantity = int(state.get((item_id, location), 0))
+        allocation = allocation_summary.get((item_id, location))
+        allocated_quantity = int(allocation["allocated_quantity"]) if allocation else 0
+        if quantity <= 0 and allocated_quantity <= 0:
             continue
         item = item_map.get(item_id)
-        allocation = allocation_summary.get((item_id, location))
         rows.append(
             {
                 "item_id": item_id,
@@ -15385,7 +15745,7 @@ def get_inventory_snapshot(
                 "description": item["description"] if item else None,
                 "location": location,
                 "quantity": quantity,
-                "allocated_quantity": int(allocation["allocated_quantity"]) if allocation else 0,
+                "allocated_quantity": allocated_quantity,
                 "active_reservation_count": int(allocation["active_reservation_count"]) if allocation else 0,
                 "allocated_project_names": list(allocation["allocated_project_names"]) if allocation else [],
             }

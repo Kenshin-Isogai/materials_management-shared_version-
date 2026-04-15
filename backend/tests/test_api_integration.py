@@ -356,6 +356,55 @@ def test_inventory_snapshot_endpoint_supports_net_available_basis(client):
     assert matching_row["allocated_project_names"] == ["API-SNAPSHOT-PROJECT"]
 
 
+def test_inventory_snapshot_endpoint_nets_started_committed_project_demand(client):
+    manufacturer = client.post("/api/manufacturers", json={"name": "API-SNAPSHOT-COMMITTED-MFG"}).json()["data"]
+    project = client.post(
+        "/api/projects",
+        json={
+            "name": "API-SNAPSHOT-COMMITTED-PROJECT",
+            "status": "CONFIRMED",
+            "planned_start": FUTURE_TARGET_DATE,
+            "requirements": [],
+        },
+    ).json()["data"]
+    item = client.post(
+        "/api/items",
+        json={
+            "item_number": "API-SNAPSHOT-COMMITTED-ITEM",
+            "manufacturer_id": manufacturer["manufacturer_id"],
+            "category": "Lens",
+        },
+    ).json()["data"]
+    client.put(
+        f"/api/projects/{project['project_id']}",
+        json={
+            "requirements": [
+                {"item_id": item["item_id"], "assembly_id": None, "quantity": 5},
+            ]
+        },
+    )
+    client.post(
+        "/api/inventory/adjust",
+        json={
+            "item_id": item["item_id"],
+            "quantity_delta": 5,
+            "location": "STOCK",
+            "note": "seed snapshot committed stock",
+        },
+    )
+
+    response = client.get(f"/api/inventory/snapshot?mode=future&basis=net_available&date={FUTURE_TARGET_DATE}")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    matching_row = next(row for row in payload["rows"] if int(row["item_id"]) == item["item_id"])
+    assert matching_row["location"] == "STOCK"
+    assert int(matching_row["quantity"]) == 0
+    assert int(matching_row["allocated_quantity"]) == 5
+    assert int(matching_row["active_reservation_count"]) == 0
+    assert matching_row["allocated_project_names"] == ["API-SNAPSHOT-COMMITTED-PROJECT"]
+
+
 def test_inventory_snapshot_endpoint_rejects_past_net_available_basis(client):
     response = client.get("/api/inventory/snapshot?mode=past&basis=net_available&date=2020-01-01")
 

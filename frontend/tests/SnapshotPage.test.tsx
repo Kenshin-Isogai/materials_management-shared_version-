@@ -86,7 +86,7 @@ describe("SnapshotPage", () => {
 
     const dateInput = screen.getByDisplayValue(expectedDate);
     expect(dateInput).toBeTruthy();
-    expect(await screen.findByText(/Net available subtracts current active reservation allocations/i)).toBeTruthy();
+    expect(await screen.findByText(/Net available subtracts active reservations/i)).toBeTruthy();
   });
 
   it("downloads snapshot csv for the selected parameters", async () => {

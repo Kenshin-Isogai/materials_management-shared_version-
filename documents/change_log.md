@@ -1,3 +1,38 @@
+## 2026-04-15
+
+### Changed
+
+- Fixed two Snapshot `active_reservation_count` regressions in `net available`.
+  - merging stock-backed and due incoming-backed allocation summaries now preserves and unions real reservation IDs, so one reservation split across multiple backing sources still counts as one active reservation
+  - dedicated incoming-backed reservations now contribute their real reservation IDs to snapshot rows without double-counting the dedicated order quantity that is already represented separately
+
+- Updated Snapshot `net available` to respect committed project timing.
+  - started `CONFIRMED` / `ACTIVE` projects now consume snapshot availability once their `planned_start` is on or before the selected snapshot date, even before a manual reservation is created
+  - project-dedicated open orders are now treated as occupied supply in Snapshot instead of incorrectly inflating the generic free pool
+  - snapshot `allocated_quantity` / `allocated_project_names` now summarize both explicit active reservations and started committed project occupation, while `active_reservation_count` remains a count of real active reservations only
+  - Snapshot page helper text now explains the new start-date-aware `net available` behavior
+
+### Tests
+
+- Backend compile check:
+  - `uv run --project backend python -m compileall backend/app`
+  - result: successful
+- Backend targeted pytest:
+  - `PYTHONPATH=backend uv run --project backend python -m pytest backend/tests/test_service_transactions.py -k "inventory_snapshot_net_available" -q --import-mode=importlib`
+  - result: skipped in this environment (`TEST_DATABASE_URL or DATABASE_URL is required for PostgreSQL-backed tests`)
+- Backend targeted pytest:
+  - `PYTHONPATH=backend uv run --project backend python -m pytest backend/tests/test_api_integration.py -k "inventory_snapshot_endpoint" -q --import-mode=importlib`
+  - result: skipped in this environment (`TEST_DATABASE_URL or DATABASE_URL is required for PostgreSQL-backed tests`)
+- Backend targeted pytest:
+  - `uv run --project backend python -m pytest backend/tests/test_service_transactions.py -k "inventory_snapshot_net_available" -q --import-mode=importlib`
+  - result: successful (`5 passed`)
+- Backend targeted pytest:
+  - `uv run --project backend python -m pytest backend/tests/test_api_integration.py -k "inventory_snapshot_endpoint" -q --import-mode=importlib`
+  - result: successful (`3 passed`)
+- Frontend targeted Vitest:
+  - `npm run test -- tests/SnapshotPage.test.tsx`
+  - result: successful (`3 passed`)
+
 ## 2026-04-10
 
 ### Changed

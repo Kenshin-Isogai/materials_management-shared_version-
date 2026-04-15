@@ -171,6 +171,7 @@ Last updated: 2026-04-10 (JST)
 - The `/snapshot` inventory page now defaults to the current JST day with `net available` selected and auto-fetches the first snapshot on page open instead of waiting for a manual generate action.
 - The `/snapshot` inventory page now also exposes `Export CSV`, downloading the currently selected snapshot parameter set through `GET /api/inventory/snapshot/export.csv`.
   - the export action is shown only to `operator` / `admin` users so the frontend matches the backend operator-only export policy
+  - `net available` now excludes project-dedicated incoming supply from the free pool and nets started committed project demand (`CONFIRMED` / `ACTIVE` whose `planned_start` has arrived) against free stock plus generic incoming supply due by the selected date
 - Dashboard detail panels now use capped independent scroll regions.
   - `Overdue Orders`, `Low Stock`, `Expiring Reservations`, and `Recent Activity` each use a `max-h-[24rem] overflow-y-auto` list region
   - the dashboard no longer relies on unbounded panel growth for large result sets

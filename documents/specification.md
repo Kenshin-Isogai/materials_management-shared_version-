@@ -1100,7 +1100,7 @@ Projected Available =
 
 **Purpose:** View inventory state at any point in time (past or future).
 
-**Boundary:** Inventory snapshot is a physical-stock projection tool. It does not apply project planning commitments or RFQ-dedicated backlog netting; those belong to the Planning pipeline.
+**Boundary:** Inventory snapshot remains the physical-stock projection tool for `basis=raw`. `basis=net_available` is the operator-facing availability view and therefore also applies started committed project demand (`CONFIRMED` / `ACTIVE`) and excludes project-dedicated incoming supply from the generic free pool, but it still does not replace the Planning pipeline's per-project coverage detail.
 
 **Service Functions:**
 
@@ -1127,7 +1127,11 @@ Projected Available =
 
 **Availability Basis:**
 - `basis=raw` (default): return physical snapshot rows from the location-state projection described above
-- `basis=net_available`: future/current-only view that returns residual free quantity by location after subtracting current active reservation allocations from on-hand stock, then adding open orders due by the selected date
+- `basis=net_available`: future/current-only view that returns residual free quantity by location after:
+  - subtracting current active reservation allocations from on-hand stock
+  - adding only generic open orders due by the selected date
+  - excluding project-dedicated open orders from that free pool
+  - netting committed project demand for projects whose `planned_start <= target_date` and whose status is `CONFIRMED` or `ACTIVE`
 - `basis=net_available` with `mode=past` is rejected because the current model does not provide authoritative historical allocation-state reconstruction
 
 When `basis=net_available`, snapshot rows may also include compact occupation context for the same `(item, location)`:
@@ -1136,6 +1140,8 @@ When `basis=net_available`, snapshot rows may also include compact occupation co
 - `allocated_project_names`
 
 These are summary-only fields for quick scanning, not a full allocation-explainer replacement for Workspace.
+
+For started committed projects that have not yet been materialized as reservations, `allocated_quantity` / `allocated_project_names` may therefore include snapshot-time planning occupation in addition to explicit active reservation rows. `active_reservation_count` continues to count only real active reservations.
 
 ---
 
